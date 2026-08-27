@@ -183,7 +183,6 @@
   .wctrls { display:flex; gap:.5rem; padding:.5rem .8rem; flex:none; }
   .wctrls button { flex:1; padding:.6rem; border:1px solid var(--line); background:var(--card);
                    color:var(--fg); border-radius:.6rem; font-size:.9rem; }
-  .wctrls #playBtn { flex:0 0 4rem; font-size:1.1rem; }
   .cap-overlay { position:absolute; left:0; right:0; bottom:.4rem; text-align:center;
                  z-index:3; pointer-events:none; padding:0 .6rem; }
   .cap-overlay:not(:empty) span, .cap-overlay:not(:empty) {
@@ -815,7 +814,7 @@ function openCardModal(row, forceWord) {
   MODAL = { tokens, wordTok, sentence: row.text, lineId: row.id,
             timestamp: row.start_time || null,
             anchor: null, focus: null, scatter: null, _edited: false,
-            preview: null, previewFor: null, pvTimer: null, pvSeq: 0 };
+            preview: null, previewFor: null, pvTimer: null, pvSeq: 0, _firstSync: true };
   $('#modalPreview').innerHTML = '';
 
   // pick the word to pre-select: an exact tapped word, else the searched prefix
@@ -893,14 +892,23 @@ function syncModalSpan() {
   $('#modalHint').textContent = ok ? ''
     : (sel.size ? 'Those words aren’t next to each other — tap the phrase you want.'
                 : 'Tap the word or phrase you want.');
-  updatePreview(ok ? $('#modalSpan').value.trim() : '');
+  const now = MODAL._firstSync; MODAL._firstSync = false;
+  updatePreview(ok ? $('#modalSpan').value.trim() : '', now);
 }
 
-function updatePreview(span) {
+const PVCACHE = new Map();
+function updatePreview(span, immediate) {
   clearTimeout(MODAL.pvTimer);
   const box = $('#modalPreview');
   if (!span) { box.innerHTML = ''; MODAL.preview = MODAL.previewFor = null; return; }
   if (MODAL.previewFor === span) return;            // already showing / fetching this
+  const ck = CURRENT + '|' + span + '|' + (MODAL.sentence || '');
+  if (PVCACHE.has(ck)) {                            // instant on repeat
+    const p = PVCACHE.get(ck);
+    MODAL.preview = p; MODAL.previewFor = span;
+    box.innerHTML = `<div class="pv"><div class="sent">${p.front_html}</div><div class="tr">${escapeHtml(p.translation || '')}</div></div>`;
+    return;
+  }
   MODAL.preview = null;
   if (!navigator.onLine) {
     box.innerHTML = '<div class="wait">ⓘ translation preview isn’t available offline — the card will be translated when it uploads</div>';
@@ -916,6 +924,7 @@ function updatePreview(span) {
           subtitle_line_id: MODAL.lineId ?? null,
           timestamp: MODAL.timestamp, sentence: MODAL.sentence })
       });
+      PVCACHE.set(ck, p);
       if (seq !== MODAL.pvSeq) return;              // superseded
       MODAL.preview = p; MODAL.previewFor = span;
       box.innerHTML = `<div class="pv">
@@ -926,7 +935,7 @@ function updatePreview(span) {
       if (seq === MODAL.pvSeq)
         box.innerHTML = `<div class="wait">couldn’t preview (${escapeHtml(e.message)}) — card will still translate on save</div>`;
     }
-  }, 450);
+  }, immediate ? 0 : 200);
 }
 
 function closeCardModal(resume = true) {

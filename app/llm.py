@@ -209,7 +209,11 @@ Output ONLY one raw JSON object, no fence:
 - sentence: the line lightly cleaned into a short readable Russian sentence containing an inflected form of span_text; if too fragmentary, write a minimal natural one."""
 
 
-def translate_span(sentence, span, model=DEFAULT_MODEL):
+# a one-word gloss doesn't need Sonnet — Haiku is ~1s faster per call
+TRANSLATE_MODEL = os.environ.get("RU_TRANSLATE_MODEL", "haiku")
+
+
+def translate_span(sentence, span, model=TRANSLATE_MODEL):
     """Small single-item call for live lookup. -> dict(span_text, is_phrase, translation, sentence)."""
     prompt = f"Line: {sentence}\nThe learner tapped on / typed: {span}"
     text, _ = run_claude(prompt, TRANSLATE_SYSTEM, model=model, timeout=60)
