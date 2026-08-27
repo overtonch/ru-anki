@@ -209,18 +209,30 @@
 
   /* immersive / fullscreen watch — video fills the view, caption stays on top */
   #watchView.fs { padding:0; background:#000; }
-  #watchView.fs .watchbar, #watchView.fs .watchhint, #watchView.fs .transcript { display:none; }
+  #watchView.fs .watchbar, #watchView.fs .watchhint, #watchView.fs .transcript,
+  #watchView.fs .wctrls { display:none; }
   #watchView.fs .player-wrap { flex:1; aspect-ratio:auto; height:100%; }
-  #watchView.fs .cap-overlay { bottom:4.6rem; }
+  #watchView.fs .cap-overlay { bottom:4.4rem; }
   #watchView.fs .cap-overlay:not(:empty) { font-size:clamp(1.05rem, 3.6vh, 1.9rem); }
-  #watchView.fs .wctrls { position:absolute; left:0; right:0; bottom:0; z-index:4;
-      padding:.6rem env(safe-area-inset-right) calc(.7rem + env(safe-area-inset-bottom)) env(safe-area-inset-left);
-      background:linear-gradient(transparent, rgba(0,0,0,.55));
-      transition:opacity .25s; }
-  #watchView.fs .wctrls button { background:rgba(20,20,20,.55); color:#fff;
-      border-color:rgba(255,255,255,.22); backdrop-filter:blur(4px); }
-  #watchView.fs.hidectrls .wctrls { opacity:0; pointer-events:none; }
-  #watchView.fs #fsBtn::before { content:''; }   /* keep glyph; toggled in JS */
+
+  .fs-seek, .fs-exit { display:none; }
+  #watchView.fs .fs-seek {
+      display:flex; align-items:center; justify-content:center; z-index:4;
+      position:absolute; bottom:calc(1rem + env(safe-area-inset-bottom));
+      width:3rem; height:3rem; border-radius:50%; font-size:1.15rem; color:#fff;
+      background:rgba(18,18,20,.34); border:1px solid rgba(255,255,255,.16);
+      -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
+      box-shadow:0 4px 16px rgba(0,0,0,.3); transition:opacity .3s ease; }
+  #watchView.fs .fs-seek:active { background:rgba(43,108,176,.6); }
+  #watchView.fs .fs-seek.prev { left:calc(1rem + env(safe-area-inset-left)); }
+  #watchView.fs .fs-seek.next { right:calc(1rem + env(safe-area-inset-right)); }
+  #watchView.fs.hidectrls .fs-seek { opacity:0; pointer-events:none; }
+  #watchView.fs.paused .fs-exit {
+      display:block; z-index:4; position:absolute;
+      top:calc(1rem + env(safe-area-inset-top)); left:calc(1rem + env(safe-area-inset-left));
+      padding:.42rem 1rem; border-radius:999px; font-size:.85rem; color:#fff;
+      background:rgba(18,18,20,.5); border:1px solid rgba(255,255,255,.18);
+      -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px); }
 
   /* landscape on a phone, not fullscreen: give the video the height, transcript the rest */
   @media (orientation:landscape) and (max-height:540px) {
@@ -317,12 +329,14 @@
       <div id="ytplayer"></div>
       <button class="tap-layer" onclick="togglePlay()" aria-label="play / pause"></button>
       <div id="capOverlay" class="cap-overlay"></div>
+      <button class="fs-seek prev" onclick="seekLine(-1)" aria-label="previous line">⏮</button>
+      <button class="fs-seek next" onclick="seekLine(1)" aria-label="next line">⏭</button>
+      <button class="fs-exit" onclick="exitFs()">Done</button>
     </div>
     <div class="wctrls">
       <button onclick="seekLine(-1)">⏮ line</button>
-      <button id="playBtn" onclick="togglePlay()">▶</button>
       <button onclick="seekLine(1)">line ⏭</button>
-      <button id="fsBtn" onclick="toggleFs()" title="full screen">⛶</button>
+      <button id="fsBtn" onclick="toggleFs()" title="full screen">⛶ full screen</button>
     </div>
     <div class="watchhint">tap a word to card it · <span class="dot"></span> already carded · tap video to pause</div>
     <div id="transcript" class="transcript"></div>
@@ -1001,8 +1015,9 @@ async function openWatch(id) {
       onReady: e => { try { e.target.playVideo(); } catch {}
                       clearInterval(capTimer); capTimer = setInterval(tick, 120); },
       onStateChange: e => {
-        const b = $('#playBtn'); if (b) b.textContent = e.data === 1 ? '⏸' : '▶';
-        if (e.data === 1) { const c = $('#capOverlay'); if (c.textContent === 'tap to play') c.textContent = ''; }
+        const playing = e.data === 1;
+        $('#watchView').classList.toggle('paused', !playing);
+        if (playing) { const c = $('#capOverlay'); if (c.textContent === 'tap to play') c.textContent = ''; }
         bumpCtrls();
       },
       onError: () => { $('#capOverlay').textContent = '⚠ this video can’t be embedded'; },
@@ -1029,9 +1044,8 @@ function togglePlay() {
 /* ---- fullscreen / immersive ---- */
 let fsManual = false, ctrlTimer = null;
 function enterFs() {
-  $('#watchView').classList.add('fs');
-  $('#fsBtn').textContent = '⤢';
   const el = $('#watchView');
+  el.classList.add('fs');
   if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
   try { screen.orientation && screen.orientation.lock &&
         screen.orientation.lock('landscape').catch(() => {}); } catch {}
@@ -1039,7 +1053,6 @@ function enterFs() {
 }
 function exitFs() {
   $('#watchView').classList.remove('fs', 'hidectrls');
-  $('#fsBtn').textContent = '⛶';
   clearTimeout(ctrlTimer);
   if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
 }
@@ -1047,13 +1060,13 @@ function toggleFs() {
   fsManual = true;
   $('#watchView').classList.contains('fs') ? exitFs() : enterFs();
 }
-function bumpCtrls() {   // show the fs control bar, then fade it after a bit
+function bumpCtrls() {   // reveal the seek buttons, then fade them while playing
   const w = $('#watchView');
   if (!w.classList.contains('fs')) return;
   w.classList.remove('hidectrls');
   clearTimeout(ctrlTimer);
-  const paused = ytPlayer && ytPlayer.getPlayerState && ytPlayer.getPlayerState() !== 1;
-  if (!paused) ctrlTimer = setTimeout(() => w.classList.add('hidectrls'), 2800);
+  const playing = ytPlayer && ytPlayer.getPlayerState && ytPlayer.getPlayerState() === 1;
+  if (playing) ctrlTimer = setTimeout(() => w.classList.add('hidectrls'), 2800);
 }
 function cueIdxAt(t) {
   let lo = 0, hi = WCUES.length - 1, idx = -1;
