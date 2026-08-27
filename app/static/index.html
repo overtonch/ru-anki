@@ -125,7 +125,20 @@
 
   .pill { margin-left:auto; border:1px solid var(--accent); color:var(--accent);
           background:var(--card); border-radius:999px; padding:.2rem .6rem; font-size:.75rem; }
-  #netpill.off { color:var(--no); }
+  #netpill { display:inline-flex; align-items:center; gap:.35rem; }
+  .netdot { width:.55em; height:.55em; border-radius:50%; background:var(--muted); }
+  #netpill.ok  .netdot { background:var(--ok); }
+  #netpill.warn .netdot { background:#e0913a; }
+  #netpill.bad .netdot { background:var(--no); }
+  #connBanner { position:fixed; left:0; right:0; top:0; z-index:30;
+                font-size:.85rem; line-height:1.4; padding:.6rem 1rem;
+                padding-top:calc(.6rem + env(safe-area-inset-top));
+                text-align:center; color:#fff; cursor:pointer;
+                box-shadow:0 2px 12px rgba(0,0,0,.25); }
+  #connBanner[hidden] { display:none; }
+  #connBanner.bad  { background:var(--no); }
+  #connBanner.warn { background:#c07d2a; }
+  #connBanner.offline { background:#555; }
 
   #modalWrap { position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:20;
                align-items:center; justify-content:center; padding:1rem; }
@@ -176,6 +189,9 @@
   .cap-overlay:not(:empty) span, .cap-overlay:not(:empty) {
                  font-size:clamp(.95rem,4.2vw,1.35rem); line-height:1.35; }
   .cap-overlay { color:#fff; text-shadow:0 0 4px #000, 0 1px 3px #000; font-weight:600; }
+  .cap-overlay .capw { pointer-events:auto; cursor:pointer; padding:0 .05em; border-radius:.2rem; }
+  .cap-overlay .capw.has-card { color:#7ee2a6; }
+  .cap-overlay .capw:active { background:var(--accent); }
   .watchhint { flex:none; text-align:center; font-size:.72rem; color:var(--muted);
                padding:.35rem 0; }
   .watchhint .dot { display:inline-block; width:.7em; height:.7em; border-radius:50%;
@@ -191,6 +207,35 @@
   .transcript .cue.on .cw:active { background:var(--accent); color:#fff; }
   .transcript .cw.has-card { color:var(--ok); font-weight:600; }
 
+  /* immersive / fullscreen watch — video fills the view, caption stays on top */
+  #watchView.fs { padding:0; background:#000; }
+  #watchView.fs .watchbar, #watchView.fs .watchhint, #watchView.fs .transcript { display:none; }
+  #watchView.fs .player-wrap { flex:1; aspect-ratio:auto; height:100%; }
+  #watchView.fs .cap-overlay { bottom:4.6rem; }
+  #watchView.fs .cap-overlay:not(:empty) { font-size:clamp(1.05rem, 3.6vh, 1.9rem); }
+  #watchView.fs .wctrls { position:absolute; left:0; right:0; bottom:0; z-index:4;
+      padding:.6rem env(safe-area-inset-right) calc(.7rem + env(safe-area-inset-bottom)) env(safe-area-inset-left);
+      background:linear-gradient(transparent, rgba(0,0,0,.55));
+      transition:opacity .25s; }
+  #watchView.fs .wctrls button { background:rgba(20,20,20,.55); color:#fff;
+      border-color:rgba(255,255,255,.22); backdrop-filter:blur(4px); }
+  #watchView.fs.hidectrls .wctrls { opacity:0; pointer-events:none; }
+  #watchView.fs #fsBtn::before { content:''; }   /* keep glyph; toggled in JS */
+
+  /* landscape on a phone, not fullscreen: give the video the height, transcript the rest */
+  @media (orientation:landscape) and (max-height:540px) {
+    #watchView:not(.fs) { flex-flow:row wrap; align-content:flex-start; }
+    #watchView:not(.fs) .watchbar { flex-basis:100%; }
+    #watchView:not(.fs) .player-wrap { flex:0 0 auto; height:calc(100dvh - 2.6rem);
+        width:auto; max-width:72vw; }
+    #watchView:not(.fs) .wctrls { position:absolute; left:0; right:auto; bottom:0;
+        width:72vw; max-width:72vw; z-index:4; background:linear-gradient(transparent, rgba(0,0,0,.5)); }
+    #watchView:not(.fs) .wctrls button { background:rgba(20,20,20,.55); color:#fff;
+        border-color:rgba(255,255,255,.22); }
+    #watchView:not(.fs) .watchhint { display:none; }
+    #watchView:not(.fs) .transcript { flex:1 1 40%; height:calc(100dvh - 2.6rem); }
+  }
+
   .toast { position:fixed; left:50%; bottom:1.2rem; transform:translateX(-50%);
            background:#222; color:#fff; padding:.6rem 1rem; border-radius:.5rem; font-size:.9rem;
            opacity:0; transition:opacity .2s; pointer-events:none; max-width:90%; z-index:9; }
@@ -204,9 +249,10 @@
 <body>
 <header>
   <h1>ru-anki</h1>
-  <span class="sub" id="netpill">online</span>
+  <span class="sub" id="netpill"><span class="netdot"></span><span id="netword">…</span></span>
   <button class="pill" id="queuePill" hidden onclick="flushQueue(true)"></button>
 </header>
+<div id="connBanner" hidden onclick="probeHealth()"></div>
 
 <main>
   <!-- LIST VIEW -->
@@ -276,6 +322,7 @@
       <button onclick="seekLine(-1)">⏮ line</button>
       <button id="playBtn" onclick="togglePlay()">▶</button>
       <button onclick="seekLine(1)">line ⏭</button>
+      <button id="fsBtn" onclick="toggleFs()" title="full screen">⛶</button>
     </div>
     <div class="watchhint">tap a word to card it · <span class="dot"></span> already carded · tap video to pause</div>
     <div id="transcript" class="transcript"></div>
@@ -940,6 +987,8 @@ async function openWatch(id) {
   $('#detailView').hidden = true;
   $('#watchView').hidden = false;
   $('#capOverlay').textContent = 'tap to play';
+  fsManual = false;
+  if (matchMedia('(orientation: landscape)').matches) enterFs(); else exitFs();
   renderTranscript();
   try { await loadYTApi(); }
   catch { toast('couldn’t load the YouTube player'); closeWatch(); return; }
@@ -954,6 +1003,7 @@ async function openWatch(id) {
       onStateChange: e => {
         const b = $('#playBtn'); if (b) b.textContent = e.data === 1 ? '⏸' : '▶';
         if (e.data === 1) { const c = $('#capOverlay'); if (c.textContent === 'tap to play') c.textContent = ''; }
+        bumpCtrls();
       },
       onError: () => { $('#capOverlay').textContent = '⚠ this video can’t be embedded'; },
     },
@@ -961,8 +1011,10 @@ async function openWatch(id) {
 }
 function closeWatch() {
   clearInterval(capTimer); capTimer = null;
+  clearTimeout(ctrlTimer);
   if (ytPlayer) { try { ytPlayer.destroy(); } catch {} ytPlayer = null; }
   wActive = -1;
+  exitFs();
   $('#watchView').hidden = true;
   $('#detailView').hidden = false;
   loadCandidates();
@@ -971,6 +1023,37 @@ function togglePlay() {
   if (!ytPlayer || !ytPlayer.getPlayerState) return;
   if (ytPlayer.getPlayerState() === 1) ytPlayer.pauseVideo();
   else ytPlayer.playVideo();
+  bumpCtrls();
+}
+
+/* ---- fullscreen / immersive ---- */
+let fsManual = false, ctrlTimer = null;
+function enterFs() {
+  $('#watchView').classList.add('fs');
+  $('#fsBtn').textContent = '⤢';
+  const el = $('#watchView');
+  if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+  try { screen.orientation && screen.orientation.lock &&
+        screen.orientation.lock('landscape').catch(() => {}); } catch {}
+  bumpCtrls();
+}
+function exitFs() {
+  $('#watchView').classList.remove('fs', 'hidectrls');
+  $('#fsBtn').textContent = '⛶';
+  clearTimeout(ctrlTimer);
+  if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
+}
+function toggleFs() {
+  fsManual = true;
+  $('#watchView').classList.contains('fs') ? exitFs() : enterFs();
+}
+function bumpCtrls() {   // show the fs control bar, then fade it after a bit
+  const w = $('#watchView');
+  if (!w.classList.contains('fs')) return;
+  w.classList.remove('hidectrls');
+  clearTimeout(ctrlTimer);
+  const paused = ytPlayer && ytPlayer.getPlayerState && ytPlayer.getPlayerState() !== 1;
+  if (!paused) ctrlTimer = setTimeout(() => w.classList.add('hidectrls'), 2800);
 }
 function cueIdxAt(t) {
   let lo = 0, hi = WCUES.length - 1, idx = -1;
@@ -995,13 +1078,25 @@ function seekLine(dir) {
   ytPlayer.seekTo(WCUES[target].s, true);
   ytPlayer.playVideo();
 }
+function renderCaption(idx) {
+  const c = $('#capOverlay');
+  c.textContent = '';
+  if (idx < 0 || !WCUES[idx]) return;
+  (WCUES[idx].words || [{ t: WCUES[idx].text }]).forEach((w, wi) => {
+    const sp = document.createElement('span');
+    sp.className = 'capw' + (w.c ? ' has-card' : '');
+    sp.textContent = w.t;
+    if (w.t) sp.onclick = ev => { ev.stopPropagation(); watchTapWord(idx, wi); };
+    c.append(sp, document.createTextNode(' '));
+  });
+}
 function tick() {
   if (!ytPlayer || !ytPlayer.getCurrentTime) return;
   const idx = cueIdxAt(ytPlayer.getCurrentTime());
   if (idx === wActive) return;
   wActive = idx;
   const c = $('#capOverlay');
-  if (c.textContent !== 'tap to play') c.textContent = idx >= 0 ? WCUES[idx].text : '';
+  if (c.textContent !== 'tap to play') renderCaption(idx);
   const box = $('#transcript');
   box.querySelectorAll('.cue.on').forEach(e => e.classList.remove('on'));
   if (idx < 0) return;
@@ -1041,10 +1136,11 @@ function watchTapWord(ci, wi) {
 function markWordCarded(span) {
   const t = rnorm(stripPunct(span));
   const parts = new Set(t.split(/\s+/));
-  document.querySelectorAll('#transcript .cw').forEach(sp => {
-    const w = rnorm(stripPunct(sp.textContent));
-    if (w === t || parts.has(w)) sp.classList.add('has-card');
+  const hit = txt => { const w = rnorm(stripPunct(txt)); return w === t || parts.has(w); };
+  document.querySelectorAll('#transcript .cw, #capOverlay .capw').forEach(sp => {
+    if (hit(sp.textContent)) sp.classList.add('has-card');
   });
+  WCUES.forEach(c => (c.words || []).forEach(w => { if (hit(w.t)) w.c = true; }));
 }
 
 /* ---------------- offline queue + flush ---------------- */
@@ -1143,20 +1239,46 @@ async function idbDel(store, key) { return _p((await _tx(store, 'readwrite')).de
 async function idbAll(store) { return _p((await _tx(store, 'readonly')).getAll()); }
 
 /* ---------------- connectivity ---------------- */
-function paintNet() {
-  const p = $('#netpill');
-  p.textContent = navigator.onLine ? 'online' : 'offline';
-  p.classList.toggle('off', !navigator.onLine);
+// NET: 'ok' | 'anki' (server ok, Anki down) | 'noserver' (online but can't reach Mac)
+//      | 'offline' (no internet at all) | 'checking'
+let NET = 'checking', healthTimer = null;
+
+async function probeHealth() {
+  if (!navigator.onLine) { setNet('offline'); return; }
+  setNet(NET === 'ok' || NET === 'anki' ? NET : 'checking');
+  try {
+    const r = await fetch('/health', { cache: 'no-store', signal: AbortSignal.timeout(6000) });
+    if (!r.ok) throw 0;
+    const h = await r.json();
+    setNet(h.anki && h.anki.ok ? 'ok' : 'anki');
+  } catch { setNet('noserver'); }
 }
+function setNet(state) {
+  const changed = state !== NET;
+  NET = state;
+  const pill = $('#netpill'), word = $('#netword'), banner = $('#connBanner');
+  pill.className = 'sub ' + ({ ok: 'ok', anki: 'warn', noserver: 'bad', offline: '', checking: '' }[state] || '');
+  word.textContent = { ok: 'connected', anki: 'Anki down', noserver: 'no server',
+                       offline: 'offline', checking: '…' }[state];
+  const B = {
+    anki: ['warn', '⚠ Connected to the Mac, but <b>Anki isn’t running</b> (or AnkiConnect isn’t installed). New cards will queue and upload once Anki is open. Tap to re-check.'],
+    noserver: ['bad', '⚠ <b>Can’t reach the Mac.</b> Check: Tailscale VPN is <b>on</b> on this phone, the Mac is awake and on Tailscale, and the ru-anki server is running. Tap to re-check.'],
+    offline: ['offline', 'Offline — saved videos and the card queue still work; cards upload when you reconnect.'],
+  }[state];
+  if (B) { banner.hidden = false; banner.className = B[0]; banner.innerHTML = B[1]; }
+  else banner.hidden = true;
+  if (changed && state === 'ok') onReconnect();
+}
+function paintNet() { probeHealth(); }
+
 function onReconnect() {
-  paintNet(); flushQueue();
+  flushQueue();
   if (CURRENT && !$('#detailView').hidden) { renderOfflineRow(CURRENT); loadCandidates(true); }
 }
-window.addEventListener('online', onReconnect);
-window.addEventListener('offline', paintNet);
-// Safari suspends the tab when backgrounded — resync when it comes back to focus.
-document.addEventListener('visibilitychange', () => { if (!document.hidden) onReconnect(); });
-window.addEventListener('focus', onReconnect);
+window.addEventListener('online', probeHealth);
+window.addEventListener('offline', () => setNet('offline'));
+document.addEventListener('visibilitychange', () => { if (!document.hidden) probeHealth(); });
+window.addEventListener('focus', probeHealth);
 
 /* ---------------- boot ---------------- */
 if ('serviceWorker' in navigator)
@@ -1167,7 +1289,14 @@ $('#speeds').onclick = e => {
   $('#speeds').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
   try { ytPlayer.setPlaybackRate(parseFloat(b.dataset.r)); } catch {}
 };
-paintNet();
+// re-check the connection every 20s while the tab is visible
+setInterval(() => { if (!document.hidden) probeHealth(); }, 20000);
+// landscape → immersive video; portrait → back to the split view (unless toggled)
+matchMedia('(orientation: landscape)').addEventListener('change', e => {
+  if ($('#watchView').hidden) return;
+  if (e.matches) enterFs(); else if (!fsManual) exitFs();
+});
+probeHealth();
 refreshQueuePill();
 flushQueue();
 loadVideos();
