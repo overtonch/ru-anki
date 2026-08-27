@@ -1,0 +1,939 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ru-anki</title>
+<style>
+  :root { --bg:#faf9f7; --fg:#222; --muted:#888; --line:#e2ddd5; --accent:#2b6cb0;
+          --yes:#2f855a; --no:#b0413e; --card:#fff; --ok:#2f855a; --okbg:#e8f5ec; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+         background:var(--bg); color:var(--fg);
+         padding: env(safe-area-inset-top) 0 3rem; }
+  a { color:var(--accent); }
+  header { padding:1rem 1rem .6rem; display:flex; align-items:baseline; gap:.6rem; }
+  h1 { font-size:1.05rem; margin:0; font-weight:700; }
+  header .sub { font-size:.8rem; color:var(--muted); }
+  main { padding:0 1rem; max-width:660px; margin:0 auto; }
+
+  input[type=text], input[type=search], select {
+    width:100%; padding:.7rem; border:1px solid var(--line); border-radius:.6rem;
+    font-size:1rem; background:var(--card); color:var(--fg); }
+  .addbar { display:flex; gap:.5rem; margin:.2rem 0 1rem; }
+  .addbar input { flex:1; }
+  .btn { padding:.7rem 1rem; border:1px solid var(--accent); background:var(--accent);
+         color:#fff; border-radius:.6rem; font-size:.95rem; white-space:nowrap; }
+  .btn.ghost { background:var(--card); color:var(--accent); }
+  .btn:disabled { opacity:.5; }
+  .btn.sm { padding:.45rem .7rem; font-size:.85rem; }
+  .backlink { background:none; border:none; color:var(--accent); font-size:.92rem;
+              padding:.4rem 0; cursor:pointer; }
+  .status { font-size:.85rem; color:var(--muted); margin:.4rem 0; min-height:1.1em; }
+  .status:empty { margin:0; min-height:0; }
+  .empty { color:var(--muted); text-align:center; padding:2.5rem 0; font-size:.9rem; }
+
+  /* spinner */
+  .spin { display:inline-block; width:1em; height:1em; border:2px solid currentColor;
+          border-right-color:transparent; border-radius:50%;
+          animation:spin .6s linear infinite; vertical-align:-.15em; }
+  .spin.lg { width:1.5rem; height:1.5rem; border-width:3px; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .center-spin { display:flex; justify-content:center; align-items:center; gap:.5rem;
+                 padding:2rem 0; color:var(--muted); font-size:.9rem; }
+  .rowhead { display:flex; align-items:baseline; justify-content:space-between; gap:.5rem;
+             flex-wrap:wrap; }
+  .rowhead h3 { margin:0; }
+  .rowhead .backlink { font-size:.8rem; padding:0 0 0 .8rem; }
+  @media (prefers-reduced-motion: reduce) { .spin { animation-duration:1.2s; } }
+
+  /* progress bar */
+  .pbar { height:7px; border-radius:4px; background:var(--line); overflow:hidden; margin:.5rem 0 .3rem; }
+  .pfill { height:100%; background:var(--accent); border-radius:4px;
+           transition: width .5s cubic-bezier(.3,.7,.3,1); }
+  .pfill.done { background:var(--ok); }
+  .pfill.err  { background:var(--no); }
+  .pmeta { font-size:.78rem; color:var(--muted); }
+
+  /* video list */
+  .chan { font-size:.78rem; font-weight:700; color:var(--muted); text-transform:uppercase;
+          letter-spacing:.04em; margin:1.1rem 0 .4rem; }
+  .vcard { display:flex; gap:.7rem; align-items:flex-start; background:var(--card);
+           border:1px solid var(--line); border-radius:.7rem; padding:.6rem; margin:.5rem 0;
+           cursor:pointer; transition: border-color .2s, box-shadow .2s;
+           animation: cardIn .3s cubic-bezier(.2,.7,.3,1) both; }
+  .vcard:active { box-shadow:0 0 0 2px var(--accent) inset; }
+  .vcard.done  { border-left:4px solid var(--ok); }
+  .vcard.error { border-left:4px solid var(--no); }
+  .vcard img { width:120px; height:68px; object-fit:cover; border-radius:.4rem; flex:none;
+               background:var(--line); }
+  .vcard .body { flex:1; min-width:0; }
+  .vcard .vtitle { font-size:.92rem; font-weight:600; line-height:1.25; }
+  .vcard .vmeta { font-size:.75rem; color:var(--muted); margin-top:.2rem; }
+  .vcard .vmeta .ext { white-space:nowrap; }
+  .vcard .doneline { font-size:.8rem; color:var(--ok); font-weight:600; margin-top:.25rem; }
+  .vcard.feat { flex-direction:column; gap:.5rem; align-items:stretch; }
+  .vcard.feat img { width:100%; height:auto; aspect-ratio:16/9; }
+  .vcard.feat .vtitle { font-size:1rem; }
+
+  /* detail */
+  .vhead { display:flex; gap:.7rem; margin:.4rem 0 .8rem; }
+  .vhead img { width:120px; height:68px; object-fit:cover; border-radius:.45rem; flex:none;
+               background:var(--line); }
+  .vhead .vtitle { font-size:.98rem; font-weight:700; line-height:1.25; }
+  .vhead .vmeta { font-size:.78rem; color:var(--muted); margin-top:.2rem; }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:.7rem;
+           padding:.8rem; margin:.7rem 0; }
+  .panel.ok { background:var(--okbg); border-color:#a8d8ba; }
+  .panel h3 { margin:0 0 .3rem; font-size:.9rem; }
+
+  .line { background:var(--card); border:1px solid var(--line); border-radius:.6rem;
+          padding:.7rem; margin:.5rem 0; cursor:pointer; }
+  .line .t { font-size:.72rem; color:var(--muted); }
+  .line b { font-weight:700; background:#fdf2c8; border-radius:2px; padding:0 1px; }
+
+  /* review cards */
+  .card { background:var(--card); border:1px solid var(--line); border-radius:.7rem;
+          padding:.9rem; margin:.7rem 0;
+          transition: background-color .3s ease, border-color .3s ease;
+          animation: cardIn .32s cubic-bezier(.2,.7,.3,1) both; }
+  @keyframes cardIn { from { opacity:0; transform:translateY(8px); } }
+  /* flash the actioned card to a solid colour, then collapse it away */
+  .card.act { color:#fff; border-color:transparent; transform:scale(1.015);
+              transition: background-color .12s ease, transform .12s ease, box-shadow .12s ease; }
+  .card.act.yes { background:#2f9e5e; box-shadow:0 4px 18px rgba(47,158,94,.35); }
+  .card.act.no  { background:#d0463b; box-shadow:0 4px 18px rgba(208,70,59,.32); }
+  .card.act .tr, .card.act .meta { color:rgba(255,255,255,.9); }
+  .card.act .sent b { color:#fff; }
+  .card.act .decide { opacity:0; transition:opacity .1s; }
+  .card.leaving { overflow:hidden;
+    transition: height .19s cubic-bezier(.4,0,.2,1), opacity .16s ease, transform .17s ease,
+                padding .19s cubic-bezier(.4,0,.2,1), margin .19s cubic-bezier(.4,0,.2,1); }
+  .card.leaving.yes { transform:scale(.94); }
+  .card.leaving.no  { transform:translateX(16px) scale(.96); }
+  .sent { font-size:1.05rem; }
+  .sent b { font-weight:700; }
+  .tr { color:var(--accent); margin-top:.4rem; }
+  .meta { font-size:.75rem; color:var(--muted); margin-top:.3rem; }
+  .decide { display:flex; gap:.5rem; margin-top:.7rem; }
+  .decide button { flex:1; padding:.7rem; border-radius:.6rem; font-size:.95rem; border:1px solid; }
+  .decide .y { background:var(--yes); border-color:var(--yes); color:#fff; }
+  .decide .n { background:var(--card); border-color:var(--no); color:var(--no); }
+
+  .pill { margin-left:auto; border:1px solid var(--accent); color:var(--accent);
+          background:var(--card); border-radius:999px; padding:.2rem .6rem; font-size:.75rem; }
+  #netpill.off { color:var(--no); }
+
+  #modalWrap { position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:20;
+               align-items:center; justify-content:center; padding:1rem; }
+  #modalWrap[hidden] { display:none; }
+  #modalWrap:not([hidden]) { display:flex; }
+  .modal { background:var(--card); border-radius:.8rem; padding:1.1rem; width:100%;
+           max-width:460px; box-shadow:0 12px 40px rgba(0,0,0,.25); }
+  .modal h3 { margin:0 0 .2rem; }
+  .modalsent { font-size:1.12rem; line-height:1.8; margin:.3rem 0 .5rem; }
+  .modalsent .w { padding:.05rem .15rem; border-radius:.25rem; cursor:pointer; }
+  .modalsent .w.sel { background:#2b6cb0; color:#fff; }
+  .modalsent .w.sel.warn { background:#e0913a; }
+  .modalhint { font-size:.8rem; color:var(--no); margin:.1rem 0 .6rem; min-height:1em; }
+  #modalPreview { margin:.7rem 0 .2rem; min-height:1.2em; }
+  #modalPreview .pv { background:var(--bg); border:1px solid var(--line); border-radius:.55rem;
+                      padding:.6rem .7rem; }
+  #modalPreview .pv .sent { font-size:1rem; }
+  #modalPreview .pv .sent b { font-weight:700; }
+  #modalPreview .pv .tr { color:var(--accent); font-size:1rem; margin-top:.25rem; }
+  #modalPreview .wait { font-size:.82rem; color:var(--muted); display:flex; gap:.4rem; align-items:center; }
+  .modalbtns { display:flex; justify-content:flex-end; gap:1rem; align-items:center;
+               margin-top:.8rem; }
+  #modalSpan { margin-top:.2rem; }
+
+  .toast { position:fixed; left:50%; bottom:1.2rem; transform:translateX(-50%);
+           background:#222; color:#fff; padding:.6rem 1rem; border-radius:.5rem; font-size:.9rem;
+           opacity:0; transition:opacity .2s; pointer-events:none; max-width:90%; z-index:9; }
+  .toast.show { opacity:1; }
+  @media (prefers-reduced-motion: reduce) {
+    .card, .card.leaving, .vcard { animation:none; transition:opacity .15s ease; }
+    .pfill { transition:none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>ru-anki</h1>
+  <span class="sub" id="netpill">online</span>
+  <button class="pill" id="queuePill" hidden onclick="flushQueue(true)"></button>
+</header>
+
+<main>
+  <!-- LIST VIEW -->
+  <div id="listView">
+    <div class="addbar">
+      <input type="text" id="url" placeholder="Paste a YouTube link to add"
+             autocapitalize="off" autocomplete="off" spellcheck="false"
+             onkeydown="if(event.key==='Enter')addVideo()">
+      <button class="btn" id="addBtn" onclick="addVideo()">Add</button>
+    </div>
+    <div class="status">
+      model
+      <select id="model" style="width:auto;padding:.2rem .35rem;font-size:.8rem">
+        <option value="haiku">Haiku</option>
+        <option value="sonnet">Sonnet (slower, more thorough)</option>
+      </select>
+      <span id="addStatus"></span>
+    </div>
+    <div id="videoList"></div>
+  </div>
+
+  <!-- DETAIL VIEW -->
+  <div id="detailView" hidden>
+    <button class="backlink" onclick="showList()">← all videos</button>
+    <div class="vhead" id="vhead"></div>
+    <div id="offlineRow" class="status"></div>
+    <div id="progressPanel"></div>
+
+    <div class="panel">
+      <h3>Look up a word</h3>
+      <input type="search" id="q" placeholder="Type part of a word you heard"
+             autocapitalize="off" autocomplete="off" spellcheck="false"
+             oninput="debouncedSearch()">
+      <div class="status" id="liveStatus"></div>
+      <div id="results"></div>
+    </div>
+
+    <div class="panel" id="reviewPanel">
+      <div class="rowhead">
+        <h3 id="reviewHead">Review</h3>
+        <div>
+          <button class="backlink" onclick="loadCandidates(true)">reload</button>
+          <button class="backlink" onclick="resetAndReExtract()">discard all &amp; re-extract</button>
+        </div>
+      </div>
+      <div id="cards"></div>
+    </div>
+  </div>
+</main>
+
+<!-- CARD MODAL -->
+<div id="modalWrap" hidden onclick="if(event.target===this)closeCardModal()">
+  <div class="modal">
+    <h3>Make a card</h3>
+    <div id="modalSent" class="modalsent"></div>
+    <p class="modalhint" id="modalHint"></p>
+    <input type="text" id="modalSpan" placeholder="word or phrase"
+           autocapitalize="off" autocomplete="off" spellcheck="false"
+           oninput="if(MODAL){MODAL._edited=true;syncModalSpan()}">
+    <div id="modalPreview"></div>
+    <div class="modalbtns">
+      <button class="backlink" onclick="closeCardModal()">Cancel</button>
+      <button class="btn sm" id="modalOk" onclick="confirmCard()">Make card</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = s => document.querySelector(s);
+let VIDEOS = [];
+let CURRENT = null;          // video id in detail view
+let DETAIL_V = null;
+let listTimer = null, sse = null, tickTimer = null, searchTimer = null;
+
+function toast(msg, ms=2400) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), ms);
+}
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.detail || r.statusText);
+  return body;
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+function fmtTime(sec) {
+  sec = Math.max(0, Math.round(sec || 0));
+  const m = Math.floor(sec/60), s = sec%60;
+  return m + ':' + String(s).padStart(2,'0');
+}
+
+/* ---------------- ui helpers ---------------- */
+function setBusy(btn, on, label) {
+  if (!btn) return;
+  if (on) {
+    if (btn.dataset.label == null) btn.dataset.label = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin"></span>' + (label ? ' ' + label : '');
+  } else {
+    btn.disabled = false;
+    if (btn.dataset.label != null) { btn.innerHTML = btn.dataset.label; delete btn.dataset.label; }
+  }
+}
+const SPINNER = '<div class="center-spin"><span class="spin lg"></span></div>';
+
+/* ---------------- list view ---------------- */
+let listedOnce = false;
+async function loadVideos() {
+  if (!listedOnce) $('#videoList').innerHTML = SPINNER;
+  try {
+    VIDEOS = await api('/videos');
+    listedOnce = true;
+  } catch (e) {
+    const off = await idbAll('offline');
+    if (off.length) {
+      VIDEOS = off.map(o => ({ ...o.video, lines: o.lines.length, _offline: true }));
+      $('#videoList').innerHTML = '';
+      renderList();
+      $('#videoList').insertAdjacentHTML('afterbegin',
+        '<div class="empty">offline — showing saved videos</div>');
+    } else {
+      $('#videoList').innerHTML = '<div class="empty">offline — no saved videos</div>';
+    }
+    return;
+  }
+  renderList();
+  const busy = VIDEOS.some(v => ['queued','running'].includes(v.extract?.state));
+  clearTimeout(listTimer);
+  if (busy && !CURRENT) listTimer = setTimeout(loadVideos, 3000);
+}
+
+function progressPct(ex) {
+  if (!ex) return 0;
+  if (ex.state === 'done') return 100;
+  if (ex.state === 'error') return 100;
+  if (ex.state === 'queued' || !ex.chunks_total) return 6;
+  return 6 + (ex.chunks_done / ex.chunks_total) * 92;
+}
+function bar(ex) {
+  const cls = ex.state === 'done' ? ' done' : ex.state === 'error' ? ' err' : '';
+  return `<div class="pbar"><div class="pfill${cls}" style="width:${progressPct(ex)}%"></div></div>`;
+}
+function extractLine(ex) {
+  if (ex.state === 'queued') return 'queued…';
+  if (ex.state === 'running') {
+    const parts = [];
+    if (ex.chunks_total) parts.push(`${ex.chunks_done}/${ex.chunks_total}`);
+    if (ex.added != null) parts.push(`${ex.added} words`);
+    parts.push(fmtTime(ex.elapsed));
+    return 'extracting · ' + parts.join(' · ');
+  }
+  if (ex.state === 'error') return 'failed: ' + (ex.detail || 'unknown');
+  return ex.detail || '';
+}
+
+function renderList() {
+  const box = $('#videoList');
+  if (!VIDEOS.length) {
+    box.innerHTML = '<div class="empty">No videos yet. Paste a link above to start.</div>';
+    return;
+  }
+  box.innerHTML = '';
+  const newest = VIDEOS[0];
+  const h = document.createElement('div');
+  h.className = 'chan'; h.textContent = 'Most recent';
+  box.appendChild(h);
+  box.appendChild(videoCard(newest, true));
+
+  const groups = {};
+  for (const v of VIDEOS.slice(1)) (groups[v.channel || 'Unknown channel'] ||= []).push(v);
+  for (const chan of Object.keys(groups).sort((a,b) => a.localeCompare(b))) {
+    const ch = document.createElement('div');
+    ch.className = 'chan'; ch.textContent = chan;
+    box.appendChild(ch);
+    for (const v of groups[chan]) box.appendChild(videoCard(v));
+  }
+}
+
+function videoCard(v, feat) {
+  const ex = v.extract || {state:'idle'};
+  const busy = ['queued','running'].includes(ex.state);
+  const el = document.createElement('div');
+  el.className = 'vcard' + (feat ? ' feat' : '')
+    + (ex.state === 'done' || (!busy && v.pending >= 0 && ex.state !== 'error') ? ' done' : '')
+    + (ex.state === 'error' ? ' error' : '');
+  const thumb = v.thumbnail_url
+    ? `<img loading="lazy" src="${escapeHtml(v.thumbnail_url)}" alt="">` : '<img alt="">';
+  let statusHtml;
+  if (busy) {
+    statusHtml = `${bar(ex)}<div class="pmeta">${extractLine(ex)}</div>`;
+  } else if (ex.state === 'error') {
+    statusHtml = `<div class="pmeta" style="color:var(--no)">${escapeHtml(extractLine(ex))}</div>`;
+  } else {
+    const rev = v.pending ? `${v.pending} to review` : 'nothing to review';
+    statusHtml = `<div class="doneline">✓ ${rev} · ${v.lines} lines</div>`;
+  }
+  el.innerHTML = `
+    ${thumb}
+    <div class="body">
+      <div class="vtitle">${escapeHtml(v.title || '(untitled)')}</div>
+      <div class="vmeta">${escapeHtml(v.channel || 'Unknown channel')}
+        · <a class="ext" href="${escapeHtml(v.url)}" target="_blank" rel="noopener">YouTube ↗</a></div>
+      ${statusHtml}
+    </div>`;
+  el.querySelector('.ext').onclick = e => e.stopPropagation();
+  el.onclick = () => openDetail(v.id);
+  return el;
+}
+
+async function addVideo() {
+  const url = $('#url').value.trim();
+  if (!url) return;
+  setBusy($('#addBtn'), true);
+  $('#addStatus').textContent = '';
+  try {
+    const r = await api('/videos', {
+      method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({url})
+    });
+    $('#url').value = '';
+    const m = $('#model') ? $('#model').value : 'haiku';
+    await api(`/videos/${r.video_id}/extract?model=${m}`, {method:'POST'});
+    await openDetail(r.video_id);   // straight into the progress view
+    loadVideosQuiet();              // refresh the list in the background
+  } catch (e) {
+    $('#addStatus').textContent = 'error: ' + e.message;
+  } finally { setBusy($('#addBtn'), false); }
+}
+
+/* ---------------- detail view ---------------- */
+function showList() {
+  CURRENT = null;
+  if (sse) { sse.close(); sse = null; }
+  clearInterval(tickTimer); tickTimer = null;
+  $('#detailView').hidden = true;
+  $('#listView').hidden = false;
+  loadVideos();
+}
+
+async function openDetail(id) {
+  CURRENT = id;
+  clearTimeout(listTimer);
+  $('#listView').hidden = true;
+  $('#detailView').hidden = false;
+  $('#q').value = ''; $('#results').innerHTML = ''; $('#liveStatus').textContent = '';
+  $('#cards').innerHTML = SPINNER; $('#progressPanel').innerHTML = '';
+  let v = VIDEOS.find(x => x.id === id);
+  if (!v) { try { v = await api(`/videos/${id}`); } catch { v = await offlineVideoMeta(id); } }
+  DETAIL_V = v || {id};
+  renderVHead(DETAIL_V);
+  await renderOfflineRow(id);
+  const ex = (v && v.extract) || {state:'idle'};
+  if (['queued','running'].includes(ex.state) && navigator.onLine) startProgress(v, ex);
+  else renderProgressDone(ex);
+  loadCandidates();
+}
+
+function renderVHead(v) {
+  $('#vhead').innerHTML = `
+    ${v.thumbnail_url ? `<img src="${escapeHtml(v.thumbnail_url)}" alt="">` : ''}
+    <div style="flex:1;min-width:0">
+      <div class="vtitle">${escapeHtml(v.title || '')}</div>
+      <div class="vmeta">${escapeHtml(v.channel || '')} · ${v.lines || 0} lines
+        · <a href="${escapeHtml(v.url)}" target="_blank" rel="noopener">YouTube ↗</a></div>
+    </div>`;
+}
+
+let progClientStart = 0;
+function startProgress(v, ex) {
+  progClientStart = Date.now() - (ex.elapsed || 0) * 1000;
+  paintProgress(ex);
+  if (sse) sse.close();
+  sse = new EventSource(`/videos/${v.id}/extract/events`);
+  sse.onmessage = e => {
+    let d; try { d = JSON.parse(e.data); } catch { return; }
+    if (d.state === 'idle') { sse.close(); sse = null; return; }
+    if (d.elapsed) progClientStart = Date.now() - d.elapsed * 1000;
+    paintProgress(d);
+    if (d.added != null && d.added !== (v._lastAdded || 0)) { v._lastAdded = d.added; loadCandidates(); }
+    if (d.state === 'done' || d.state === 'error') {
+      sse.close(); sse = null;
+      clearInterval(tickTimer); tickTimer = null;
+      loadCandidates();
+      loadVideosQuiet();
+    }
+  };
+  sse.onerror = () => { /* EventSource auto-retries */ };
+  clearInterval(tickTimer);
+  tickTimer = setInterval(() => {
+    const el = $('#pElapsed');
+    if (el) el.textContent = fmtTime((Date.now() - progClientStart) / 1000);
+  }, 1000);
+}
+function paintProgress(ex) {
+  const panel = $('#progressPanel');
+  if (ex.state === 'done' || ex.state === 'error') { renderProgressDone(ex); return; }
+  const starting = ex.state === 'queued' || !ex.chunks_total;
+  panel.innerHTML = `
+    <div class="panel">
+      <h3><span class="spin"></span> ${starting ? 'Reading the video…' : 'Finding vocabulary'}</h3>
+      ${bar(ex)}
+      <div class="pmeta">
+        ${ex.chunks_total ? `${ex.chunks_done}/${ex.chunks_total} sections · ` : ''}
+        <b>${ex.added || 0}</b> words found ·
+        <span id="pElapsed">${fmtTime(ex.elapsed)}</span>
+      </div>
+    </div>`;
+}
+function renderProgressDone(ex) {
+  const panel = $('#progressPanel');
+  if (!ex || ex.state === 'idle') { panel.innerHTML = ''; return; }
+  if (ex.state === 'error') {
+    panel.innerHTML = `<div class="panel"><h3 style="color:var(--no)">Extraction failed</h3>
+      <div class="pmeta">${escapeHtml(ex.detail || '')}</div>
+      <div style="margin-top:.5rem"><button class="btn sm" onclick="retryExtract()">Retry</button></div></div>`;
+    return;
+  }
+  const u = ex.usage;
+  const cost = u ? ` · ${(u.in/1000).toFixed(1)}k in / ${(u.out/1000).toFixed(1)}k out · ~$${u.cost_est.toFixed(3)}` : '';
+  panel.innerHTML = `<div class="panel ok"><h3>✓ Extraction complete</h3>
+    <div class="pmeta">${escapeHtml(ex.detail || '')}${ex.elapsed ? ' · '+fmtTime(ex.elapsed) : ''}${cost}</div>
+    <div style="margin-top:.5rem"><button class="btn sm ghost" onclick="retryExtract()">Re-extract</button></div></div>`;
+}
+async function retryExtract() {
+  try {
+    await api(`/videos/${CURRENT}/extract`, {method:'POST'});
+    const v = VIDEOS.find(x => x.id === CURRENT) || await api(`/videos/${CURRENT}`);
+    startProgress(v, {state:'queued', added:0, elapsed:0});
+  } catch (e) { toast('error: ' + e.message, 3500); }
+}
+async function loadVideosQuiet() {
+  try { VIDEOS = await api('/videos'); } catch {}
+}
+
+/* ---------------- review ---------------- */
+let loadingCands = false, loadCandsQueued = false;
+async function loadCandidates(spin) {
+  if (!CURRENT) return;
+  if (loadingCands) { loadCandsQueued = true; return; }
+  loadingCands = true;
+  const box = $('#cards');
+  const forId = CURRENT;
+  if (spin && !box.querySelector('.card')) box.innerHTML = SPINNER;
+  let rows;
+  try {
+    rows = await api(`/videos/${forId}/candidates?status=pending`);
+  } catch {
+    loadingCands = false;
+    if (!box.querySelector('.card') && !box.querySelector('.leaving'))
+      box.innerHTML = navigator.onLine
+        ? '<div class="empty">couldn’t load — tap “reload”</div>'
+        : '<div class="empty">review needs a connection</div>';
+    return;
+  }
+  if (forId === CURRENT) reconcileCards(box, rows);
+  loadingCands = false;
+  if (loadCandsQueued) { loadCandsQueued = false; loadCandidates(); }
+}
+
+// Make the DOM match the server's pending list exactly: drop stale cards, add
+// missing ones, leave anything mid-dismiss alone. Single source of truth.
+function reconcileCards(box, rows) {
+  box.querySelectorAll('.center-spin, .empty').forEach(el => el.remove());
+  const wanted = new Map(rows.map(c => [String(c.id), c]));
+  box.querySelectorAll('.card').forEach(el => {
+    if (!wanted.has(el.dataset.id) && !el.classList.contains('leaving')) el.remove();
+  });
+  const present = new Set([...box.querySelectorAll('.card')].map(el => el.dataset.id));
+  let added = 0;
+  rows.forEach(c => {
+    if (present.has(String(c.id))) return;
+    try {
+      const el = renderCard(c);
+      el.style.animationDelay = Math.min(added++, 8) * 30 + 'ms';
+      box.appendChild(el);
+    } catch (e) { console.error('renderCard', c && c.id, e); }
+  });
+  refreshReviewHead();
+}
+function refreshReviewHead() {
+  const box = $('#cards');
+  const n = box.querySelectorAll('.card:not(.leaving)').length;
+  $('#reviewHead').textContent = `Review (${n})`;
+  if (!n && !box.querySelector('.card'))
+    box.innerHTML = '<div class="empty">Nothing to review 🎉</div>';
+}
+
+async function resetAndReExtract() {
+  if (!CURRENT || !confirm('Discard all pending suggestions and re-run extraction?')) return;
+  try {
+    await api(`/videos/${CURRENT}/reset-pending`, {method:'POST'});
+    $('#cards').innerHTML = '';
+    refreshReviewHead();
+    const m = $('#model') ? $('#model').value : 'haiku';
+    await api(`/videos/${CURRENT}/extract?model=${m}`, {method:'POST'});
+    const v = VIDEOS.find(x => x.id === CURRENT) || await api(`/videos/${CURRENT}`);
+    startProgress(v, {state:'queued', added:0, elapsed:0});
+  } catch (e) { toast('error: ' + e.message, 3500); }
+}
+function renderCard(c) {
+  const el = document.createElement('div');
+  el.className = 'card';
+  el.dataset.id = c.id;
+  el.innerHTML = `
+    <div class="sent">${c.front_html}</div>
+    <div class="tr">${escapeHtml(c.translation || '')}</div>
+    <div class="meta">${c.is_phrase ? 'phrase' : 'word'} · ${escapeHtml(c.span_text)}${c.bolded ? '' : ' · ⚠ not bolded'}</div>
+    <div class="decide">
+      <button class="y">Make card</button>
+      <button class="n">Discard</button>
+    </div>`;
+  el.querySelector('.y').onclick = () => decide(c.id, 'yes', el);
+  el.querySelector('.n').onclick = () => decide(c.id, 'no', el);
+  return el;
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function decide(id, decision, el) {
+  if (el.dataset.busy) return;
+  el.dataset.busy = '1';
+  el.querySelectorAll('button').forEach(b => b.disabled = true);
+  el.style.animation = 'none';
+  el.style.height = el.offsetHeight + 'px';
+  el.classList.add('act', decision);          // instant solid green / red flash
+  try {
+    await Promise.all([
+      api(`/candidates/${id}/decision`, {
+        method:'POST', headers:{'content-type':'application/json'},
+        body: JSON.stringify({decision})
+      }),
+      sleep(140),                              // let the flash register
+    ]);
+    collapseCard(el);                          // confirmed — slide away
+  } catch (e) {
+    toast('couldn’t save — ' + e.message, 3500);   // revert this card, in place
+    el.classList.remove('act', decision);
+    el.style.height = ''; el.style.animation = '';
+    delete el.dataset.busy;
+    el.querySelectorAll('button').forEach(b => b.disabled = false);
+  }
+}
+function collapseCard(el) {
+  void el.offsetHeight;
+  el.classList.add('leaving');
+  requestAnimationFrame(() => {
+    el.style.height = '0px';
+    el.style.paddingTop = el.style.paddingBottom = '0px';
+    el.style.marginTop = el.style.marginBottom = '0px';
+    el.style.opacity = '0';
+  });
+  setTimeout(() => { el.remove(); refreshReviewHead(); }, 190);
+}
+
+/* ---------------- search (local-first, works offline) ---------------- */
+const rnorm = s => String(s).toLowerCase().replace(/ё/g, 'е').trim();
+
+function localSearch(lines, q, limit=40) {
+  const qn = rnorm(q);
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (rnorm(lines[i].text).includes(qn)) {
+      const ctx = lines.slice(Math.max(0, i-1), i+2).map(l => l.text).join(' ').trim();
+      out.push({ id: lines[i].id, start_time: lines[i].t || lines[i].start_time,
+                 text: ctx, html: highlightHTML(ctx, q) });
+      if (out.length >= limit) break;
+    }
+  }
+  return out;
+}
+function highlightHTML(text, q) {
+  const ft = rnorm(text), fq = rnorm(q);
+  if (!fq) return escapeHtml(text);
+  let out = '', i = 0, j;
+  while ((j = ft.indexOf(fq, i)) >= 0) {
+    out += escapeHtml(text.slice(i, j)) + '<b>' + escapeHtml(text.slice(j, j+fq.length)) + '</b>';
+    i = j + fq.length;
+  }
+  return out + escapeHtml(text.slice(i));
+}
+
+function debouncedSearch() { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 220); }
+async function runSearch() {
+  const q = $('#q').value.trim();
+  const box = $('#results');
+  if (!CURRENT || q.length < 2) { box.innerHTML = ''; return; }
+  let rows;
+  const off = await idbGet('offline', CURRENT);
+  if (off) rows = localSearch(off.lines, q);
+  else {
+    try { rows = await api(`/videos/${CURRENT}/search?q=${encodeURIComponent(q)}`); }
+    catch (e) { box.innerHTML = '<div class="empty">offline — save this video for offline search</div>'; return; }
+  }
+  box.innerHTML = rows.length ? '' : '<div class="empty">no matches</div>';
+  for (const r of rows) {
+    const el = document.createElement('div');
+    el.className = 'line';
+    el.innerHTML = `<div class="t">${r.start_time || ''}</div>${r.html || escapeHtml(r.text)}`;
+    el.onclick = () => openCardModal(r);
+    box.appendChild(el);
+  }
+}
+
+/* ---------------- card modal (tap words to pick the phrase) ---------------- */
+let MODAL = null;
+const stripPunct = s => String(s).replace(/^[^\p{L}\d-]+|[^\p{L}\d-]+$/gu, '');
+
+function openCardModal(row) {
+  const tokens = row.text.split(/(\s+)/);          // words + the gaps between them
+  const wordTok = [];                              // token index of each Nth word
+  tokens.forEach((t, i) => { if (t && !/^\s+$/.test(t)) wordTok.push(i); });
+  MODAL = { tokens, wordTok, sentence: row.text, lineId: row.id,
+            timestamp: row.start_time || null,
+            anchor: null, focus: null, scatter: null, _edited: false,
+            preview: null, previewFor: null, pvTimer: null, pvSeq: 0 };
+  $('#modalPreview').innerHTML = '';
+
+  // auto-select the word(s) matching the prefix that was searched for
+  const pfx = rnorm($('#q').value || '');
+  const matches = pfx ? wordTok
+    .map((ti, wi) => ({ wi, w: rnorm(stripPunct(tokens[ti])) }))
+    .filter(x => x.w && x.w.startsWith(pfx)).map(x => x.wi) : [];
+  if (matches.length === 1) { MODAL.anchor = matches[0]; MODAL.focus = matches[0]; }
+  else if (matches.length > 1) { MODAL.scatter = new Set(matches); }
+
+  renderModalSent();
+  syncModalSpan();
+  $('#modalWrap').hidden = false;
+}
+
+function selectedWords() {
+  if (MODAL.scatter) return MODAL.scatter;
+  if (MODAL.anchor === null) return new Set();
+  const b = MODAL.focus ?? MODAL.anchor;
+  const out = new Set();
+  for (let i = Math.min(MODAL.anchor, b); i <= Math.max(MODAL.anchor, b); i++) out.add(i);
+  return out;
+}
+function selConsecutive() {
+  const s = selectedWords();
+  if (!s.size) return false;
+  return Math.max(...s) - Math.min(...s) + 1 === s.size;
+}
+
+function renderModalSent() {
+  const host = $('#modalSent');
+  host.innerHTML = '';
+  const sel = selectedWords();
+  const scattered = !!MODAL.scatter;
+  let wi = -1;
+  MODAL.tokens.forEach(tok => {
+    if (!tok || /^\s+$/.test(tok)) { host.appendChild(document.createTextNode(tok)); return; }
+    wi++;
+    const my = wi;
+    const s = document.createElement('span');
+    s.className = 'w' + (sel.has(my) ? ' sel' : '') + (sel.has(my) && scattered ? ' warn' : '');
+    s.textContent = tok;
+    s.onclick = () => pickWord(my);
+    host.appendChild(s);
+  });
+}
+function pickWord(wi) {
+  if (MODAL.scatter || MODAL.anchor === null || MODAL.focus !== null) {
+    MODAL.scatter = null; MODAL.anchor = wi; MODAL.focus = null;
+  } else {
+    MODAL.focus = wi;
+  }
+  MODAL._edited = false;
+  renderModalSent();
+  syncModalSpan();
+}
+function syncModalSpan() {
+  const sel = selectedWords();
+  if (!MODAL._edited) {
+    let span = '';
+    if (sel.size) {
+      const lo = MODAL.wordTok[Math.min(...sel)], hi = MODAL.wordTok[Math.max(...sel)];
+      span = stripPunct(MODAL.tokens.slice(lo, hi + 1).join(''));
+    }
+    $('#modalSpan').value = span;
+  }
+  const ok = MODAL._edited ? !!$('#modalSpan').value.trim() : selConsecutive();
+  $('#modalOk').disabled = !ok;
+  $('#modalHint').textContent = ok ? ''
+    : (sel.size ? 'Those words aren’t next to each other — tap the phrase you want.'
+                : 'Tap the word or phrase you want.');
+  updatePreview(ok ? $('#modalSpan').value.trim() : '');
+}
+
+function updatePreview(span) {
+  clearTimeout(MODAL.pvTimer);
+  const box = $('#modalPreview');
+  if (!span) { box.innerHTML = ''; MODAL.preview = MODAL.previewFor = null; return; }
+  if (MODAL.previewFor === span) return;            // already showing / fetching this
+  MODAL.preview = null;
+  if (!navigator.onLine) {
+    box.innerHTML = '<div class="wait">ⓘ translation preview isn’t available offline — the card will be translated when it uploads</div>';
+    return;
+  }
+  box.innerHTML = '<div class="wait"><span class="spin"></span> translating…</div>';
+  const seq = ++MODAL.pvSeq;
+  MODAL.pvTimer = setTimeout(async () => {
+    try {
+      const p = await api('/translate', {
+        method:'POST', headers:{'content-type':'application/json'},
+        body: JSON.stringify({ video_id: CURRENT, span,
+          subtitle_line_id: MODAL.lineId ?? null,
+          timestamp: MODAL.timestamp, sentence: MODAL.sentence })
+      });
+      if (seq !== MODAL.pvSeq) return;              // superseded
+      MODAL.preview = p; MODAL.previewFor = span;
+      box.innerHTML = `<div class="pv">
+        <div class="sent">${p.front_html}</div>
+        <div class="tr">${escapeHtml(p.translation || '')}</div>
+      </div>`;
+    } catch (e) {
+      if (seq === MODAL.pvSeq)
+        box.innerHTML = `<div class="wait">couldn’t preview (${escapeHtml(e.message)}) — card will still translate on save</div>`;
+    }
+  }, 450);
+}
+
+function closeCardModal() {
+  if (MODAL) clearTimeout(MODAL.pvTimer);
+  $('#modalWrap').hidden = true; MODAL = null;
+}
+
+async function confirmCard() {
+  const span = $('#modalSpan').value.trim();
+  if (!span) { toast('pick a word first'); return; }
+  const pv = (MODAL.preview && MODAL.previewFor === span) ? MODAL.preview : null;
+  const item = {
+    client_id: 'c' + Date.now() + Math.random().toString(36).slice(2, 6),
+    video_id: CURRENT, span,
+    subtitle_line_id: MODAL.lineId ?? null,
+    timestamp: MODAL.timestamp,
+    sentence: pv ? pv.sentence : MODAL.sentence,
+    span_text: pv ? pv.span_text : null,
+    translation: pv ? pv.translation : null,
+    is_phrase: pv ? pv.is_phrase : null,
+    created_at: Date.now(),
+  };
+  closeCardModal();
+  $('#q').value = ''; $('#results').innerHTML = '';   // clear the search
+  await idbPut('queue', item.client_id, item);
+  await refreshQueuePill();
+  toast(pv ? `queued: ${pv.span_text} — ${pv.translation}`
+           : (navigator.onLine ? 'card queued' : 'saved — translates when online'));
+  flushQueue();
+}
+
+/* ---------------- offline queue + flush ---------------- */
+async function refreshQueuePill() {
+  const n = (await idbAll('queue')).length;
+  const pill = $('#queuePill');
+  if (!n) { pill.hidden = true; return; }
+  pill.hidden = false;
+  pill.innerHTML = flushing
+    ? `<span class="spin"></span> uploading ${n}…`
+    : `${n} card${n>1?'s':''} to upload`;
+}
+let flushing = false;
+async function flushQueue(manual) {
+  if (flushing || !navigator.onLine) { if (manual && !navigator.onLine) toast('still offline'); return; }
+  const items = await idbAll('queue');
+  if (!items.length) return;
+  flushing = true;
+  refreshQueuePill();
+  try {
+    const res = await api('/cards/flush', {
+      method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({ items })
+    });
+    let ok = 0, retry = 0, dropped = 0;
+    const byId = Object.fromEntries(items.map(i => [i.client_id, i]));
+    for (const r of res.results) {
+      if (r.ok) { await idbDel('queue', r.client_id); ok++; continue; }
+      // server reachable but this item failed (dup, deleted video, …).
+      // keep retrying a few times, then give up so the pill can clear.
+      const it = byId[r.client_id]; if (!it) continue;
+      it.tries = (it.tries || 0) + 1; it.last_error = r.error;
+      if (it.tries >= 4) { await idbDel('queue', r.client_id); dropped++; }
+      else { await idbPut('queue', r.client_id, it); retry++; }
+    }
+    await refreshQueuePill();
+    const bits = [];
+    if (ok) bits.push(`${ok} added to Anki`);
+    if (retry) bits.push(`${retry} will retry`);
+    if (dropped) bits.push(`${dropped} gave up (${res.results.find(r=>!r.ok)?.error || 'error'})`);
+    if (bits.length) toast(bits.join(' · '), dropped || retry ? 4000 : 2400);
+  } catch (e) {
+    if (manual) toast('upload failed — Anki reachable? will retry', 3000);
+  } finally { flushing = false; refreshQueuePill(); }
+}
+
+/* ---------------- offline download ---------------- */
+async function renderOfflineRow(id) {
+  const row = $('#offlineRow');
+  const off = await idbGet('offline', id);
+  if (off) {
+    const when = new Date(off.savedAt).toLocaleString();
+    row.innerHTML = `✓ available offline (${off.lines.length} lines, ${when}) ·
+      <button class="backlink" onclick="downloadOffline(${id})">refresh</button>`;
+  } else if (navigator.onLine) {
+    row.innerHTML = `<button class="btn sm ghost" id="offBtn" onclick="downloadOffline(${id})">⬇ Save for offline</button>`;
+  } else {
+    row.textContent = 'offline — not saved for offline use';
+  }
+}
+async function downloadOffline(id) {
+  setBusy($('#offBtn'), true, 'saving');
+  try {
+    const data = await api(`/videos/${id}/lines`);
+    await idbPut('offline', id, { video: data.video, lines: data.lines, savedAt: Date.now() });
+    if (data.video.thumbnail_url) { try { await fetch(data.video.thumbnail_url, {mode:'no-cors'}); } catch {} }
+    toast('saved for offline');
+  } catch (e) { toast('download failed: ' + e.message, 3500); }
+  renderOfflineRow(id);
+}
+async function offlineVideoMeta(id) {
+  const off = await idbGet('offline', id);
+  return off ? { ...off.video, lines: off.lines.length } : { id, title: 'video ' + id };
+}
+
+/* ---------------- tiny IndexedDB wrapper ---------------- */
+let _db;
+function idb() {
+  if (_db) return _db;
+  _db = new Promise((res, rej) => {
+    const r = indexedDB.open('ru-anki', 1);
+    r.onupgradeneeded = () => {
+      r.result.createObjectStore('offline');
+      r.result.createObjectStore('queue');
+    };
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+  return _db;
+}
+async function _tx(store, mode) { return (await idb()).transaction(store, mode).objectStore(store); }
+function _p(req) { return new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error); }); }
+async function idbGet(store, key) { return _p((await _tx(store, 'readonly')).get(key)); }
+async function idbPut(store, key, val) { return _p((await _tx(store, 'readwrite')).put(val, key)); }
+async function idbDel(store, key) { return _p((await _tx(store, 'readwrite')).delete(key)); }
+async function idbAll(store) { return _p((await _tx(store, 'readonly')).getAll()); }
+
+/* ---------------- connectivity ---------------- */
+function paintNet() {
+  const p = $('#netpill');
+  p.textContent = navigator.onLine ? 'online' : 'offline';
+  p.classList.toggle('off', !navigator.onLine);
+}
+function onReconnect() {
+  paintNet(); flushQueue();
+  if (CURRENT && !$('#detailView').hidden) { renderOfflineRow(CURRENT); loadCandidates(true); }
+}
+window.addEventListener('online', onReconnect);
+window.addEventListener('offline', paintNet);
+// Safari suspends the tab when backgrounded — resync when it comes back to focus.
+document.addEventListener('visibilitychange', () => { if (!document.hidden) onReconnect(); });
+window.addEventListener('focus', onReconnect);
+
+/* ---------------- boot ---------------- */
+if ('serviceWorker' in navigator)
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+paintNet();
+refreshQueuePill();
+flushQueue();
+loadVideos();
+</script>
+</body>
+</html>

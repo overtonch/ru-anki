@@ -1,0 +1,12 @@
+# Server + pipeline deps. Install into a venv:
+#   python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
+# Also needs the `claude` CLI on PATH (for extraction/translation) and, for card
+# creation, desktop Anki with the AnkiConnect add-on.
+fastapi==0.141.1
+uvicorn==0.52.4
+httpx==0.28.1
+python-multipart==0.0.32
+yt-dlp==2026.8.19
+genanki==0.13.1
+pymorphy3==2.0.6
+pymorphy3-dicts-ru==2.4.417150.4580142
