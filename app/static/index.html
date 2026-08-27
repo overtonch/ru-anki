@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta id="vp" name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>ru-anki</title>
 <style>
   :root { --bg:#faf9f7; --fg:#222; --muted:#888; --line:#e2ddd5; --accent:#2b6cb0;
@@ -167,7 +167,13 @@
   .watch-cta { width:100%; margin:.4rem 0 .2rem; }
   #watchView { position:fixed; inset:0; background:var(--bg); z-index:15;
                display:flex; flex-direction:column;
-               padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+               padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+               touch-action:manipulation; }   /* no double-tap zoom in the player */
+  #watchView button, #watchView .tap-layer, #watchView .cap-overlay,
+  #watchView .capw { touch-action:manipulation; }
+  #watchView .transcript { touch-action:pan-y; }
+  #watchView svg { width:1.15em; height:1.15em; fill:currentColor; vertical-align:-.18em;
+                   pointer-events:none; }
   #watchView[hidden] { display:none; }
   .watchbar { display:flex; align-items:center; justify-content:space-between;
               padding:.4rem .8rem; flex:none; }
@@ -222,6 +228,7 @@
       background:rgba(18,18,20,.34); border:1px solid rgba(255,255,255,.16);
       -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
       box-shadow:0 4px 16px rgba(0,0,0,.3); transition:opacity .3s ease; }
+  #watchView.fs .fs-seek svg { width:1.5rem; height:1.5rem; }
   #watchView.fs .fs-seek:active { background:rgba(43,108,176,.6); }
   #watchView.fs .fs-seek.prev { left:calc(1rem + env(safe-area-inset-left)); }
   #watchView.fs .fs-seek.next { right:calc(1rem + env(safe-area-inset-right)); }
@@ -328,13 +335,17 @@
       <div id="ytplayer"></div>
       <button class="tap-layer" onclick="togglePlay()" aria-label="play / pause"></button>
       <div id="capOverlay" class="cap-overlay"></div>
-      <button class="fs-seek prev" onclick="seekLine(-1)" aria-label="previous line">⏮</button>
-      <button class="fs-seek next" onclick="seekLine(1)" aria-label="next line">⏭</button>
+      <button class="fs-seek prev" onclick="seekLine(-1)" aria-label="previous line">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6a1 1 0 0 1 2 0v4.6l7.5-4.9A1 1 0 0 1 19 6.5v11a1 1 0 0 1-1.5.8L10 13.4V18a1 1 0 0 1-2 0z"/></svg>
+      </button>
+      <button class="fs-seek next" onclick="seekLine(1)" aria-label="next line">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 6a1 1 0 0 0-2 0v4.6L6.5 5.7A1 1 0 0 0 5 6.5v11a1 1 0 0 0 1.5.8l7.5-4.9V18a1 1 0 0 0 2 0z"/></svg>
+      </button>
       <button class="fs-exit" onclick="exitFs()">Done</button>
     </div>
     <div class="wctrls">
-      <button onclick="seekLine(-1)">⏮ line</button>
-      <button onclick="seekLine(1)">line ⏭</button>
+      <button onclick="seekLine(-1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6a1 1 0 0 1 2 0v4.6l7.5-4.9A1 1 0 0 1 19 6.5v11a1 1 0 0 1-1.5.8L10 13.4V18a1 1 0 0 1-2 0z"/></svg> prev line</button>
+      <button onclick="seekLine(1)">next line <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 6a1 1 0 0 0-2 0v4.6L6.5 5.7A1 1 0 0 0 5 6.5v11a1 1 0 0 0 1.5.8l7.5-4.9V18a1 1 0 0 0 2 0z"/></svg></button>
       <button id="fsBtn" onclick="toggleFs()" title="full screen">⛶ full screen</button>
     </div>
     <div class="watchhint">tap a word to card it · <span class="dot"></span> already carded · tap video to pause</div>
@@ -1052,9 +1063,12 @@ function togglePlay() {
 
 /* ---- fullscreen / immersive ---- */
 let fsManual = false, ctrlTimer = null;
+const VP_DEFAULT = 'width=device-width, initial-scale=1, viewport-fit=cover';
+const VP_LOCKED = VP_DEFAULT + ', maximum-scale=1, user-scalable=no';
 function enterFs() {
   const el = $('#watchView');
   el.classList.add('fs');
+  $('#vp').setAttribute('content', VP_LOCKED);   // no pinch-zoom while immersive
   if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
   try { screen.orientation && screen.orientation.lock &&
         screen.orientation.lock('landscape').catch(() => {}); } catch {}
@@ -1062,6 +1076,7 @@ function enterFs() {
 }
 function exitFs() {
   $('#watchView').classList.remove('fs', 'hidectrls');
+  $('#vp').setAttribute('content', VP_DEFAULT);
   clearTimeout(ctrlTimer);
   if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
 }
