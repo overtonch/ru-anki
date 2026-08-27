@@ -14,8 +14,11 @@ field — parse the envelope, then parse `result`.
 """
 import json
 import os
+import queue
 import re
 import subprocess
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 CLAUDE = "claude"
@@ -209,14 +212,125 @@ Output ONLY one raw JSON object, no fence:
 - sentence: the line lightly cleaned into a short readable Russian sentence containing an inflected form of span_text; if too fragmentary, write a minimal natural one."""
 
 
-# a one-word gloss doesn't need Sonnet — Haiku is ~1s faster per call
-TRANSLATE_MODEL = os.environ.get("RU_TRANSLATE_MODEL", "haiku")
+TRANSLATE_MODEL = os.environ.get("RU_TRANSLATE_MODEL", "sonnet")
 
 
-def translate_span(sentence, span, model=TRANSLATE_MODEL):
-    """Small single-item call for live lookup. -> dict(span_text, is_phrase, translation, sentence)."""
-    prompt = f"Line: {sentence}\nThe learner tapped on / typed: {span}"
-    text, _ = run_claude(prompt, TRANSLATE_SYSTEM, model=model, timeout=60)
+class WarmClaude:
+    """A persistent `claude` process fed via stream-json. Repeated small calls
+    skip the ~1s spawn+init cost (measured ~2.0s -> ~1.0s per call). One request
+    at a time (locked); recycled after `max_calls` or `idle` seconds, and
+    respawned on any failure."""
+
+    def __init__(self, system, model, max_calls=60, idle=600):
+        self.system, self.model = system, model
+        self.max_calls, self.idle = max_calls, idle
+        self.proc = None
+        self._q = None
+        self.calls = 0
+        self.last = 0.0
+        self.lock = threading.Lock()
+
+    def _spawn(self):
+        self.proc = subprocess.Popen(
+            [CLAUDE, "-p", "--input-format", "stream-json", "--output-format", "stream-json",
+             "--verbose", "--system-prompt", self.system, "--tools", "",
+             "--strict-mcp-config", "--no-session-persistence", "--model", self.model],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, bufsize=1, env={**os.environ, "MAX_THINKING_TOKENS": THINKING})
+        self._q = queue.Queue()
+        threading.Thread(target=self._reader, args=(self.proc, self._q), daemon=True).start()
+        self.calls = 0
+
+    @staticmethod
+    def _reader(proc, q):
+        try:
+            for line in proc.stdout:
+                q.put(line)
+        finally:
+            q.put(None)
+
+    def _kill(self):
+        if self.proc:
+            for f in (self.proc.stdin, self.proc.stdout):
+                try:
+                    f.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            try:
+                self.proc.terminate()
+            except Exception:  # noqa: BLE001
+                pass
+        self.proc = None
+
+    def _stale(self):
+        return (self.proc is None or self.proc.poll() is not None
+                or self.calls >= self.max_calls
+                or (self.last and time.time() - self.last > self.idle))
+
+    def ask(self, content, timeout=45):
+        with self.lock:
+            for attempt in (1, 2):
+                if self._stale():
+                    self._kill()
+                    self._spawn()
+                try:
+                    return self._ask_once(content, timeout)
+                except LLMError:
+                    self._kill()
+                    if attempt == 2:
+                        raise
+
+    def _ask_once(self, content, timeout):
+        p, q = self.proc, self._q
+        try:
+            p.stdin.write(json.dumps(
+                {"type": "user", "message": {"role": "user", "content": content}}) + "\n")
+            p.stdin.flush()
+        except Exception as e:  # noqa: BLE001
+            raise LLMError(f"warm claude write failed: {e}")
+        text, end = None, time.time() + timeout
+        while True:
+            try:
+                line = q.get(timeout=max(0.05, end - time.time()))
+            except queue.Empty:
+                raise LLMError("warm claude timed out")
+            if line is None:
+                raise LLMError("warm claude stream closed")
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if d.get("type") == "assistant":
+                for b in d.get("message", {}).get("content", []):
+                    if b.get("type") == "text":
+                        text = b["text"]
+            elif d.get("type") == "result":
+                self.calls += 1
+                self.last = time.time()
+                if d.get("is_error"):
+                    raise LLMError(f"warm claude error: {d.get('result') or d}")
+                return text or d.get("result", "")
+
+
+_WARM = None
+
+
+def _warm_translator():
+    global _WARM
+    if _WARM is None or _WARM.model != TRANSLATE_MODEL:
+        _WARM = WarmClaude(TRANSLATE_SYSTEM, TRANSLATE_MODEL)
+    return _WARM
+
+
+def prewarm():
+    """Spawn the translate process now so the first real lookup is fast."""
+    try:
+        _warm_translator().ask("Line: Это простой тест.\nWord: простой", timeout=30)
+    except Exception as e:  # noqa: BLE001
+        print(f"[warm] prewarm failed: {e}")
+
+
+def _parse_obj(text):
     m = re.search(r"\{.*\}", text, re.S)
     if not m:
         raise LLMError(f"no JSON object in model output: {text[:300]}")
@@ -224,3 +338,14 @@ def translate_span(sentence, span, model=TRANSLATE_MODEL):
         return json.loads(m.group(0))
     except json.JSONDecodeError as e:
         raise LLMError(f"bad JSON object from model ({e}): {m.group(0)[:300]}")
+
+
+def translate_span(sentence, span, model=None):
+    """Live-lookup gloss. Uses the warm process; falls back to a one-shot."""
+    prompt = f"Line: {sentence}\nThe learner tapped on / typed: {span}"
+    try:
+        return _parse_obj(_warm_translator().ask(prompt))
+    except LLMError:
+        text, _ = run_claude(prompt, TRANSLATE_SYSTEM,
+                             model=model or TRANSLATE_MODEL, timeout=60)
+        return _parse_obj(text)

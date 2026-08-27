@@ -59,6 +59,7 @@ def _startup_maintenance():
 
 
 threading.Thread(target=_startup_maintenance, daemon=True).start()
+threading.Thread(target=llm.prewarm, daemon=True).start()
 
 app = FastAPI(title="ru-anki pipeline")
 app.add_middleware(GZipMiddleware, minimum_size=1000)
