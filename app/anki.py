@@ -68,7 +68,8 @@ def ensure_model():
 
 
 def ensure_deck(deck=DECK):
-    invoke("createDeck", deck=deck)
+    if deck not in (invoke("deckNames") or []):
+        invoke("createDeck", deck=deck)
 
 
 def front_html(sentence, span, is_phrase):
@@ -92,6 +93,13 @@ def add_card(sentence, span, is_phrase, translation, source, deck=DECK, tags=Non
                     "duplicateScope": "deck"},
     }
     note_id = invoke("addNote", note=note)
+    # guarantee the card is in the right deck even if addNote fell back to Default
+    try:
+        cids = invoke("findCards", query=f"nid:{note_id}")
+        if cids:
+            invoke("changeDeck", cards=cids, deck=deck)
+    except AnkiError:
+        pass
     return {"note_id": note_id, "bolded": bolded, "front": front}
 
 

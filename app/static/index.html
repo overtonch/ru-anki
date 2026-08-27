@@ -172,8 +172,8 @@
   #watchView button, #watchView .tap-layer, #watchView .cap-overlay,
   #watchView .capw { touch-action:manipulation; }
   #watchView .transcript { touch-action:pan-y; }
-  #watchView svg { width:1.15em; height:1.15em; fill:currentColor; vertical-align:-.18em;
-                   pointer-events:none; }
+  #watchView svg { width:1.15em; height:1.15em; vertical-align:-.18em; pointer-events:none; }
+  #watchView .fs-seek svg, #watchView .wctrls svg { fill:currentColor; }
   #watchView[hidden] { display:none; }
   .watchbar { display:flex; align-items:center; justify-content:space-between;
               padding:.4rem .8rem; flex:none; }
@@ -234,11 +234,13 @@
   #watchView.fs .fs-seek.next { right:calc(1rem + env(safe-area-inset-right)); }
   #watchView.fs.hidectrls .fs-seek { opacity:0; pointer-events:none; }
   #watchView.fs.paused .fs-exit {
-      display:block; z-index:4; position:absolute;
-      top:calc(1rem + env(safe-area-inset-top)); left:calc(1rem + env(safe-area-inset-left));
-      padding:.42rem 1rem; border-radius:999px; font-size:.85rem; color:#fff;
-      background:rgba(18,18,20,.5); border:1px solid rgba(255,255,255,.18);
-      -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px); }
+      display:flex; align-items:center; justify-content:center; z-index:4; position:absolute;
+      top:calc(.9rem + env(safe-area-inset-top)); right:calc(.9rem + env(safe-area-inset-right));
+      width:2.6rem; height:2.6rem; border-radius:50%; color:#fff;
+      background:rgba(18,18,20,.42); border:1px solid rgba(255,255,255,.16);
+      -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
+      box-shadow:0 4px 16px rgba(0,0,0,.3); }
+  #watchView.fs.paused .fs-exit svg { width:1.3rem; height:1.3rem; }
 
   /* landscape on a phone, not fullscreen: give the video the height, transcript the rest */
   @media (orientation:landscape) and (max-height:540px) {
@@ -341,7 +343,9 @@
       <button class="fs-seek next" onclick="seekLine(1)" aria-label="next line">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 6a1 1 0 0 0-2 0v4.6L6.5 5.7A1 1 0 0 0 5 6.5v11a1 1 0 0 0 1.5.8l7.5-4.9V18a1 1 0 0 0 2 0z"/></svg>
       </button>
-      <button class="fs-exit" onclick="exitFs()">Done</button>
+      <button class="fs-exit" onclick="exitFs()" aria-label="exit full screen">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4v3a2 2 0 0 1-2 2H4M20 9h-3a2 2 0 0 1-2-2V4M4 15h3a2 2 0 0 1 2 2v3M15 20v-3a2 2 0 0 1 2-2h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
     </div>
     <div class="wctrls">
       <button onclick="seekLine(-1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6a1 1 0 0 1 2 0v4.6l7.5-4.9A1 1 0 0 1 19 6.5v11a1 1 0 0 1-1.5.8L10 13.4V18a1 1 0 0 1-2 0z"/></svg> prev line</button>
