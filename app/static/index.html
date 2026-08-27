@@ -111,6 +111,9 @@
                 padding .19s cubic-bezier(.4,0,.2,1), margin .19s cubic-bezier(.4,0,.2,1); }
   .card.leaving.yes { transform:scale(.94); }
   .card.leaving.no  { transform:translateX(16px) scale(.96); }
+  .card.dup { opacity:.55; }
+  .card.dup .decide .n { flex:1; border-color:var(--line); color:var(--muted); }
+  .dupbadge { color:var(--muted); font-style:italic; }
   .sent { font-size:1.05rem; }
   .sent b { font-weight:700; }
   .tr { color:var(--accent); margin-top:.4rem; }
@@ -147,6 +150,47 @@
                margin-top:.8rem; }
   #modalSpan { margin-top:.2rem; }
 
+  /* watch view */
+  .watch-cta { width:100%; margin:.4rem 0 .2rem; }
+  #watchView { position:fixed; inset:0; background:var(--bg); z-index:15;
+               display:flex; flex-direction:column;
+               padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+  #watchView[hidden] { display:none; }
+  .watchbar { display:flex; align-items:center; justify-content:space-between;
+              padding:.4rem .8rem; flex:none; }
+  .speeds button { background:none; border:1px solid var(--line); color:var(--muted);
+                   border-radius:.4rem; padding:.2rem .45rem; font-size:.78rem; margin-left:.25rem; }
+  .speeds button.on { border-color:var(--accent); color:var(--accent); }
+  .player-wrap { position:relative; width:100%; background:#000; flex:none;
+                 aspect-ratio:16/9; }
+  .player-wrap #ytplayer, .player-wrap iframe { position:absolute; inset:0;
+                 width:100%; height:100%; border:0; }
+  .tap-layer { position:absolute; inset:0; z-index:2; background:transparent; border:0;
+               cursor:pointer; }
+  .wctrls { display:flex; gap:.5rem; padding:.5rem .8rem; flex:none; }
+  .wctrls button { flex:1; padding:.6rem; border:1px solid var(--line); background:var(--card);
+                   color:var(--fg); border-radius:.6rem; font-size:.9rem; }
+  .wctrls #playBtn { flex:0 0 4rem; font-size:1.1rem; }
+  .cap-overlay { position:absolute; left:0; right:0; bottom:.4rem; text-align:center;
+                 z-index:3; pointer-events:none; padding:0 .6rem; }
+  .cap-overlay:not(:empty) span, .cap-overlay:not(:empty) {
+                 font-size:clamp(.95rem,4.2vw,1.35rem); line-height:1.35; }
+  .cap-overlay { color:#fff; text-shadow:0 0 4px #000, 0 1px 3px #000; font-weight:600; }
+  .watchhint { flex:none; text-align:center; font-size:.72rem; color:var(--muted);
+               padding:.35rem 0; }
+  .watchhint .dot { display:inline-block; width:.7em; height:.7em; border-radius:50%;
+                    background:var(--ok); vertical-align:-.05em; margin:0 .1em; }
+  .transcript { flex:1; overflow-y:auto; padding:.3rem 1rem 2rem;
+                -webkit-overflow-scrolling:touch; }
+  .transcript .cue { font-size:1.05rem; line-height:1.85; padding:.35rem .3rem;
+                     border-radius:.4rem; color:var(--muted); }
+  .transcript .cue.on { color:var(--fg); background:var(--card); }
+  .transcript .cue-ts { background:none; border:none; color:var(--accent);
+                        font-size:.72rem; padding:0 .35rem 0 0; vertical-align:.1em; }
+  .transcript .cw { cursor:pointer; padding:0 .05em; border-radius:.25rem; }
+  .transcript .cue.on .cw:active { background:var(--accent); color:#fff; }
+  .transcript .cw.has-card { color:var(--ok); font-weight:600; }
+
   .toast { position:fixed; left:50%; bottom:1.2rem; transform:translateX(-50%);
            background:#222; color:#fff; padding:.6rem 1rem; border-radius:.5rem; font-size:.9rem;
            opacity:0; transition:opacity .2s; pointer-events:none; max-width:90%; z-index:9; }
@@ -176,8 +220,8 @@
     <div class="status">
       model
       <select id="model" style="width:auto;padding:.2rem .35rem;font-size:.8rem">
-        <option value="haiku">Haiku</option>
-        <option value="sonnet">Sonnet (slower, more thorough)</option>
+        <option value="sonnet">Sonnet (better picks)</option>
+        <option value="haiku">Haiku (faster)</option>
       </select>
       <span id="addStatus"></span>
     </div>
@@ -188,6 +232,7 @@
   <div id="detailView" hidden>
     <button class="backlink" onclick="showList()">← all videos</button>
     <div class="vhead" id="vhead"></div>
+    <button class="btn watch-cta" id="watchBtn" onclick="openWatch(CURRENT)">▶ Watch with captions</button>
     <div id="offlineRow" class="status"></div>
     <div id="progressPanel"></div>
 
@@ -210,6 +255,30 @@
       </div>
       <div id="cards"></div>
     </div>
+  </div>
+
+  <!-- WATCH VIEW -->
+  <div id="watchView" hidden>
+    <div class="watchbar">
+      <button class="backlink" onclick="closeWatch()">← back</button>
+      <div class="speeds" id="speeds">
+        <button data-r="0.75">0.75×</button>
+        <button data-r="1" class="on">1×</button>
+        <button data-r="1.25">1.25×</button>
+      </div>
+    </div>
+    <div class="player-wrap">
+      <div id="ytplayer"></div>
+      <button class="tap-layer" onclick="togglePlay()" aria-label="play / pause"></button>
+      <div id="capOverlay" class="cap-overlay"></div>
+    </div>
+    <div class="wctrls">
+      <button onclick="seekLine(-1)">⏮ line</button>
+      <button id="playBtn" onclick="togglePlay()">▶</button>
+      <button onclick="seekLine(1)">line ⏭</button>
+    </div>
+    <div class="watchhint">tap a word to card it · <span class="dot"></span> already carded · tap video to pause</div>
+    <div id="transcript" class="transcript"></div>
   </div>
 </main>
 
@@ -238,6 +307,9 @@ let VIDEOS = [];
 let CURRENT = null;          // video id in detail view
 let DETAIL_V = null;
 let listTimer = null, sse = null, tickTimer = null, searchTimer = null;
+// watch view
+let ytPlayer = null, ytApiP = null, capTimer = null;
+let WCUES = [], wActive = -1, wUserScroll = 0, wPausedForModal = false;
 
 function toast(msg, ms=2400) {
   const t = $('#toast'); t.textContent = msg; t.classList.add('show');
@@ -417,6 +489,7 @@ async function openDetail(id) {
   if (!v) { try { v = await api(`/videos/${id}`); } catch { v = await offlineVideoMeta(id); } }
   DETAIL_V = v || {id};
   renderVHead(DETAIL_V);
+  $('#watchBtn').hidden = !navigator.onLine;
   await renderOfflineRow(id);
   const ex = (v && v.extract) || {state:'idle'};
   if (['queued','running'].includes(ex.state) && navigator.onLine) startProgress(v, ex);
@@ -568,17 +641,19 @@ async function resetAndReExtract() {
 }
 function renderCard(c) {
   const el = document.createElement('div');
-  el.className = 'card';
+  el.className = 'card' + (c.duplicate ? ' dup' : '');
   el.dataset.id = c.id;
+  const badge = c.duplicate ? ' · <span class="dupbadge">already have a card</span>' : '';
   el.innerHTML = `
     <div class="sent">${c.front_html}</div>
     <div class="tr">${escapeHtml(c.translation || '')}</div>
-    <div class="meta">${c.is_phrase ? 'phrase' : 'word'} · ${escapeHtml(c.span_text)}${c.bolded ? '' : ' · ⚠ not bolded'}</div>
+    <div class="meta">${c.is_phrase ? 'phrase' : 'word'} · ${escapeHtml(c.span_text)}${c.bolded ? '' : ' · ⚠ not bolded'}${badge}</div>
     <div class="decide">
-      <button class="y">Make card</button>
+      ${c.duplicate ? '' : '<button class="y">Make card</button>'}
       <button class="n">Discard</button>
     </div>`;
-  el.querySelector('.y').onclick = () => decide(c.id, 'yes', el);
+  const y = el.querySelector('.y');
+  if (y) y.onclick = () => decide(c.id, 'yes', el);
   el.querySelector('.n').onclick = () => decide(c.id, 'no', el);
   return el;
 }
@@ -672,7 +747,7 @@ async function runSearch() {
 let MODAL = null;
 const stripPunct = s => String(s).replace(/^[^\p{L}\d-]+|[^\p{L}\d-]+$/gu, '');
 
-function openCardModal(row) {
+function openCardModal(row, forceWord) {
   const tokens = row.text.split(/(\s+)/);          // words + the gaps between them
   const wordTok = [];                              // token index of each Nth word
   tokens.forEach((t, i) => { if (t && !/^\s+$/.test(t)) wordTok.push(i); });
@@ -682,13 +757,19 @@ function openCardModal(row) {
             preview: null, previewFor: null, pvTimer: null, pvSeq: 0 };
   $('#modalPreview').innerHTML = '';
 
-  // auto-select the word(s) matching the prefix that was searched for
-  const pfx = rnorm($('#q').value || '');
-  const matches = pfx ? wordTok
-    .map((ti, wi) => ({ wi, w: rnorm(stripPunct(tokens[ti])) }))
-    .filter(x => x.w && x.w.startsWith(pfx)).map(x => x.wi) : [];
-  if (matches.length === 1) { MODAL.anchor = matches[0]; MODAL.focus = matches[0]; }
-  else if (matches.length > 1) { MODAL.scatter = new Set(matches); }
+  // pick the word to pre-select: an exact tapped word, else the searched prefix
+  if (forceWord) {
+    const fw = rnorm(stripPunct(forceWord));
+    const hit = wordTok.findIndex(ti => rnorm(stripPunct(tokens[ti])) === fw);
+    if (hit >= 0) { MODAL.anchor = hit; MODAL.focus = hit; }
+  } else {
+    const pfx = rnorm($('#q').value || '');
+    const matches = pfx ? wordTok
+      .map((ti, wi) => ({ wi, w: rnorm(stripPunct(tokens[ti])) }))
+      .filter(x => x.w && x.w.startsWith(pfx)).map(x => x.wi) : [];
+    if (matches.length === 1) { MODAL.anchor = matches[0]; MODAL.focus = matches[0]; }
+    else if (matches.length > 1) { MODAL.scatter = new Set(matches); }
+  }
 
   renderModalSent();
   syncModalSpan();
@@ -787,15 +868,20 @@ function updatePreview(span) {
   }, 450);
 }
 
-function closeCardModal() {
+function closeCardModal(resume = true) {
+  const wasWatch = MODAL && MODAL.watchCue != null;
   if (MODAL) clearTimeout(MODAL.pvTimer);
   $('#modalWrap').hidden = true; MODAL = null;
+  if (resume && wasWatch && wPausedForModal && ytPlayer) {
+    wPausedForModal = false; try { ytPlayer.playVideo(); } catch {}
+  }
 }
 
 async function confirmCard() {
   const span = $('#modalSpan').value.trim();
   if (!span) { toast('pick a word first'); return; }
   const pv = (MODAL.preview && MODAL.previewFor === span) ? MODAL.preview : null;
+  const watchCue = MODAL.watchCue;
   const item = {
     client_id: 'c' + Date.now() + Math.random().toString(36).slice(2, 6),
     video_id: CURRENT, span,
@@ -807,13 +893,158 @@ async function confirmCard() {
     is_phrase: pv ? pv.is_phrase : null,
     created_at: Date.now(),
   };
-  closeCardModal();
-  $('#q').value = ''; $('#results').innerHTML = '';   // clear the search
+  closeCardModal(false);
   await idbPut('queue', item.client_id, item);
   await refreshQueuePill();
-  toast(pv ? `queued: ${pv.span_text} — ${pv.translation}`
+  toast(pv ? `carded: ${pv.span_text} — ${pv.translation}`
            : (navigator.onLine ? 'card queued' : 'saved — translates when online'));
   flushQueue();
+
+  if (watchCue != null && ytPlayer) {
+    // replay the line you just carded
+    wPausedForModal = false;
+    markWordCarded(span);
+    try { ytPlayer.seekTo(WCUES[watchCue].s, true); ytPlayer.playVideo(); } catch {}
+  } else {
+    $('#q').value = ''; $('#results').innerHTML = '';   // clear the search
+  }
+}
+
+/* ---------------- watch view ---------------- */
+function hms(sec) {
+  sec = Math.max(0, Math.floor(sec));
+  const p = n => String(n).padStart(2, '0');
+  return `${p(sec / 3600 | 0)}:${p(sec % 3600 / 60 | 0)}:${p(sec % 60)}`;
+}
+function loadYTApi() {
+  if (window.YT && window.YT.Player) return Promise.resolve();
+  if (ytApiP) return ytApiP;
+  ytApiP = new Promise((res, rej) => {
+    window.onYouTubeIframeAPIReady = res;
+    const s = document.createElement('script');
+    s.src = 'https://www.youtube.com/iframe_api';
+    s.onerror = () => rej(new Error('script blocked'));
+    document.head.appendChild(s);
+    setTimeout(() => rej(new Error('timed out')), 9000);
+  });
+  return ytApiP;
+}
+
+async function openWatch(id) {
+  if (!navigator.onLine) { toast('watch needs a connection'); return; }
+  let data;
+  try { data = await api(`/videos/${id}/watch`); }
+  catch (e) { toast('couldn’t load captions: ' + e.message, 3500); return; }
+  WCUES = data.cues || [];
+  wActive = -1;
+  $('#detailView').hidden = true;
+  $('#watchView').hidden = false;
+  $('#capOverlay').textContent = 'tap to play';
+  renderTranscript();
+  try { await loadYTApi(); }
+  catch { toast('couldn’t load the YouTube player'); closeWatch(); return; }
+  if (ytPlayer) { try { ytPlayer.destroy(); } catch {} ytPlayer = null; }
+  ytPlayer = new YT.Player('ytplayer', {
+    videoId: data.video.youtube_id,
+    playerVars: { playsinline: 1, rel: 0, modestbranding: 1, controls: 0,
+                  disablekb: 1, iv_load_policy: 3, origin: location.origin },
+    events: {
+      onReady: e => { try { e.target.playVideo(); } catch {}
+                      clearInterval(capTimer); capTimer = setInterval(tick, 120); },
+      onStateChange: e => {
+        const b = $('#playBtn'); if (b) b.textContent = e.data === 1 ? '⏸' : '▶';
+        if (e.data === 1) { const c = $('#capOverlay'); if (c.textContent === 'tap to play') c.textContent = ''; }
+      },
+      onError: () => { $('#capOverlay').textContent = '⚠ this video can’t be embedded'; },
+    },
+  });
+}
+function closeWatch() {
+  clearInterval(capTimer); capTimer = null;
+  if (ytPlayer) { try { ytPlayer.destroy(); } catch {} ytPlayer = null; }
+  wActive = -1;
+  $('#watchView').hidden = true;
+  $('#detailView').hidden = false;
+  loadCandidates();
+}
+function togglePlay() {
+  if (!ytPlayer || !ytPlayer.getPlayerState) return;
+  if (ytPlayer.getPlayerState() === 1) ytPlayer.pauseVideo();
+  else ytPlayer.playVideo();
+}
+function cueIdxAt(t) {
+  let lo = 0, hi = WCUES.length - 1, idx = -1;
+  while (lo <= hi) {
+    const m = (lo + hi) >> 1;
+    if (t < WCUES[m].s) hi = m - 1;
+    else if (t >= WCUES[m].e) lo = m + 1;
+    else { idx = m; break; }
+  }
+  if (idx < 0) for (let i = WCUES.length - 1; i >= 0; i--)
+    if (WCUES[i].s <= t) { idx = i; break; }
+  return idx;
+}
+function seekLine(dir) {
+  if (!ytPlayer || !WCUES.length) return;
+  const t = ytPlayer.getCurrentTime();
+  let i = cueIdxAt(t);
+  if (i < 0) i = 0;
+  let target;
+  if (dir < 0) target = (t - WCUES[i].s > 1.2) ? i : Math.max(0, i - 1);  // 1st tap: restart line
+  else target = Math.min(WCUES.length - 1, i + 1);
+  ytPlayer.seekTo(WCUES[target].s, true);
+  ytPlayer.playVideo();
+}
+function tick() {
+  if (!ytPlayer || !ytPlayer.getCurrentTime) return;
+  const idx = cueIdxAt(ytPlayer.getCurrentTime());
+  if (idx === wActive) return;
+  wActive = idx;
+  const c = $('#capOverlay');
+  if (c.textContent !== 'tap to play') c.textContent = idx >= 0 ? WCUES[idx].text : '';
+  const box = $('#transcript');
+  box.querySelectorAll('.cue.on').forEach(e => e.classList.remove('on'));
+  if (idx < 0) return;
+  const el = box.querySelector(`.cue[data-i="${idx}"]`);
+  if (!el) return;
+  el.classList.add('on');
+  if (Date.now() - wUserScroll > 3500)
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+function renderTranscript() {
+  const box = $('#transcript');
+  box.innerHTML = '';
+  WCUES.forEach((cue, i) => {
+    const line = document.createElement('div');
+    line.className = 'cue'; line.dataset.i = i;
+    const ts = document.createElement('button');
+    ts.className = 'cue-ts'; ts.textContent = fmtTime(cue.s);
+    ts.onclick = () => { if (ytPlayer) { ytPlayer.seekTo(cue.s, true); ytPlayer.playVideo(); } };
+    line.appendChild(ts);
+    (cue.words || []).forEach((w, wi) => {
+      const sp = document.createElement('span');
+      sp.className = 'cw' + (w.c ? ' has-card' : '');
+      sp.textContent = w.t;
+      sp.onclick = () => watchTapWord(i, wi);
+      line.append(sp, document.createTextNode(' '));
+    });
+    box.appendChild(line);
+  });
+  box.onscroll = () => { wUserScroll = Date.now(); };
+}
+function watchTapWord(ci, wi) {
+  if (ytPlayer && ytPlayer.pauseVideo) { ytPlayer.pauseVideo(); wPausedForModal = true; }
+  const around = [WCUES[ci - 1], WCUES[ci], WCUES[ci + 1]].filter(Boolean).map(c => c.text).join(' ');
+  openCardModal({ id: null, text: around, start_time: hms(WCUES[ci].s) }, WCUES[ci].words[wi].t);
+  if (MODAL) MODAL.watchCue = ci;
+}
+function markWordCarded(span) {
+  const t = rnorm(stripPunct(span));
+  const parts = new Set(t.split(/\s+/));
+  document.querySelectorAll('#transcript .cw').forEach(sp => {
+    const w = rnorm(stripPunct(sp.textContent));
+    if (w === t || parts.has(w)) sp.classList.add('has-card');
+  });
 }
 
 /* ---------------- offline queue + flush ---------------- */
@@ -930,6 +1161,12 @@ window.addEventListener('focus', onReconnect);
 /* ---------------- boot ---------------- */
 if ('serviceWorker' in navigator)
   navigator.serviceWorker.register('/sw.js').catch(() => {});
+$('#speeds').onclick = e => {
+  const b = e.target.closest('button');
+  if (!b || !ytPlayer) return;
+  $('#speeds').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+  try { ytPlayer.setPlaybackRate(parseFloat(b.dataset.r)); } catch {}
+};
 paintNet();
 refreshQueuePill();
 flushQueue();

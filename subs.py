@@ -10,6 +10,34 @@ import re
 
 _TAG = re.compile(r"<[^>]+>")
 _CUE = re.compile(r"(\d\d:\d\d:\d\d\.\d\d\d) -->")
+_CUE2 = re.compile(r"(\d\d):(\d\d):(\d\d\.\d\d\d) --> (\d\d):(\d\d):(\d\d\.\d\d\d)")
+
+
+def _secs(h, m, s):
+    return int(h) * 3600 + int(m) * 60 + float(s)
+
+
+def caption_cues(raw_vtt: str):
+    """De-overlapped cues with real start/end seconds, for the in-app player.
+    Each cue's text is shown from its own start until the next cue's start."""
+    raw = []
+    for block in raw_vtt.split("\n\n"):
+        lines = block.strip("\n").split("\n")
+        if not lines:
+            continue
+        m = _CUE2.match(lines[0])
+        if not m:
+            continue
+        with_timing = [ln for ln in lines[1:] if "<c>" in ln]
+        if not with_timing:
+            continue
+        text = re.sub(r"\s+", " ", html.unescape(_TAG.sub("", with_timing[-1]))).strip()
+        if not text:
+            continue
+        raw.append([_secs(*m.group(1, 2, 3)), _secs(*m.group(4, 5, 6)), text])
+    for i in range(len(raw) - 1):
+        raw[i][1] = raw[i + 1][0]
+    return [{"s": round(a, 2), "e": round(b, 2), "text": t} for a, b, t in raw]
 
 
 def clean_transcript(raw_vtt: str):

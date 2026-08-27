@@ -283,6 +283,16 @@ def exclusion_reason(c, normalized):
     return r["reason"] if r else None
 
 
+def card_lemmas():
+    """normalized_text of every word/phrase you have an Anki card for."""
+    c = connect()
+    rows = c.execute(
+        "SELECT normalized_text FROM resolved_words WHERE reason='has_card'"
+    ).fetchall()
+    c.close()
+    return {r["normalized_text"] for r in rows}
+
+
 def resolved_words_list():
     """Surface forms of everything already decided — fed to the extractor so it
     doesn't re-propose them. Small and user-specific (the stoplist is applied

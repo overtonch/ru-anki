@@ -19,7 +19,7 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 CLAUDE = "claude"
-DEFAULT_MODEL = os.environ.get("RU_EXTRACT_MODEL", "haiku")
+DEFAULT_MODEL = os.environ.get("RU_EXTRACT_MODEL", "sonnet")
 WORKERS = int(os.environ.get("RU_EXTRACT_WORKERS", "8"))
 THINKING = os.environ.get("RU_EXTRACT_THINKING", "0")  # "0" = off (fast); e.g. "4000" to re-enable
 
@@ -79,18 +79,34 @@ def run_claude(prompt, system, model=DEFAULT_MODEL, timeout=180):
 
 # ------------------------------------------------------------------ extraction
 
-EXTRACT_SYSTEM = """You extract advanced Russian vocabulary for ONE upper-intermediate / advanced (B2-C1) learner from an excerpt of a Russian YouTube transcript. The transcript is de-overlapped ASR, given as lines each prefixed with a [HH:MM:SS] tag.
+EXTRACT_SYSTEM = """You build a Russian vocabulary study list for ONE specific learner: a native English speaker at a strong B2–C1 level in Russian. They already know all common everyday vocabulary and most intermediate vocabulary. Only flag things that would genuinely be new or uncertain to such a learner and worth a flashcard.
+
+You are given an excerpt of a de-overlapped ASR transcript, lines prefixed with a [HH:MM:SS] tag.
 
 Output ONLY pipe-delimited lines, one item per line, and NOTHING else:
 SPAN|TRANSLATION|HH:MM:SS
+- HH:MM:SS: copy the tag of the line where the span occurs.
+- TRANSLATION: concise English gloss; "a / b" if ambiguous; gloss idioms by meaning.
 
-- SPAN: almost always a SINGLE word in citation form. Use a multi-word span ONLY for a true set phrase / idiom / fixed expression whose meaning is not just the sum of its parts, or a phrasal verb / light-verb construction that must be learned as a unit — e.g. "как раз", "по большому счёту", "иметь в виду", "сойти с ума", "тем не менее", "вам шашечки или ехать". Do NOT bundle an ordinary adjective+noun, noun+noun, or verb+object just because they occur together (NOT "критические последствия", NOT "научный журналист", NOT "высокая температура"). If one word in such a pair is worth learning, flag that word alone.
-- TRANSLATION: a concise English gloss; "a / b" if genuinely ambiguous; gloss idioms by meaning.
-- HH:MM:SS: copy the [timestamp] tag of the line where the span occurs.
-- Be SELECTIVE. Flag genuinely advanced, bookish, technical, colloquial, or idiomatic items. Skip anything an intermediate learner already knows. Roughly one item per 20-30 words of transcript; fewer if the passage is simple. Most items should be single words — genuine phrases are the exception, not the rule.
-- SKIP transparent borrowings from English (or other Western languages) that an English speaker would recognise on sight: e.g. стрим, контент, дедлайн, анонс, спонсор, менеджер, эмулировать, логистика, тренд, хайп, фидбэк. Only keep a borrowing if its Russian meaning or usage is genuinely non-obvious.
-- If a token looks like an ASR mistake rather than real vocabulary, still include it and start its translation with "(SUSPECT ASR) ".
-- No header, no numbering, no commentary, no code fence. If nothing qualifies, output nothing."""
+FLAG a word/phrase only if it clears ALL of these:
+1. A strong B2–C1 learner would plausibly NOT know it, or would be unsure of its exact meaning.
+2. It is worth memorising — i.e. it carries real meaning (not grammatical glue) and could recur.
+3. It is NOT a transparent cognate/borrowing an English speaker recognises on sight (стрим, контент, анонс, спонсор, менеджер, эмулировать, логистика, тренд, дедлайн, фейк, etc.). Keep a borrowing only if its Russian sense is genuinely non-obvious.
+
+Good candidates: bookish or literary words (тщетный, сетовать, зиждиться), precise/technical terms (изъян, подлог, вменяемый), vivid colloquialisms and slang (втюхать, движуха, кринж), set idioms (как ни в чём не бывало, спустя рукава), verbs with non-obvious meaning (обеспечить, усугубить, лукавить).
+
+Do NOT flag:
+- common or mid-frequency words the learner surely knows (сделать, важный, поэтому, компания, деньги, работать, страна, проблема, друг);
+- ordinary adjective+noun / verb+object combinations that are just two normal words together (NOT "критические последствия", NOT "научный журналист", NOT "высокая зарплата", NOT "получить деньги") — if one word is advanced, flag that ONE word;
+- proper nouns, names, place names;
+- numbers, dates, filler ("ну", "вот", "типа", "как бы").
+
+SPAN is almost always a single word in citation form. Use a multi-word span ONLY for a genuine fixed idiom / set phrase whose meaning is not the sum of its parts (как раз, по большому счёту, иметь в виду, сойти с ума). Multi-word spans should be rare.
+
+If a token looks like an ASR mistake but might be real vocabulary, include it with translation prefixed "(SUSPECT ASR) ".
+
+Be strict. It is fine — good, even — for a simple or repetitive passage to yield nothing. Quality over quantity: a shorter list of genuinely useful items is the goal.
+No header, no numbering, no commentary, no code fence. Output nothing if nothing qualifies."""
 
 CHUNK_LINES = 80  # grouped transcript lines per headless call
 _TS = re.compile(r"(\d\d):(\d\d):(\d\d)")
@@ -122,8 +138,8 @@ def parse_items(text):
     return out
 
 
-def _extract_chunk(part, decided, model):
-    prompt = part
+def _extract_chunk(title, part, decided, model):
+    prompt = f"Video: {title}\n\n{part}" if title else part
     if decided:
         prompt += f"\n\n(Already covered — do not output these: {decided})"
     text, usage = run_claude(prompt, EXTRACT_SYSTEM, model=model, timeout=180)
@@ -151,7 +167,7 @@ def extract_candidates(title, transcript, already_decided, model=DEFAULT_MODEL,
         progress(0, total, errors)
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futs = {pool.submit(_extract_chunk, part, decided, model): i
+        futs = {pool.submit(_extract_chunk, title, part, decided, model): i
                 for i, part in enumerate(parts, 1)}
         for fut in as_completed(futs):
             done += 1

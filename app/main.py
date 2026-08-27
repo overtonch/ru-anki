@@ -11,7 +11,10 @@ import threading
 import time
 import traceback
 
+import re as _re
+
 from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -24,6 +27,7 @@ import anki  # noqa: E402
 import backup  # noqa: E402
 import llm  # noqa: E402
 import store  # noqa: E402
+import subs  # noqa: E402
 import ytdlp  # noqa: E402
 
 store.init_db()
@@ -57,6 +61,7 @@ def _startup_maintenance():
 threading.Thread(target=_startup_maintenance, daemon=True).start()
 
 app = FastAPI(title="ru-anki pipeline")
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # extraction progress, in-memory: video_id -> {"state","detail"}
 EXTRACT_STATUS = {}
@@ -353,11 +358,13 @@ def candidates(video_id: int, status: str = "pending"):
     rows = store.list_candidates(video_id, status=status or None)
     v = store.get_video(video_id)
     title = v["title"] if v else ""
+    have = store.card_lemmas()
     for r in rows:
         front, bolded = anki.front_html(r["sentence"], r["span_text"], r["is_phrase"])
         r["front_html"] = front
         r["bolded"] = bolded
         r["source_label"] = title
+        r["duplicate"] = r["normalized_text"] in have
     return rows
 
 
@@ -397,6 +404,37 @@ def search(video_id: int, q: str, limit: int = 40):
     if len(q.strip()) < 2:
         return []
     return store.search_lines(video_id, q, limit=limit)
+
+
+_CYR = _re.compile(r"[А-Яа-яЁё]")
+
+
+@app.get("/videos/{video_id}/watch")
+def watch(video_id: int):
+    """Cues with real start/end seconds + per-word "do I have a card for this"
+    flags (lemmatised server-side). Feeds the in-app player."""
+    v = store.get_video(video_id)
+    if not v:
+        raise HTTPException(404, "no such video")
+    cues = subs.caption_cues(v["raw_subs"])
+    have = store.card_lemmas()
+    out = []
+    for cue in cues:
+        words = []
+        for tok in cue["text"].split():
+            core = tok.strip(".,!?;:—–()«»\"'…-")
+            if core and _CYR.search(core):
+                lem = store.lemma_key(core)
+                words.append({"t": tok, "c": lem in have})
+            else:
+                words.append({"t": tok, "c": False})
+        out.append({"s": cue["s"], "e": cue["e"], "text": cue["text"], "words": words})
+    return {
+        "video": {k: v.get(k) for k in
+                  ("id", "title", "channel", "url", "youtube_id", "duration")},
+        "cues": out,
+        "card_count": len(have),
+    }
 
 
 @app.get("/videos/{video_id}/lines")
