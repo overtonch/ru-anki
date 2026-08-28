@@ -279,8 +279,11 @@ def download(video_id: int, background: BackgroundTasks, q: int = 360):
     v = store.get_video(video_id)
     if not v:
         raise HTTPException(404, "no such video")
-    if DOWNLOAD_STATUS.get(video_id, {}).get("state") == "running":
-        raise HTTPException(409, "already downloading")
+    st = DOWNLOAD_STATUS.get(video_id, {})
+    if st.get("state") == "running":          # idempotent — just report progress
+        return {"video_id": video_id, **st}
+    if v.get("media_status") == "ready" and v.get("media_path"):
+        return {"video_id": video_id, "state": "done", "pct": 100.0}
     DOWNLOAD_STATUS[video_id] = {"state": "running", "pct": 0.0, "detail": "queued"}
     background.add_task(_run_download, video_id, v["url"], q)
     return {"video_id": video_id, "quality": q, "state": "running"}

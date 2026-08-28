@@ -2386,7 +2386,18 @@ async function opfsSave(id, onProgress) {
   return got;
 }
 
+let mediaDL = {};   // id -> true while this tab is driving the download+save
+
+function renderMediaProgress(id, phase, pct) {
+  const row = $('#mediaRow');
+  const pc = Math.max(2, Math.min(100, Math.round(pct || 0)));
+  const label = phase === 'phone' ? 'saving to phone' : 'downloading on server';
+  row.innerHTML = `<div class="pbar"><div class="pfill" style="width:${pc}%"></div></div>
+    <div class="pmeta"><span class="spin"></span> ${label} · ${pc}%</div>`;
+}
+
 async function renderMediaRow(id) {
+  if (mediaDL[id]) return;   // an active download owns this row
   const row = $('#mediaRow');
   const v = VIDEOS.find(x => x.id === id) || DETAIL_V || { id };
   if (await opfsHas(id)) {
@@ -2396,51 +2407,66 @@ async function renderMediaRow(id) {
     return;
   }
   if (!navigator.onLine) { row.textContent = ''; return; }
-  const estMb = v.duration ? Math.round(v.duration / 60 * 3.4) : null;
   if (!window.isSecureContext || !navigator.storage || !navigator.storage.getDirectory) {
     row.innerHTML = `<span style="opacity:.7">offline video needs an https:// address —
       set up <code>tailscale serve</code> (see deploy/RELIABILITY.md)</span>`;
     return;
   }
+  // already downloading somewhere (this tab, another device, a server kick)?
+  let s = null;
+  try { s = await api(`/videos/${id}/download`); } catch {}
+  if (s && s.state === 'running') {
+    renderMediaProgress(id, 'server', s.pct);
+    downloadMedia(id);        // attach to it
+    return;
+  }
+  const estMb = v.duration ? Math.round(v.duration / 60 * 3.4) : null;
+  if (s && s.state === 'done') {          // on the server, not yet on this phone
+    row.innerHTML = `<button class="btn sm ghost" id="dlBtn" onclick="downloadMedia(${id})">
+      ${DL_ICON} Save to phone${estMb ? ` · ~${estMb} MB` : ''}</button>`;
+    return;
+  }
+  const note = v.youtube_id ? (estMb ? ` · ~${estMb} MB` : ' · 360p') : ' · needed to watch this source';
   row.innerHTML = `<button class="btn sm ghost" id="dlBtn" onclick="downloadMedia(${id})">
-    ${DL_ICON} Download video${estMb ? ` · ~${estMb} MB` : ' · 360p'}</button>`;
+    ${DL_ICON} Download video${note}</button>`;
 }
+
 async function downloadMedia(id) {
-  const btn = $('#dlBtn');
-  setBusy(btn, true, 'preparing on server…');
+  if (mediaDL[id]) return;
+  mediaDL[id] = true;
+  renderMediaProgress(id, 'server', 0);
   try {
-    let s = await api(`/videos/${id}/download`);
-    if (s.state !== 'done') {
-      await api(`/videos/${id}/download`, { method: 'POST' });
-      for (;;) {
-        await sleep(2500);
-        s = await api(`/videos/${id}/download`);
-        if (s.state === 'error') throw new Error(s.detail || 'server download failed');
-        if (s.state === 'done') break;
-        setBusy(btn, true, `server ${s.pct != null ? Math.round(s.pct) + '%' : '…'}`);
-      }
+    let s = await api(`/videos/${id}/download`).catch(() => ({ state: 'idle' }));
+    if (s.state === 'idle' || s.state === 'error')
+      s = await api(`/videos/${id}/download`, { method: 'POST' });   // idempotent server-side
+    for (;;) {
+      s = await api(`/videos/${id}/download`);
+      if (s.state === 'error') throw new Error(s.detail || 'server download failed');
+      renderMediaProgress(id, 'server', s.pct);
+      if (s.state === 'done') break;
+      await sleep(2000);
     }
-    let lastShown = -1;
-    await opfsSave(id, (p, bytes) => {
-      const pct = p ? Math.round(p * 100) : Math.round(bytes / 1e6);
-      if (pct === lastShown) return;                 // only repaint on a real change
-      lastShown = pct;
-      setBusy(btn, true, p ? `saving to phone ${pct}%` : `saving to phone ${pct} MB`);
+    let last = -2;
+    await opfsSave(id, (p) => {
+      const pct = p ? Math.round(p * 100) : -1;
+      if (pct === last) return;
+      last = pct;
+      renderMediaProgress(id, 'phone', p ? p * 100 : 0);
     });
+    renderMediaProgress(id, 'phone', 100);
     // cache everything else the watch view needs offline: captions, transcript, thumbnail
-    setBusy(btn, true, 'saving captions…');
     try { await idbPut('offline', 'w' + id, await api(`/videos/${id}/watch`)); } catch {}
     try {
       const ld = await api(`/videos/${id}/lines`);
       await idbPut('offline', id, { video: ld.video, lines: ld.lines, savedAt: Date.now() });
       if (ld.video && ld.video.thumbnail_url) { try { await fetch(ld.video.thumbnail_url, { mode: 'no-cors' }); } catch {} }
     } catch {}
-    toast('video saved — captions and all, works fully offline');
+    toast('video saved — works fully offline');
     loadVideosQuiet();
   } catch (e) {
     toast('download failed: ' + e.message, 4000);
   }
-  setBusy(btn, false);
+  mediaDL[id] = false;
   renderMediaRow(id);
 }
 async function removeMedia(id) {
