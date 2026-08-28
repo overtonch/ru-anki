@@ -299,7 +299,7 @@
   #watchView .capw { touch-action:manipulation; }
   #watchView .transcript { touch-action:pan-y; }
   #watchView svg { width:1.15em; height:1.15em; vertical-align:-.18em; pointer-events:none; }
-  #watchView .fs-seek svg, #watchView .wctrls svg { fill:currentColor; }
+  #watchView .wctrls svg { fill:currentColor; }
   #watchView[hidden] { display:none; }
   .watchbar { display:flex; align-items:center; justify-content:space-between;
               padding:.4rem .8rem; flex:none; }
@@ -401,18 +401,7 @@
   #watchView.paused.fs .cap-overlay { bottom:6.4rem; }
   #watchView.fs .cap-overlay:not(:empty) { font-size:clamp(1.05rem, 3.6vh, 1.9rem); }
 
-  .fs-seek, .fs-exit { display:none; }
-  #watchView.fs .fs-seek {
-      display:flex; align-items:center; justify-content:center; z-index:6;
-      position:absolute; bottom:calc(1.1rem + env(safe-area-inset-bottom));
-      width:3rem; height:3rem; border-radius:50%; color:#fff;
-      background:rgba(16,17,20,.4); border:1px solid rgba(255,255,255,.14);
-      -webkit-backdrop-filter:blur(12px); backdrop-filter:blur(12px);
-      box-shadow:0 6px 20px rgba(0,0,0,.35); transition:opacity .3s ease, transform .1s; }
-  #watchView.fs .fs-seek svg { width:1.5rem; height:1.5rem; }
-  #watchView.fs .fs-seek:active { background:var(--accent); transform:scale(.92); }
-  #watchView.fs .fs-seek.prev { left:calc(1rem + env(safe-area-inset-left)); }
-  #watchView.fs .fs-seek.next { right:calc(1rem + env(safe-area-inset-right)); }
+  .fs-exit { display:none; }
   #watchView.fs .fs-exit {
       display:flex; align-items:center; justify-content:center; z-index:6; position:absolute;
       top:calc(.9rem + env(safe-area-inset-top)); right:calc(.9rem + env(safe-area-inset-right));
@@ -422,34 +411,40 @@
       box-shadow:0 4px 16px rgba(0,0,0,.3); transition:opacity .3s ease, transform .1s; }
   #watchView.fs .fs-exit svg { width:1.3rem; height:1.3rem; }
   #watchView.fs .fs-exit:active { background:var(--accent); transform:scale(.92); }
-  #watchView.fs.hidectrls .fs-seek,
   #watchView.fs.hidectrls .fs-exit { opacity:0; pointer-events:none; }
-  #watchView.paused.fs .fs-seek { bottom:calc(3.2rem + env(safe-area-inset-bottom)); }
 
-  /* scrubber — a slim position bar pinned to the very bottom of the player while
-     paused. It's inert until you tap it once (so a mis-tap on a caption word
-     above it can't seek); the first tap "arms" it, then it drags. */
+  /* scrubber — a thin progress line while paused. It never intercepts a touch;
+     only the knob is draggable. Grabbing the knob "arms" the bar so you can then
+     also tap along the track. Auto-disarms after a few seconds / on play. */
   .scrubber { position:absolute; left:0; right:0; bottom:0; z-index:7;
-              padding:.5rem .95rem calc(.45rem + env(safe-area-inset-bottom));
-              background:linear-gradient(transparent, rgba(0,0,0,.55));
-              opacity:0; pointer-events:none; transition:opacity .2s;
-              touch-action:none; }
-  #watchView.paused .scrubber { opacity:1; pointer-events:auto; }
+              padding:.55rem 1rem calc(.55rem + env(safe-area-inset-bottom));
+              background:linear-gradient(transparent, rgba(0,0,0,.5));
+              opacity:0; pointer-events:none; transition:opacity .2s; touch-action:none; }
+  #watchView.paused .scrubber { opacity:1; }
+  #watchView.paused .scrubber.armed { pointer-events:auto; }
   .scrub-track { position:relative; height:3px; border-radius:99px;
-                 background:rgba(255,255,255,.28); transition:height .12s; }
+                 background:rgba(255,255,255,.3); transition:height .12s; }
   .scrub-fill { position:absolute; left:0; top:0; bottom:0; width:0;
-                background:rgba(255,255,255,.5); border-radius:99px; transition:width .12s linear; }
-  .scrub-knob { position:absolute; top:50%; left:0; width:13px; height:13px;
-                border-radius:50%; background:#fff; transform:translate(-50%,-50%) scale(0);
-                box-shadow:0 1px 4px rgba(0,0,0,.55); transition:left .12s linear, transform .12s; }
-  .scrub-time { color:#fff; font-size:.72rem; margin-top:.35rem; opacity:0; height:0;
-                overflow:hidden; transition:opacity .12s;
-                font-variant-numeric:tabular-nums; text-shadow:0 1px 3px rgba(0,0,0,.9); }
+                background:rgba(255,255,255,.55); border-radius:99px; transition:width .1s linear; }
+  .scrub-knob { position:absolute; top:50%; left:0; width:14px; height:14px; margin-left:-7px;
+                border-radius:50%; background:#fff; transform:translateY(-50%);
+                box-shadow:0 1px 5px rgba(0,0,0,.6); transition:left .1s linear, width .12s, height .12s;
+                pointer-events:auto; }
+  #watchView.paused .scrub-knob::after { content:""; position:absolute; inset:-16px; }  /* fat touch target */
+  .scrub-time { color:#fff; font-size:.72rem; margin-top:.4rem; opacity:0; height:0; overflow:hidden;
+                transition:opacity .12s; font-variant-numeric:tabular-nums; text-shadow:0 1px 3px rgba(0,0,0,.9); }
   .scrubber.armed .scrub-track { height:6px; }
   .scrubber.armed .scrub-fill { background:var(--accent); }
-  .scrubber.armed .scrub-knob { transform:translate(-50%,-50%) scale(1); }
+  .scrubber.armed .scrub-knob { width:18px; height:18px; margin-left:-9px; }
   .scrubber.armed .scrub-time { opacity:1; height:auto; }
   .scrubber.dragging .scrub-fill, .scrubber.dragging .scrub-knob { transition:none; }
+  .scrub-preview { position:absolute; bottom:calc(100% - .2rem); transform:translateX(-50%);
+                   opacity:0; pointer-events:none; transition:opacity .12s; text-align:center; }
+  .scrubber.scrubbing .scrub-preview { opacity:1; }
+  .scrub-preview img { display:block; width:9.5rem; max-width:38vw; aspect-ratio:16/9; object-fit:cover;
+                       border-radius:.4rem; background:#000; border:1px solid rgba(255,255,255,.25); }
+  .scrub-preview span { display:block; margin-top:.15rem; color:#fff; font-size:.7rem;
+                        font-variant-numeric:tabular-nums; text-shadow:0 1px 3px rgba(0,0,0,.9); }
 
   /* landscape on a phone, not fullscreen: give the video the height, transcript the rest */
   @media (orientation:landscape) and (max-height:540px) {
@@ -486,6 +481,74 @@
               padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
   #readView[hidden], #wordView[hidden] { display:none; }
   #readView:not([hidden]), #wordView:not([hidden]) { display:flex; }
+
+  /* ---- in-app SRS ---- */
+  #studyBanner { display:flex; align-items:center; gap:.7rem; width:100%; text-align:left;
+                 background:linear-gradient(135deg, var(--accent), #3f6d94); color:#0b1016;
+                 border:0; border-radius:var(--r); padding:.85rem 1rem; margin:.2rem 0 .6rem;
+                 cursor:pointer; font:inherit; box-shadow:var(--sh); }
+  #studyBanner:active { transform:scale(.99); }
+  #studyBanner .sb-ico { font-size:1.4rem; }
+  #studyBanner .sb-main { flex:1; min-width:0; }
+  #studyBanner .sb-t { font-weight:750; font-size:1rem; }
+  #studyBanner .sb-m { font-size:.8rem; opacity:.8; }
+  #studyBanner .sb-go { font-size:1.3rem; font-weight:700; }
+  #studyBanner[hidden] { display:none; }
+
+  #studyView { position:fixed; inset:0; z-index:14; background:var(--bg); flex-direction:column;
+               padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+  #studyView[hidden] { display:none; }
+  #studyView:not([hidden]) { display:flex; }
+  .studybar { display:flex; align-items:center; gap:.5rem; padding:.5rem .9rem; flex:none;
+              border-bottom:1px solid var(--line-soft); }
+  .studybar .prog { flex:1; text-align:center; font-size:.82rem; color:var(--muted);
+                    font-variant-numeric:tabular-nums; }
+  .studybar .prog b { color:var(--fg); }
+  .studybar .sbtn { background:none; border:1px solid var(--line); color:var(--muted);
+                    border-radius:.4rem; padding:.25rem .55rem; font-size:.8rem; cursor:pointer; }
+  .studybar .sbtn:disabled { opacity:.35; }
+  .studybody { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch;
+               display:flex; flex-direction:column; }
+  .study-scroll { flex:1; overflow-y:auto; padding:1.4rem 1.15rem 1rem;
+                  display:flex; flex-direction:column; gap:1rem; }
+  .study-q { font-size:1.4rem; line-height:1.5; text-align:center; margin:auto 0; }
+  .study-q b { color:var(--accent); font-weight:750; }
+  .study-a { border-top:1px solid var(--line); padding-top:1rem; text-align:center; }
+  .study-a .a-tr { font-size:1.5rem; font-weight:650; }
+  .study-a .a-acc { color:var(--muted); font-size:1rem; margin-top:.25rem; }
+  .study-a .a-clip { display:block; margin:1rem auto 0; max-width:15rem; width:100%;
+                     border-radius:.5rem; overflow:hidden; border:1px solid var(--line);
+                     background:var(--card-2); cursor:pointer; position:relative; }
+  .study-a .a-clip img { display:block; width:100%; aspect-ratio:16/9; object-fit:cover; }
+  .study-a .a-clip .a-play { position:absolute; left:.4rem; bottom:.4rem; font-size:.75rem;
+                             background:rgba(0,0,0,.6); color:#fff; padding:.15rem .45rem; border-radius:.3rem; }
+  .study-a .a-clip.noimg img { display:none; }
+  .study-a .a-clip.noimg::after { content:"▶ watch this moment"; display:block; padding:.7rem; font-size:.85rem; color:var(--accent); }
+  .study-a .a-links { margin-top:.8rem; font-size:.82rem; }
+  .study-a .a-links button { background:none; border:0; color:var(--accent); cursor:pointer; font:inherit;
+                             text-decoration:underline; padding:.2rem; }
+  .study-foot { flex:none; padding:.7rem .8rem calc(.7rem + env(safe-area-inset-bottom));
+                border-top:1px solid var(--line-soft); background:var(--bg); }
+  .study-show { width:100%; padding:.95rem; border-radius:var(--r-sm); border:1px solid var(--accent);
+                background:var(--accent-soft); color:var(--accent); font-size:1rem; font-weight:650; cursor:pointer; }
+  .study-rate { display:grid; grid-template-columns:repeat(4,1fr); gap:.5rem; }
+  .study-rate button { padding:.7rem .3rem; border-radius:var(--r-sm); border:1px solid var(--line);
+                       background:var(--card-2); color:var(--fg); cursor:pointer; display:flex;
+                       flex-direction:column; align-items:center; gap:.15rem; }
+  .study-rate button .rl { font-size:.9rem; font-weight:650; }
+  .study-rate button .ri { font-size:.72rem; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .study-rate button.again { border-color:rgba(224,90,90,.5); }
+  .study-rate button.again .rl { color:var(--no); }
+  .study-rate button.good { border-color:rgba(67,176,114,.45); }
+  .study-rate button.good .rl { color:var(--ok); }
+  .study-rate button:active { background:var(--line-soft); }
+  .study-done { text-align:center; margin:auto; padding:2rem 1rem; }
+  .study-done .big { font-size:2.4rem; }
+  .study-done .msg { font-size:1.1rem; font-weight:600; margin-top:.6rem; }
+  .study-done .sub { color:var(--muted); font-size:.85rem; margin-top:.4rem; }
+  .study-done .study-set { display:block; margin-top:1.1rem; font-size:.85rem; color:var(--fg-dim);
+                           text-decoration:none; }
+  .study-done .study-set input { vertical-align:-.1em; margin-right:.4rem; }
   .wordbody { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:1rem 1.1rem 3rem; }
   .wordbody .w-hd { font-size:1.6rem; font-weight:750; }
   .wordbody .w-tr { color:var(--accent); font-size:1.05rem; margin-top:.2rem; }
@@ -614,6 +677,12 @@
       <input type="file" id="fileInput" accept=".epub,.txt,text/plain,application/epub+zip"
              hidden onchange="importFile(this.files[0])">
     </div>
+    <button id="studyBanner" hidden onclick="openStudy()">
+      <span class="sb-ico">🧠</span>
+      <span class="sb-main"><span class="sb-t" id="studyBannerT">Study</span>
+        <span class="sb-m" id="studyBannerM"></span></span>
+      <span class="sb-go">→</span>
+    </button>
     <div id="videoList"></div>
   </div>
 
@@ -678,23 +747,16 @@
         <img id="audioArt" alt="">
         <div class="audiolabel">🎧 background audio<span>lock the screen — it keeps playing</span></div>
       </div>
-      <button class="fs-seek prev" onclick="seekLine(-1)" aria-label="previous line">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6a1 1 0 0 1 2 0v4.6l7.5-4.9A1 1 0 0 1 19 6.5v11a1 1 0 0 1-1.5.8L10 13.4V18a1 1 0 0 1-2 0z"/></svg>
-      </button>
-      <button class="fs-seek next" onclick="seekLine(1)" aria-label="next line">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 6a1 1 0 0 0-2 0v4.6L6.5 5.7A1 1 0 0 0 5 6.5v11a1 1 0 0 0 1.5.8l7.5-4.9V18a1 1 0 0 0 2 0z"/></svg>
-      </button>
       <button class="fs-exit" onclick="exitFs()" aria-label="exit full screen">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4v3a2 2 0 0 1-2 2H4M20 9h-3a2 2 0 0 1-2-2V4M4 15h3a2 2 0 0 1 2 2v3M15 20v-3a2 2 0 0 1 2-2h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
       <div class="scrubber" id="scrubber">
-        <div class="scrub-track"><div class="scrub-fill" id="scrubFill"></div><div class="scrub-knob" id="scrubKnob"></div></div>
+        <div class="scrub-preview" id="scrubPreview"><img id="scrubPreviewImg" alt=""><span id="scrubPreviewT"></span></div>
+        <div class="scrub-track" id="scrubTrack"><div class="scrub-fill" id="scrubFill"></div><div class="scrub-knob" id="scrubKnob"></div></div>
         <div class="scrub-time" id="scrubTime"></div>
       </div>
     </div>
     <div class="wctrls">
-      <button onclick="seekLine(-1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6a1 1 0 0 1 2 0v4.6l7.5-4.9A1 1 0 0 1 19 6.5v11a1 1 0 0 1-1.5.8L10 13.4V18a1 1 0 0 1-2 0z"/></svg> prev line</button>
-      <button onclick="seekLine(1)">next line <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 6a1 1 0 0 0-2 0v4.6L6.5 5.7A1 1 0 0 0 5 6.5v11a1 1 0 0 0 1.5.8l7.5-4.9V18a1 1 0 0 0 2 0z"/></svg></button>
       <button id="fsBtn" onclick="toggleFs()" title="full screen">⛶ full screen</button>
       <button id="audioBtn" onclick="toggleAudioMode()">🎧 background audio</button>
     </div>
@@ -716,6 +778,16 @@
       <span style="width:2rem"></span>
     </div>
     <div id="wordBody" class="wordbody"></div>
+  </div>
+
+  <!-- STUDY VIEW -->
+  <div id="studyView" hidden>
+    <div class="studybar">
+      <button class="backlink" onclick="history.back()">← done</button>
+      <div class="prog" id="studyProg"></div>
+      <button class="sbtn" id="studyUndo" onclick="studyUndo()" disabled>↩ undo</button>
+    </div>
+    <div class="studybody" id="studyBody"></div>
   </div>
 
   <!-- READ VIEW -->
@@ -878,6 +950,7 @@ async function loadVideos() {
     return;
   }
   renderList();
+  refreshStudyBanner();
   const busy = VIDEOS.some(v => ['queued','running'].includes(v.extract?.state));
   clearTimeout(listTimer);
   if (busy && !CURRENT) listTimer = setTimeout(loadVideos, 3000);
@@ -1410,6 +1483,7 @@ async function decide(id, decision, el) {
       sleep(140),                              // let the flash register
     ]);
     collapseCard(el);                          // confirmed — slide away
+    if (decision === 'yes') refreshStudyBanner();
   } catch (e) {
     toast('couldn’t save — ' + e.message, 3500);   // revert this card, in place
     el.classList.remove('act', decision);
@@ -1805,6 +1879,159 @@ function hmsToSec(hms) {
   const p = String(hms || '').split(':').map(Number);
   return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2]
        : p.length === 2 ? p[0] * 60 + p[1] : (p[0] || 0);
+}
+
+/* ================= in-app SRS (Study) ================= */
+let STUDY = null;   // { queue:[cardview], i, revealed, shownAt, history:[id], done }
+
+async function refreshStudyBanner() {
+  const b = $('#studyBanner');
+  if (!b) return;
+  let s;
+  try { s = await api('/srs/stats'); } catch { b.hidden = true; return; }
+  const n = (s.due || 0) + (s.new || 0);
+  if (!n && !s.total) { b.hidden = true; return; }
+  b.hidden = false;
+  if (n) {
+    $('#studyBannerT').textContent = 'Study — ' + n + ' card' + (n === 1 ? '' : 's');
+    const bits = [];
+    if (s.due) bits.push(s.due + ' due');
+    if (s.new) bits.push(s.new + ' new');
+    $('#studyBannerM').textContent = bits.join(' · ');
+  } else {
+    $('#studyBannerT').textContent = 'Study';
+    $('#studyBannerM').textContent = 'all caught up · ' + s.total + ' cards';
+  }
+}
+
+async function openStudy() {
+  $('#studyView').hidden = false;
+  $('#studyBody').innerHTML = SPINNER;
+  STUDY = { queue: [], i: 0, revealed: false, shownAt: 0, history: [], done: 0 };
+  await loadStudyQueue();
+}
+function closeStudy() { $('#studyView').hidden = true; STUDY = null; refreshStudyBanner(); }
+
+async function loadStudyQueue() {
+  let d;
+  try { d = await api('/srs/queue'); }
+  catch (e) { $('#studyBody').innerHTML = `<div class="study-done"><div class="msg">couldn’t load</div><div class="sub">${escapeHtml(e.message)}</div></div>`; return; }
+  STUDY.queue = d.cards || [];
+  STUDY.i = 0;
+  STUDY.total = STUDY.queue.length + STUDY.done;
+  renderStudyCard();
+}
+
+function studyCard() { return STUDY && STUDY.queue[STUDY.i]; }
+
+function renderStudyCard() {
+  const c = studyCard();
+  $('#studyUndo').disabled = !STUDY.history.length;
+  if (!c) return renderStudyDone();
+  STUDY.revealed = false;
+  STUDY.shownAt = Date.now();
+  const left = STUDY.queue.length - STUDY.i;
+  $('#studyProg').innerHTML = `<b>${STUDY.done}</b> done · ${left} left`;
+  $('#studyBody').innerHTML = `
+    <div class="study-scroll"><div class="study-q">${c.front_html}</div></div>
+    <div class="study-foot"><button class="study-show" onclick="studyReveal()">Show answer</button></div>`;
+}
+
+function studyReveal() {
+  const c = studyCard();
+  if (!c) return;
+  STUDY.revealed = true;
+  const p = c.preview || {};
+  const clip = c.seconds != null ? `
+    <button class="a-clip" onclick="studyJump(${c.video_id}, ${c.seconds})">
+      <img loading="lazy" src="/videos/${c.video_id}/frame?t=${Math.round(c.seconds)}" alt=""
+           onerror="this.closest('.a-clip').classList.add('noimg')">
+      <span class="a-play">▶ ${fmtTime(c.seconds)}${c.video_title ? ' · ' + escapeHtml(c.video_title) : ''}</span>
+    </button>` : '';
+  $('#studyBody').innerHTML = `
+    <div class="study-scroll">
+      <div class="study-q" style="font-size:1.05rem;margin:0;color:var(--muted)">${c.front_html}</div>
+      <div class="study-a">
+        <div class="a-tr">${escapeHtml(c.translation || '—')}</div>
+        ${c.accented ? `<div class="a-acc">${escapeHtml(c.accented)}</div>` : ''}
+        ${clip}
+        <div class="a-links"><button onclick="studyOpenWord('${encodeURIComponent(c.normalized_text)}')">all places “${escapeHtml(c.span_text)}” is said →</button></div>
+      </div>
+    </div>
+    <div class="study-foot"><div class="study-rate">
+      <button class="again" onclick="studyRate(1)"><span class="rl">Again</span><span class="ri">${p[1] || ''}</span></button>
+      <button onclick="studyRate(2)"><span class="rl">Hard</span><span class="ri">${p[2] || ''}</span></button>
+      <button class="good" onclick="studyRate(3)"><span class="rl">Good</span><span class="ri">${p[3] || ''}</span></button>
+      <button onclick="studyRate(4)"><span class="rl">Easy</span><span class="ri">${p[4] || ''}</span></button>
+    </div></div>`;
+}
+
+async function studyRate(rating) {
+  const c = studyCard();
+  if (!c || STUDY._busy) return;
+  STUDY._busy = true;
+  $('#studyBody').querySelectorAll('.study-rate button').forEach(b => b.disabled = true);
+  try {
+    await api(`/srs/cards/${c.id}/review`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rating, elapsed_ms: Date.now() - STUDY.shownAt }),
+    });
+  } catch (e) { toast('review failed — ' + e.message, 3000); STUDY._busy = false;
+    $('#studyBody').querySelectorAll('.study-rate button').forEach(b => b.disabled = false); return; }
+  STUDY.history.push(c.id);
+  STUDY.done++;
+  STUDY.queue.splice(STUDY.i, 1);          // remove from queue
+  if (rating === 1) STUDY.queue.push(c);   // "Again" — see it again later this session
+  else if (STUDY.i >= STUDY.queue.length) STUDY.i = 0;   // wrap for the tail
+  STUDY._busy = false;
+  if (!STUDY.queue.length) { await loadStudyQueue(); }   // pick up anything newly due
+  else renderStudyCard();
+  refreshStudyBanner();
+}
+
+async function studyUndo() {
+  if (!STUDY || !STUDY.history.length) return;
+  const id = STUDY.history[STUDY.history.length - 1];
+  let d;
+  try { d = await api(`/srs/cards/${id}/undo`, { method: 'POST' }); }
+  catch (e) { toast('nothing to undo', 2000); return; }
+  STUDY.history.pop();
+  STUDY.done = Math.max(0, STUDY.done - 1);
+  // drop any copy of this card already in the queue, then put it back at the front
+  STUDY.queue = STUDY.queue.filter(x => x.id !== id);
+  STUDY.queue.unshift(d.card);
+  STUDY.i = 0;
+  renderStudyCard();
+  studyReveal();          // show it answered so they can re-grade
+  refreshStudyBanner();
+}
+
+function studyJump(videoId, secs) {
+  CURRENT = videoId;
+  DETAIL_V = VIDEOS.find(x => x.id === videoId) || { id: videoId };
+  openWatch(videoId, Math.max(0, secs - 1.5));   // #studyView stays underneath; back returns to it
+}
+function studyOpenWord(enc) { openWord(decodeURIComponent(enc)); }
+
+function renderStudyDone() {
+  api('/srs/stats').then(s => {
+    $('#studyProg').innerHTML = '';
+    $('#studyBody').innerHTML = `
+      <div class="study-done">
+        <div class="big">${STUDY.done ? '✅' : '🎉'}</div>
+        <div class="msg">${STUDY.done ? STUDY.done + ' review' + (STUDY.done === 1 ? '' : 's') + ' done' : 'All caught up'}</div>
+        <div class="sub">${s.due || 0} due · ${s.new || 0} new left today · ${s.total} cards total</div>
+        <label class="study-set"><input type="checkbox" id="dualWrite" ${s.anki_dual_write ? 'checked' : ''}
+          onchange="setDualWrite(this.checked)"> also save new cards to Anki</label>
+        <a class="study-set" href="/srs/export" download>⬇ export .apkg</a>
+      </div>`;
+  }).catch(() => { $('#studyBody').innerHTML = '<div class="study-done"><div class="big">✅</div></div>'; });
+}
+async function setDualWrite(on) {
+  try { await api('/settings', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ key: 'anki_dual_write', value: on }) });
+    toast(on ? 'new cards will also go to Anki' : 'new cards stay in-app only', 2600);
+  } catch (e) { toast('couldn’t save — ' + e.message, 3000); }
 }
 
 /* ---- resume where you left off (per video, this device) ---- */
@@ -2234,7 +2461,7 @@ function armScrub(on) {
   const sc = $('#scrubber');
   if (sc) sc.classList.toggle('armed', on);
   clearTimeout(scrubArmTimer);
-  if (on) scrubArmTimer = setTimeout(() => armScrub(false), 4500);
+  if (on) scrubArmTimer = setTimeout(() => armScrub(false), 4000);
 }
 function updateScrubber() {
   if (scrubDragging || !WP) return;
@@ -2245,41 +2472,65 @@ function updateScrubber() {
   $('#scrubKnob').style.left = (p * 100) + '%';
   $('#scrubTime').textContent = fmtTime(WP.time()) + ' / ' + fmtTime(d);
 }
+let _prevT = -1, _prevTimer = null;
 function attachScrubber() {
-  const sc = $('#scrubber'), track = sc.querySelector('.scrub-track');
+  const sc = $('#scrubber'), track = $('#scrubTrack'), knob = $('#scrubKnob');
   if (!sc || sc._wired) return;
   sc._wired = true;
-  const fracAt = e => {
+  const fracAt = cx => {
     const r = track.getBoundingClientRect();
-    return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    return Math.max(0, Math.min(1, (cx - r.left) / r.width));
   };
-  const show = p => {
+  const paint = p => {
     $('#scrubFill').style.width = (p * 100) + '%';
-    $('#scrubKnob').style.left = (p * 100) + '%';
-    if (WP && WP.dur()) $('#scrubTime').textContent = fmtTime(p * WP.dur()) + ' / ' + fmtTime(WP.dur());
-  };
-  sc.addEventListener('pointerdown', e => {
-    if (!WP || !WP.dur()) return;
-    if (!scrubArmed) {          // first tap only arms it — no seek
-      armScrub(true);
-      e.preventDefault();
-      return;
+    knob.style.left = (p * 100) + '%';
+    const t = p * (WP.dur() || 0);
+    $('#scrubTime').textContent = fmtTime(t) + ' / ' + fmtTime(WP.dur() || 0);
+    $('#scrubPreview').style.left = (p * 100) + '%';
+    $('#scrubPreviewT').textContent = fmtTime(t);
+    const rt = Math.max(0, Math.round(t / 2) * 2);
+    if (rt !== _prevT && CURRENT != null) {
+      _prevT = rt;
+      clearTimeout(_prevTimer);
+      _prevTimer = setTimeout(() => { $('#scrubPreviewImg').src = `/videos/${CURRENT}/frame?t=${rt}`; }, 110);
     }
-    armScrub(true);             // refresh the auto-disarm timer
+  };
+  let x0 = 0, y0 = 0, go = false, dead = false;
+  const down = e => {
+    if (!WP || !WP.dur()) return;
+    const onKnob = e.target === knob || (e.target.closest && e.target.closest('.scrub-knob'));
+    if (!onKnob && !scrubArmed) return;        // track only responds once armed
+    x0 = e.clientX; y0 = e.clientY; go = false; dead = false;
+    armScrub(true);
     scrubDragging = true; sc.classList.add('dragging');
     try { sc.setPointerCapture(e.pointerId); } catch {}
-    show(fracAt(e));
-  });
-  sc.addEventListener('pointermove', e => { if (scrubDragging) show(fracAt(e)); });
-  const end = e => {
-    if (!scrubDragging) return;
-    scrubDragging = false; sc.classList.remove('dragging');
-    if (WP && WP.dur()) { WP.seek(fracAt(e) * WP.dur()); }
-    armScrub(true);             // keep armed briefly for a follow-up nudge
-    bumpCtrls();
+    if (!onKnob) { go = true; sc.classList.add('scrubbing'); paint(fracAt(e.clientX)); }
   };
-  sc.addEventListener('pointerup', end);
-  sc.addEventListener('pointercancel', end);
+  const move = e => {
+    if (!scrubDragging || dead) return;
+    const dx = e.clientX - x0, dy = e.clientY - y0;
+    if (!go) {
+      if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) {   // vertical → not a scrub
+        dead = true; scrubDragging = false; sc.classList.remove('dragging');
+        try { sc.releasePointerCapture(e.pointerId); } catch {}
+        return;
+      }
+      if (Math.abs(dx) < 5) return;
+      go = true; sc.classList.add('scrubbing');
+    }
+    e.preventDefault();
+    paint(fracAt(e.clientX));
+  };
+  const up = e => {
+    sc.classList.remove('dragging', 'scrubbing');
+    if (scrubDragging && go && WP && WP.dur()) WP.seek(fracAt(e.clientX) * WP.dur());
+    scrubDragging = false; _prevT = -1;
+    if (!dead) armScrub(true);
+  };
+  sc.addEventListener('pointerdown', down);
+  sc.addEventListener('pointermove', move);
+  sc.addEventListener('pointerup', up);
+  sc.addEventListener('pointercancel', up);
 }
 function tick() {
   if (!WP) return;
@@ -2371,6 +2622,12 @@ function inlineGreen(w, sp, ci, wi) {
   _openInlinePop(sp, word, '— you’re learning this', '',
     `<button class="id-no" onclick="greenDiscard()">not learning</button>
      <button class="id-yes" onclick="greenCard()">✎ card</button>`);
+  // fill in the meaning (the /watch payload doesn't carry it for green words)
+  api('/words/' + encodeURIComponent(word)).then(d => {
+    const tr = d && (d.translation || d.gloss);
+    if (tr && _greenCtx && _greenCtx.word === word && !$('#inlineDecide').hidden)
+      $('#idTr').textContent = '— ' + tr;
+  }).catch(() => {});
 }
 function greenCard() {
   $('#inlineDecide').hidden = true;
@@ -3144,6 +3401,7 @@ function navBack() {
     closeWatch(); return true;
   }
   if (!$('#readView').hidden) { closeReader(); return true; }
+  if (!$('#studyView').hidden) { closeStudy(); return true; }
   if (!$('#detailView').hidden) { showList(); return true; }
   return false;
 }
@@ -3180,6 +3438,7 @@ addEventListener('popstate', () => { navBack(); try { history.pushState({ ru: 1 
 
 /* ---------------- boot ---------------- */
 // belt-and-suspenders: full-screen overlays must never be left showing
+['#studyView'].forEach(s => { const e = $(s); if (e) e.hidden = true; });
 if (!READING_ENABLED) ['#readView', '#pasteWrap', '#tocPanel'].forEach(s => { const e = $(s); if (e) e.hidden = true; });
 
 if ('serviceWorker' in navigator) {

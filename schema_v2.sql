@@ -79,6 +79,58 @@ CREATE TABLE IF NOT EXISTS text_chapters (
 );
 CREATE INDEX IF NOT EXISTS idx_text_chapters ON text_chapters(text_id, idx);
 
+-- In-app spaced repetition (FSRS). SQLite is the source of truth; Anki becomes
+-- an optional dual-write target + an .apkg escape hatch. One row per study card.
+CREATE TABLE IF NOT EXISTS srs_cards (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    candidate_id    INTEGER UNIQUE REFERENCES candidates(id),  -- provenance / dedup
+    sentence        TEXT NOT NULL,       -- raw source sentence (front rendered on read)
+    translation     TEXT,                -- back
+    span_text       TEXT NOT NULL,
+    normalized_text TEXT NOT NULL,
+    is_phrase       INTEGER NOT NULL DEFAULT 0,
+    accented        TEXT,
+    video_id        INTEGER REFERENCES videos(id),
+    timestamp       TEXT,                -- HH:MM:SS.mmm — frame thumbnail + jump-to-moment
+    -- FSRS state (see fsrs.Card.to_dict)
+    fsrs_state      INTEGER NOT NULL DEFAULT 1,   -- 1 learning, 2 review, 3 relearning
+    fsrs_step       INTEGER,
+    stability       REAL,
+    difficulty      REAL,
+    due             TEXT NOT NULL,       -- ISO8601 UTC
+    last_review     TEXT,                -- ISO8601 UTC; NULL => never studied (a "new" card)
+    reps            INTEGER NOT NULL DEFAULT 0,
+    lapses          INTEGER NOT NULL DEFAULT 0,
+    suspended       INTEGER NOT NULL DEFAULT 0,
+    anki_note_id    INTEGER,             -- set if also dual-written to Anki
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_srs_due  ON srs_cards(due);
+CREATE INDEX IF NOT EXISTS idx_srs_norm ON srs_cards(normalized_text);
+
+CREATE TABLE IF NOT EXISTS srs_reviews (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_id      INTEGER NOT NULL REFERENCES srs_cards(id),
+    rating       INTEGER NOT NULL,       -- 1 Again, 2 Hard, 3 Good, 4 Easy
+    -- card state BEFORE this review, for undo
+    prev_state   INTEGER,
+    prev_step    INTEGER,
+    prev_stability REAL,
+    prev_difficulty REAL,
+    prev_due     TEXT,
+    prev_last_review TEXT,
+    reviewed_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    elapsed_ms   INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_srs_reviews_card ON srs_reviews(card_id);
+CREATE INDEX IF NOT EXISTS idx_srs_reviews_when ON srs_reviews(reviewed_at);
+
+-- tiny key/value bag for app-level settings (e.g. anki_dual_write)
+CREATE TABLE IF NOT EXISTS app_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+
 -- Every word/phrase that has been shown to the user and decided, either way.
 -- Checked (with the static stoplist) before anything is flagged as a candidate
 -- again. reason: 'known' | 'garbage' | 'has_card'.

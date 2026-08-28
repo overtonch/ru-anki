@@ -18,3 +18,6 @@ pymorphy3-dicts-ru==2.4.417150.4580142
 # whisper_rt falls back to GPU-only, no VAD, if it's missing).
 mlx-whisper==0.4.3
 faster-whisper==1.1.0
+
+# In-app spaced repetition (FSRS scheduler)
+fsrs==6.3.2

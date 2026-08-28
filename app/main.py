@@ -30,6 +30,7 @@ import backup  # noqa: E402
 import epub  # noqa: E402
 import heartbeat  # noqa: E402
 import llm  # noqa: E402
+import srs  # noqa: E402
 import whisper_rt  # noqa: E402
 import store  # noqa: E402
 import subs  # noqa: E402
@@ -121,6 +122,27 @@ def _learn_accent(span_text, sentence=""):
 def _learn_accent_async(span_text, sentence=""):
     threading.Thread(target=_learn_accent, args=(span_text, sentence),
                      daemon=True).start()
+
+
+def _commit_card(*, sentence, span_text, normalized_text, is_phrase, translation,
+                 source_html, candidate_id=None, video_id=None, timestamp=None,
+                 accented=None, tags=None):
+    """Create the in-app SRS card, and — only if the Anki dual-write setting is
+    on — the Anki note too. Returns (srs_card_dict, anki_result_or_None)."""
+    anki_result = None
+    if srs.anki_dual_write():
+        try:
+            anki_result = anki.add_card(sentence, span_text, is_phrase, translation,
+                                        source_html, tags=tags or ["ru-anki"],
+                                        accented=accented)
+        except anki.AnkiError as e:
+            raise HTTPException(502, f"Anki: {e}")
+        _sync_soon()
+    card = srs.create_card(
+        sentence, span_text, normalized_text, is_phrase, translation,
+        candidate_id=candidate_id, accented=accented, video_id=video_id,
+        timestamp=timestamp, anki_note_id=(anki_result or {}).get("note_id"))
+    return card, anki_result
 
 
 def _accent_sync(span_text, sentence, is_phrase):
@@ -835,7 +857,7 @@ def decide(cand_id: int, body: DecisionIn):
     if cand["status"] != "pending":
         raise HTTPException(409, f"candidate already {cand['status']}")
 
-    anki_result = None
+    anki_result = card = None
     if body.decision == "yes":
         v = store.get_video(cand["video_id"])
         src = anki.source_html(v["title"] if v else "", v.get("channel") if v else None,
@@ -846,15 +868,13 @@ def decide(cand_id: int, body: DecisionIn):
             sent = cand["sentence"]
         elif sent != cand["sentence"]:
             store.update_candidate_sentence(cand_id, sent)
-        try:
-            anki_result = anki.add_card(
-                sent, cand["span_text"], cand["is_phrase"],
-                cand["translation"], src, tags=["ru-anki", "batch"],
-                accented=store.accent_for(cand["normalized_text"]),
-            )
-        except anki.AnkiError as e:
-            raise HTTPException(502, f"Anki: {e}")
-        _sync_soon()  # don't block the response on the AnkiWeb sync
+        card, anki_result = _commit_card(
+            sentence=sent, span_text=cand["span_text"],
+            normalized_text=cand["normalized_text"], is_phrase=cand["is_phrase"],
+            translation=cand["translation"], source_html=src, candidate_id=cand_id,
+            video_id=cand["video_id"], timestamp=cand["timestamp_start"],
+            accented=store.accent_for(cand["normalized_text"]),
+            tags=["ru-anki", "batch"])
 
     updated = store.resolve_candidate(
         cand_id, body.decision,
@@ -863,7 +883,7 @@ def decide(cand_id: int, body: DecisionIn):
         _learn_family_async(cand["normalized_text"])
         _learn_accent_async(cand["span_text"], sent)
     backup.snapshot_async("decision")
-    return {"candidate": updated, "anki": anki_result}
+    return {"candidate": updated, "anki": anki_result, "srs_card": card}
 
 
 @app.get("/words/{lemma}")
@@ -921,6 +941,7 @@ def word_discard(lemma: str):
         anki.delete_note(nid)
     if res.get("removed_notes"):
         _sync_soon()
+    res["removed_srs_cards"] = srs.delete_cards_for_lemma(res["lemma"])
     backup.snapshot_async("discard-word")
     return res
 
@@ -944,10 +965,13 @@ def undo_decision(cand_id: int):
     was = cand["status"]
     updated, note_id = store.unresolve_candidate(cand_id)
     removed = False
-    if was == "card_created" and note_id:
-        anki.delete_note(note_id)
-        _sync_soon()
-        removed = True
+    if was == "card_created":
+        if srs.delete_cards_for_candidate(cand_id):
+            removed = True
+        if note_id:
+            anki.delete_note(note_id)
+            _sync_soon()
+            removed = True
     backup.snapshot_async("undo")
     return {"candidate": updated, "undone": was, "card_removed": removed}
 
@@ -1002,6 +1026,136 @@ def candidate_sentence_options(cand_id: int, fresh: int = 0):
     if opts:
         store.set_sentence_cache(cand_id, cand["video_id"], payload)
     return payload
+
+
+# ------------------------------------------------------------------ in-app SRS
+
+class ReviewIn(BaseModel):
+    rating: int
+    elapsed_ms: int | None = None
+
+
+class SettingIn(BaseModel):
+    key: str
+    value: object
+
+
+def _hms_secs(hms):
+    m = _re.match(r"(?:(\d+):)?(\d{1,2}):(\d{2}(?:\.\d+)?)", str(hms or ""))
+    if not m:
+        return None
+    return round(int(m.group(1) or 0) * 3600 + int(m.group(2)) * 60
+                 + float(m.group(3)), 2)
+
+
+def _study_card_view(card, with_preview=True):
+    """Trim an srs card dict to what the review screen needs."""
+    if not card:
+        return None
+    v = store.get_video(card["video_id"]) if card.get("video_id") else None
+    return {
+        "id": card["id"], "front_html": card["front_html"],
+        "translation": card["translation"], "span_text": card["span_text"],
+        "normalized_text": card["normalized_text"], "accented": card["accented"],
+        "is_new": card["is_new"], "reps": card["reps"], "lapses": card["lapses"],
+        "video_id": card["video_id"],
+        "video_title": v["title"] if v else None,
+        "timestamp": card["timestamp"],
+        "seconds": _hms_secs(card["timestamp"]) if card.get("timestamp") else None,
+        "preview": srs.preview(card["id"]) if with_preview else None,
+    }
+
+
+@app.get("/srs/stats")
+def srs_stats():
+    s = srs.stats()
+    s["anki_dual_write"] = srs.anki_dual_write()
+    return s
+
+
+@app.get("/srs/queue")
+def srs_queue(limit: int = 60):
+    cards = srs.queue(limit=limit)
+    return {"cards": [_study_card_view(c) for c in cards], **srs.stats()}
+
+
+@app.get("/srs/cards/{card_id}")
+def srs_card(card_id: int):
+    card = srs.get_card(card_id)
+    if not card:
+        raise HTTPException(404, "no such card")
+    return {**_study_card_view(card), "preview": srs.preview(card_id)}
+
+
+@app.get("/srs/cards/{card_id}/preview")
+def srs_card_preview(card_id: int):
+    return srs.preview(card_id)
+
+
+@app.post("/srs/cards/{card_id}/review")
+def srs_review(card_id: int, body: ReviewIn):
+    if body.rating not in (1, 2, 3, 4):
+        raise HTTPException(422, "rating must be 1..4")
+    try:
+        card = srs.review(card_id, body.rating, body.elapsed_ms)
+    except KeyError:
+        raise HTTPException(404, "no such card")
+    backup.snapshot_async("srs-review")
+    return {"card": _study_card_view(card), **srs.stats()}
+
+
+@app.post("/srs/cards/{card_id}/undo")
+def srs_undo(card_id: int):
+    card = srs.undo_last(card_id)
+    if not card:
+        raise HTTPException(409, "nothing to undo for this card")
+    return {"card": {**_study_card_view(card), "preview": srs.preview(card_id)},
+            **srs.stats()}
+
+
+@app.post("/srs/cards/{card_id}/suspend")
+def srs_suspend(card_id: int, on: bool = True):
+    srs.suspend(card_id, on)
+    return {"ok": True, "suspended": on, **srs.stats()}
+
+
+@app.delete("/srs/cards/{card_id}")
+def srs_delete(card_id: int):
+    card = srs.get_card(card_id)
+    srs.delete_card(card_id)
+    if card and card.get("candidate_id"):
+        try:
+            store.unresolve_candidate(card["candidate_id"])
+        except KeyError:
+            pass
+    return {"ok": True, **srs.stats()}
+
+
+@app.post("/srs/backfill")
+def srs_backfill(video_id: int | None = None, limit: int | None = None):
+    n = srs.backfill_from_candidates(video_id=video_id, limit=limit)
+    return {"created": n, **srs.stats()}
+
+
+@app.get("/srs/export")
+def srs_export():
+    path = os.path.join(ytdlp.MEDIA_DIR, "ru-anki-srs.apkg")
+    n = srs.export_apkg(path)
+    return FileResponse(path, filename="ru-anki-srs.apkg", media_type="application/octet-stream",
+                        headers={"X-Card-Count": str(n)})
+
+
+@app.get("/settings")
+def get_settings():
+    return {"anki_dual_write": srs.anki_dual_write()}
+
+
+@app.post("/settings")
+def post_settings(body: SettingIn):
+    if body.key not in ("anki_dual_write",):
+        raise HTTPException(422, f"unknown setting {body.key}")
+    srs.set_setting(body.key, bool(body.value))
+    return {"ok": True, body.key: srs.get_setting(body.key)}
 
 
 # ------------------------------------------------------------------ live search
@@ -1138,15 +1292,18 @@ def _make_one_card(video_id, subtitle_line_id, span, timestamp=None, sentence=No
                                  translation, source="live")
     accented = _accent_sync(span_text, sent, ph)
     src = anki.source_html(v["title"], v.get("channel"), v["url"], ts)
-    anki_result = anki.add_card(sent, span_text, ph, translation,
-                                src, tags=["ru-anki", "live"], accented=accented)
-    anki_result["sync_error"] = None
-    _sync_soon()
-    store.resolve_candidate(cid, "yes", note_id=anki_result.get("note_id"))
+    card, anki_result = _commit_card(
+        sentence=sent, span_text=span_text, normalized_text=span_text,
+        is_phrase=ph, translation=translation, source_html=src, candidate_id=cid,
+        video_id=video_id, timestamp=ts, accented=accented, tags=["ru-anki", "live"])
+    if anki_result is not None:
+        anki_result["sync_error"] = None
+    store.resolve_candidate(cid, "yes",
+                            note_id=(anki_result or {}).get("note_id"))
     _learn_family_async(store.lemma_key(span_text))
     return {"candidate_id": cid, "span_text": span_text, "is_phrase": ph,
-            "translation": translation, "anki": anki_result,
-            "bolded": anki_result["bolded"]}
+            "translation": translation, "anki": anki_result, "srs_card": card,
+            "bolded": card["bolded"]}
 
 
 @app.get("/gloss")
@@ -1294,17 +1451,15 @@ def text_card(text_id: int, body: TextCardIn):
             p["span_text"], p["translation"], p["is_phrase"], p["sentence"])
     accented = _accent_sync(span_text, sent, ph)
     src = anki.source_html_text(t["title"], t.get("author"), body.chapter)
-    try:
-        res = anki.add_card(sent, span_text, ph, translation, src,
-                            tags=["ru-anki", "reading"], accented=accented)
-    except anki.AnkiError as e:
-        raise HTTPException(502, f"Anki: {e}")
+    card, res = _commit_card(
+        sentence=sent, span_text=span_text, normalized_text=span_text,
+        is_phrase=ph, translation=translation, source_html=src,
+        accented=accented, tags=["ru-anki", "reading"])
     store.mark_carded(span_text)
     _learn_family_async(store.lemma_key(span_text))
-    _sync_soon()
     backup.snapshot_async("text-card")
     return {"span_text": span_text, "translation": translation, "is_phrase": ph,
-            "anki": res, "bolded": res.get("bolded")}
+            "anki": res, "srs_card": card, "bolded": card["bolded"]}
 
 
 @app.post("/translate")
