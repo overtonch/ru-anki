@@ -1864,8 +1864,10 @@ function closeWatch() {
 }
 function togglePlay() {
   if (!WP) return;
-  WP.paused() ? WP.play() : WP.pause();
+  const pausing = !WP.paused();
+  pausing ? WP.pause() : WP.play();
   bumpCtrls();
+  if (pausing) clearTimeout(ctrlTimer);   // controls stay up while paused
 }
 
 /* ---- fullscreen / immersive ---- */
@@ -1896,10 +1898,8 @@ function toggleFs() {
   $('#watchView').classList.contains('fs') ? exitFs() : enterFs();
 }
 let justSwiped = 0;
-function tapVideo() {   // tap reveals hidden controls first, otherwise play/pause
+function tapVideo() {   // one tap = play/pause; controls appear (and stay, while paused)
   if (Date.now() - justSwiped < 350) return;   // swallow the tap that ends a swipe
-  const w = $('#watchView');
-  if (w.classList.contains('fs') && w.classList.contains('hidectrls')) { bumpCtrls(); return; }
   togglePlay();
 }
 let seekFlashT = null;
