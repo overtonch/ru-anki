@@ -375,6 +375,51 @@ def _score_sentence(text, span, stems, rank_of):
     return s
 
 
+def word_occurrences(lemma, per_video=10):
+    """Every place `lemma` (any inflection) is spoken, grouped by video.
+    -> [{video_id, title, youtube_id, thumbnail_url, count, hits:[{t,text}]}]."""
+    lemma = norm(lemma)
+    c = connect()
+    vids = c.execute(
+        "SELECT id, title, url, thumbnail_url FROM videos ORDER BY id DESC").fetchall()
+    out = []
+    for v in vids:
+        rows = c.execute(
+            "SELECT start_time, text FROM subtitle_lines WHERE video_id=? ORDER BY id",
+            (v["id"],)).fetchall()
+        hits, last = [], -9
+        for i, r in enumerate(rows):
+            if any(lemma_key(t) == lemma for t in _CYR_TOKEN.findall(r["text"] or "")):
+                if i - last >= 2:
+                    hits.append({"t": (r["start_time"] or "")[:8],
+                                 "text": (r["text"] or "").strip()})
+                last = i
+        if hits:
+            out.append({
+                "video_id": v["id"], "title": v["title"],
+                "youtube_id": youtube_id(v["url"]),
+                "thumbnail_url": _thumb(v["url"], v["thumbnail_url"]),
+                "count": len(hits), "hits": hits[:per_video]})
+    c.close()
+    return out
+
+
+def word_status(lemma):
+    lemma = norm(lemma)
+    c = connect()
+    cand = c.execute(
+        """SELECT id, video_id, span_text, translation, status, timestamp_start
+           FROM candidates WHERE normalized_text=? ORDER BY id DESC LIMIT 1""",
+        (lemma,)).fetchone()
+    fam = c.execute("SELECT root FROM word_family WHERE lemma=?", (lemma,)).fetchone()
+    members = []
+    if fam:
+        members = [r["lemma"] for r in c.execute(
+            "SELECT lemma FROM word_family WHERE root=? ORDER BY lemma", (fam["root"],))]
+    c.close()
+    return dict(cand) if cand else None, members
+
+
 def transcript_texts(video_id):
     c = connect()
     rows = c.execute("SELECT text FROM subtitle_lines WHERE video_id=? ORDER BY id",

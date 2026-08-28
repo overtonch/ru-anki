@@ -825,6 +825,30 @@ def decide(cand_id: int, body: DecisionIn):
     return {"candidate": updated, "anki": anki_result}
 
 
+@app.get("/words/{lemma}")
+def word_detail(lemma: str):
+    """Everything about one word: card status, family, and every place it's
+    spoken across all your videos."""
+    lem = store.norm(lemma)
+    have = store.card_lemmas()
+    fam_lemmas = store.known_family_lemmas()
+    cand, members = store.word_status(lem)
+    status = ("carded" if lem in have
+              else "family" if lem in fam_lemmas
+              else "pending" if (cand and cand["status"] == "pending")
+              else "new")
+    translation = (cand or {}).get("translation")
+    return {
+        "lemma": lem,
+        "status": status,
+        "translation": translation,
+        "gloss": store.gloss_for(lem),
+        "family": [m for m in members if m != lem],
+        "candidate_id": (cand or {}).get("id") if (cand and cand["status"] == "pending") else None,
+        "videos": store.word_occurrences(lem),
+    }
+
+
 @app.post("/families/backfill")
 def families_backfill(background: BackgroundTasks):
     todo = store.lemmas_without_family()

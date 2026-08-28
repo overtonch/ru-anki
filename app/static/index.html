@@ -168,6 +168,8 @@
   .fq.uncommon { color:var(--muted); }
   .fq.rare { color:var(--ok); }
   .rec { color:var(--accent); font-weight:600; }
+  .wordlink { background:none; border:0; padding:0; font:inherit; color:var(--fg-dim);
+              border-bottom:1px dotted var(--muted); cursor:pointer; }
   .pickbtn { display:block; margin:.15rem 0 .35rem; background:none; border:0; padding:0;
              color:var(--accent); font-size:.76rem; cursor:pointer; }
   .pickbtn.on { color:var(--muted); }
@@ -385,6 +387,8 @@
   #inlineDecide .id-yes { background:var(--yes); border-color:var(--yes); color:#08160d; }
   #inlineDecide .id-no  { background:transparent; border-color:var(--line); color:var(--fg-dim); }
   #inlineDecide .id-no:active { border-color:var(--no); color:var(--no); }
+  #inlineDecide .id-more { display:block; width:100%; margin-top:.5rem; background:none;
+                           border:0; color:var(--accent); font-size:.76rem; cursor:pointer; text-align:left; }
 
   /* immersive / fullscreen watch — video fills the view, caption stays on top */
   #watchView.fs { padding:0; background:#000; }
@@ -468,11 +472,30 @@
   .lib-card .rbar { height:3px; background:var(--line); border-radius:2px; margin-top:.4rem; overflow:hidden; }
   .lib-card .rbar i { display:block; height:100%; background:var(--accent); }
 
-  #readView { position:fixed; inset:0; z-index:15; background:var(--bg);
+  #readView, #wordView { position:fixed; inset:0; z-index:15; background:var(--bg);
               flex-direction:column;
               padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
-  #readView[hidden] { display:none; }
-  #readView:not([hidden]) { display:flex; }
+  #readView[hidden], #wordView[hidden] { display:none; }
+  #readView:not([hidden]), #wordView:not([hidden]) { display:flex; }
+  .wordbody { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:1rem 1.1rem 3rem; }
+  .wordbody .w-hd { font-size:1.6rem; font-weight:750; }
+  .wordbody .w-tr { color:var(--accent); font-size:1.05rem; margin-top:.2rem; }
+  .wordbody .w-pill { display:inline-block; font-size:.68rem; text-transform:uppercase;
+                      letter-spacing:.06em; padding:.15em .5em; border-radius:.35rem;
+                      margin-top:.5rem; border:1px solid var(--line); color:var(--muted); }
+  .wordbody .w-pill.carded { color:var(--ok); border-color:rgba(67,176,114,.4); }
+  .wordbody .w-pill.pending { color:#e6b93c; border-color:rgba(230,185,60,.4); }
+  .wordbody .w-fam { margin-top:.7rem; font-size:.8rem; color:var(--muted); }
+  .wordbody .w-fam b { color:var(--fg-dim); font-weight:600; }
+  .wordbody .w-vid { margin-top:1.3rem; }
+  .wordbody .w-vid .w-vt { font-size:.9rem; font-weight:650; display:flex; gap:.5rem; align-items:center; }
+  .wordbody .w-vid .w-vt .n { color:var(--muted); font-weight:400; font-size:.8rem; }
+  .wordbody .w-hit { display:block; width:100%; text-align:left; background:var(--card-2);
+                     border:1px solid var(--line-soft); border-radius:var(--r-sm);
+                     padding:.55rem .7rem; margin:.4rem 0; cursor:pointer; line-height:1.45;
+                     font-size:.9rem; color:var(--fg); }
+  .wordbody .w-hit:active { border-color:var(--accent); }
+  .wordbody .w-hit .t { color:var(--accent); font-size:.72rem; margin-right:.4rem; font-variant-numeric:tabular-nums; }
   .readbar { display:flex; align-items:center; gap:.5rem; padding:.5rem .9rem;
              border-bottom:1px solid var(--line-soft); flex:none; }
   .readbar .rtitle { flex:1; min-width:0; font-size:.82rem; color:var(--fg-dim);
@@ -668,7 +691,18 @@
       <div class="id-head"><b id="idSpan"></b> <span id="idTr"></span></div>
       <div class="id-freq" id="idFreq"></div>
       <div class="id-btns" id="idBtns"></div>
+      <button class="id-more" id="idMore">all places this is said →</button>
     </div>
+  </div>
+
+  <!-- WORD VIEW -->
+  <div id="wordView" hidden>
+    <div class="readbar">
+      <button class="backlink" onclick="history.back()">← back</button>
+      <div class="rtitle" id="wvWord"></div>
+      <span style="width:2rem"></span>
+    </div>
+    <div id="wordBody" class="wordbody"></div>
   </div>
 
   <!-- READ VIEW -->
@@ -1223,7 +1257,7 @@ function renderCard(c) {
     <div class="sent">${c.front_html}</div>
     ${c.sentence_count > 1 ? `<button class="pickbtn">choose sentence · ${c.sentence_count} places heard</button>` : ''}
     <div class="tr">${escapeHtml(c.translation || '')}</div>
-    <div class="meta">${c.is_phrase ? 'phrase' : 'word'} · ${escapeHtml(c.span_text)}${fq}${rec}${c.bolded ? '' : ' · ⚠ not bolded'}${badge}</div>
+    <div class="meta">${c.is_phrase ? 'phrase' : 'word'} · <button class="wordlink">${escapeHtml(c.span_text)}</button>${fq}${rec}${c.bolded ? '' : ' · ⚠ not bolded'}${badge}</div>
     <div class="decide">
       ${c.duplicate ? '' : '<button class="y">Make card</button>'}
       <button class="n">Discard</button>
@@ -1235,6 +1269,8 @@ function renderCard(c) {
   if (clipBtn && secs != null) clipBtn.onclick = () => jumpTo(secs);
   const pb = el.querySelector('.pickbtn');
   if (pb) pb.onclick = () => pickSentence(c.id, el, c.span_text, c.is_phrase);
+  const wl = el.querySelector('.wordlink');
+  if (wl) wl.onclick = () => openWord(c.span_text);
   attachSwipe(el, c.id);
   return el;
 }
@@ -1699,6 +1735,39 @@ async function openWatch(id, seekTo) {
   prepAudio(id);   // ready an audio source so backgrounding keeps playing
 }
 function jumpTo(sec) { openWatch(CURRENT, Math.max(0, sec - 1.5)); }
+
+/* ---- word view: every place a word is spoken, across all videos ---- */
+async function openWord(lemma) {
+  const clean = String(lemma || '').replace(/^[^А-Яа-яЁёA-Za-z-]+|[^А-Яа-яЁёA-Za-z-]+$/g, '').toLowerCase();
+  if (!clean) return;
+  $('#wvWord').textContent = clean;
+  $('#wordBody').innerHTML = SPINNER;
+  $('#wordView').hidden = false;
+  let d;
+  try { d = await api('/words/' + encodeURIComponent(clean)); }
+  catch (e) { $('#wordBody').innerHTML = `<div class="empty">couldn’t load — ${escapeHtml(e.message)}</div>`; return; }
+  const pill = { carded: 'have a card', pending: 'suggested', family: 'related to a card', new: 'no card' }[d.status] || d.status;
+  const total = d.videos.reduce((s, v) => s + v.count, 0);
+  $('#wordBody').innerHTML = `
+    <div class="w-hd">${escapeHtml(d.lemma)}</div>
+    ${d.translation || d.gloss ? `<div class="w-tr">${escapeHtml(d.translation || d.gloss)}</div>` : ''}
+    <span class="w-pill ${d.status}">${pill}</span>
+    ${d.family && d.family.length ? `<div class="w-fam"><b>same word family:</b> ${d.family.map(escapeHtml).join(', ')}</div>` : ''}
+    <div class="w-fam">${total ? `heard ${total}× across ${d.videos.length} video${d.videos.length > 1 ? 's' : ''}` : 'not found in your videos yet'}</div>
+    ${d.videos.map(v => `
+      <div class="w-vid">
+        <div class="w-vt">${escapeHtml(v.title)} <span class="n">· ${v.count}×</span></div>
+        ${v.hits.map(h => `<button class="w-hit" data-v="${v.video_id}" data-t="${hmsToSec(h.t)}">
+          <span class="t">${escapeHtml(h.t)}</span>${escapeHtml(h.text)}</button>`).join('')}
+      </div>`).join('')}`;
+  $('#wordBody').querySelectorAll('.w-hit').forEach(b => b.onclick = () => {
+    const vid = +b.dataset.v, t = +b.dataset.t;
+    CURRENT = vid; DETAIL_V = VIDEOS.find(x => x.id === vid) || { id: vid };
+    $('#wordView').hidden = true;
+    openWatch(vid, Math.max(0, t - 1.5));
+  });
+}
+function closeWord() { $('#wordView').hidden = true; }
 function hmsToSec(hms) {
   const p = String(hms || '').split(':').map(Number);
   return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2]
@@ -2252,6 +2321,8 @@ function _openInlinePop(anchor, span, sub, freqHtml, btns) {
   $('#idTr').textContent = sub || '';
   $('#idFreq').innerHTML = freqHtml || '';
   $('#idBtns').innerHTML = btns;
+  const w = (span || anchor.textContent).replace(/^[^А-Яа-яЁёA-Za-z-]+|[^А-Яа-яЁёA-Za-z-]+$/g, '');
+  $('#idMore').onclick = () => { pop.hidden = true; openWord(w); };
   pop.hidden = false;
   const r = anchor.getBoundingClientRect();
   const pw = pop.offsetWidth, ph = pop.offsetHeight;
@@ -2985,6 +3056,7 @@ async function hardRefresh() {
 // step back one level through the app's views; returns true if it did something
 function navBack() {
   if (!$('#inlineDecide').hidden) { closeInline(true); return true; }
+  if (!$('#wordView').hidden) { closeWord(); return true; }
   if (!$('#pasteWrap').hidden) { closePaste(); return true; }
   if (!$('#modalWrap').hidden) { closeCardModal(); return true; }
   if (!$('#tocPanel').hidden) { $('#tocPanel').hidden = true; return true; }
