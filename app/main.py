@@ -109,6 +109,7 @@ class VideoIn(BaseModel):
 
 class DecisionIn(BaseModel):
     decision: str  # "yes" | "no"
+    sentence: str | None = None   # override the card's context sentence
 
 
 class TranslateIn(BaseModel):
@@ -620,7 +621,7 @@ def _run_extraction(video_id, model):
                 s = (it.get("sentence") or "").strip()
                 ph = bool(it.get("is_phrase"))
                 if not s or "\x00" not in store.bold(s, it["span_text"], ph, "\x00"):
-                    s = store.sentence_for(
+                    s = store.context_for(
                         video_id, it.get("timestamp_start"), it["span_text"])
                 it["sentence"] = s
             got, _ = store.add_candidates(video_id, items, source="batch")
@@ -727,6 +728,7 @@ def candidates(video_id: int, status: str = "pending", sort: str = "yield"):
     title = v["title"] if v else ""
     have = store.card_lemmas()
     counts = store.lemma_counts(video_id)
+    sidx = store.stem_line_index(store.transcript_texts(video_id))
     for r in rows:
         front, bolded = anki.front_html(r["sentence"], r["span_text"], r["is_phrase"])
         r["front_html"] = front
@@ -735,6 +737,7 @@ def candidates(video_id: int, status: str = "pending", sort: str = "yield"):
         r["duplicate"] = r["normalized_text"] in have
         r["freq"] = store.freq_hint(r["normalized_text"], r["is_phrase"])
         r["count"] = 1 if r["is_phrase"] else counts.get(r["normalized_text"], 1)
+        r["sentence_count"] = 1 if r["is_phrase"] else store.occurrence_count(r["span_text"], sidx)
 
     if sort == "yield":
         # most repeated first; among ties, the rarer word (higher rank / no rank)
@@ -762,9 +765,15 @@ def decide(cand_id: int, body: DecisionIn):
         v = store.get_video(cand["video_id"])
         src = anki.source_html(v["title"] if v else "", v.get("channel") if v else None,
                                v["url"] if v else "", cand["timestamp_start"])
+        sent = (body.sentence or "").strip()
+        if not sent or "\x00" not in store.bold(sent, cand["span_text"],
+                                                cand["is_phrase"], "\x00"):
+            sent = cand["sentence"]
+        elif sent != cand["sentence"]:
+            store.update_candidate_sentence(cand_id, sent)
         try:
             anki_result = anki.add_card(
-                cand["sentence"], cand["span_text"], cand["is_phrase"],
+                sent, cand["span_text"], cand["is_phrase"],
                 cand["translation"], src, tags=["ru-anki", "batch"],
             )
         except anki.AnkiError as e:
@@ -774,6 +783,48 @@ def decide(cand_id: int, body: DecisionIn):
     updated = store.resolve_candidate(cand_id, body.decision)
     backup.snapshot_async("decision")
     return {"candidate": updated, "anki": anki_result}
+
+
+@app.get("/candidates/{cand_id}/sentences")
+def candidate_sentence_options(cand_id: int):
+    """Ranked flashcard-sentence options for a candidate: every place the word is
+    said in the video, each LLM-cleaned into a proper sentence, best first. The
+    candidate's current sentence is included and ranked alongside."""
+    cand = store.get_candidate(cand_id)
+    if not cand:
+        raise HTTPException(404, "no such candidate")
+    span, ph = cand["span_text"], cand["is_phrase"]
+
+    windows = store.candidate_windows(cand_id)
+    cleaned = []
+    if windows:
+        try:
+            cleaned = llm.clean_sentences(span, [w["raw"] for w in windows])
+        except llm.LLMError:
+            cleaned = [""] * len(windows)
+
+    opts, seen = [], set()
+
+    def add(sentence, timestamp):
+        s = (sentence or "").strip()
+        if not s or "\x00" not in store.bold(s, span, ph, "\x00"):
+            return
+        key = store.norm(s)[:60]
+        if key in seen:
+            return
+        seen.add(key)
+        opts.append({"sentence": s, "timestamp": timestamp,
+                     "score": store.score_sentence(s, span)})
+
+    add(cand["sentence"], (cand["timestamp_start"] or "")[:8])
+    for w, cs in zip(windows, cleaned):
+        add(cs or store._best_sentence([w["raw"]], 0, span, store._stems(span)),
+            w["timestamp"])
+
+    opts.sort(key=lambda o: -o["score"])
+    for o in opts:
+        o["front_html"], _ = anki.front_html(o["sentence"], span, ph)
+    return {"span_text": span, "current": cand["sentence"], "options": opts[:8]}
 
 
 # ------------------------------------------------------------------ live search
@@ -862,7 +913,7 @@ def _translate_preview(video_id, span, subtitle_line_id=None, timestamp=None,
                        sentence=None):
     """Just the back-of-card content — no card is created. Fast single call."""
     ts = _resolve_ts(video_id, subtitle_line_id, timestamp)
-    ctx = (sentence or "").strip() or store.sentence_for(video_id, ts, span)
+    ctx = (sentence or "").strip() or store.context_for(video_id, ts, span)
     g = llm.translate_span(ctx, span)
     span_text = (g.get("span_text") or span).strip()
     is_phrase = bool(g.get("is_phrase") or len(span_text.split()) > 1)
@@ -885,7 +936,7 @@ def _make_one_card(video_id, subtitle_line_id, span, timestamp=None, sentence=No
     if span_text and translation is not None:
         # already translated in the modal — skip the LLM, just build the card
         ts = _resolve_ts(video_id, subtitle_line_id, timestamp)
-        sent = (sentence or "").strip() or store.sentence_for(video_id, ts, span_text)
+        sent = (sentence or "").strip() or store.context_for(video_id, ts, span_text)
         ph = bool(is_phrase) if is_phrase is not None else len(span_text.split()) > 1
     else:
         try:

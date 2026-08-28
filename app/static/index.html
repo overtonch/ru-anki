@@ -168,6 +168,21 @@
   .fq.uncommon { color:var(--muted); }
   .fq.rare { color:var(--ok); }
   .rec { color:var(--accent); font-weight:600; }
+  .pickbtn { display:block; margin:.15rem 0 .35rem; background:none; border:0; padding:0;
+             color:var(--accent); font-size:.76rem; cursor:pointer; }
+  .pickbtn.on { color:var(--muted); }
+  .sentopts { margin:.2rem 0 .55rem; display:flex; flex-direction:column; gap:.3rem; }
+  .sentopts .wait { font-size:.8rem; color:var(--muted); display:flex; gap:.4rem; align-items:center; }
+  .sentopt { display:flex; gap:.5rem; align-items:flex-start; padding:.45rem .55rem;
+             border:1px solid var(--line-soft); border-radius:var(--r-sm);
+             background:var(--card-2); cursor:pointer; }
+  .sentopt:has(input:checked) { border-color:var(--accent); background:var(--accent-soft); }
+  .sentopt input { margin-top:.2rem; flex:none; accent-color:var(--accent); }
+  .sentopt .so-body { flex:1; min-width:0; }
+  .sentopt .so-txt { font-size:.92rem; line-height:1.4; }
+  .sentopt .so-txt b { font-weight:750; }
+  .sentopt .so-meta { display:block; font-size:.68rem; color:var(--muted); margin-top:.2rem; }
+  .sentopt .tag { color:var(--ok); font-weight:700; text-transform:uppercase; letter-spacing:.04em; }
   .sortrow { font-size:.74rem; color:var(--muted); margin:.1rem 0 .3rem;
              display:flex; align-items:center; gap:.4rem; }
   #reviewPanel.collapsed .sortrow { display:none; }
@@ -1185,6 +1200,7 @@ function renderCard(c) {
     <div class="swipeflag right">✕ discard</div>
     ${clip}
     <div class="sent">${c.front_html}</div>
+    ${c.sentence_count > 1 ? `<button class="pickbtn">choose sentence · ${c.sentence_count} places heard</button>` : ''}
     <div class="tr">${escapeHtml(c.translation || '')}</div>
     <div class="meta">${c.is_phrase ? 'phrase' : 'word'} · ${escapeHtml(c.span_text)}${fq}${rec}${c.bolded ? '' : ' · ⚠ not bolded'}${badge}</div>
     <div class="decide">
@@ -1196,8 +1212,41 @@ function renderCard(c) {
   el.querySelector('.n').onclick = () => decide(c.id, 'no', el);
   const clipBtn = el.querySelector('.clip');
   if (clipBtn && secs != null) clipBtn.onclick = () => jumpTo(secs);
+  const pb = el.querySelector('.pickbtn');
+  if (pb) pb.onclick = () => pickSentence(c.id, el, c.span_text, c.is_phrase);
   attachSwipe(el, c.id);
   return el;
+}
+
+async function pickSentence(candId, el, span, isPhrase) {
+  const existing = el.querySelector('.sentopts');
+  if (existing) { existing.remove(); el.querySelector('.pickbtn').classList.remove('on'); return; }
+  const pb = el.querySelector('.pickbtn');
+  pb.classList.add('on');
+  const wrap = document.createElement('div');
+  wrap.className = 'sentopts';
+  wrap.innerHTML = '<div class="wait"><span class="spin"></span> reading every place it’s said…</div>';
+  pb.after(wrap);
+  let d;
+  try { d = await api(`/candidates/${candId}/sentences`); }
+  catch (e) { wrap.innerHTML = `<div class="wait">couldn’t load — ${escapeHtml(e.message)}</div>`; return; }
+  if (!d.options || !d.options.length) { wrap.innerHTML = '<div class="wait">no good alternatives found</div>'; return; }
+  const cur = (el._sentence || d.current || '').trim();
+  wrap.innerHTML = d.options.map((o, i) => {
+    const chosen = o.sentence.trim() === cur || (!cur && i === 0);
+    return `<label class="sentopt">
+      <input type="radio" name="so${candId}" value="${i}"${chosen ? ' checked' : ''}>
+      <span class="so-body"><span class="so-txt">${o.front_html}</span>
+        <span class="so-meta">${i === 0 ? '<b class="tag">best</b> ' : ''}${escapeHtml(o.timestamp || '')}</span></span>
+    </label>`;
+  }).join('');
+  const apply = i => {
+    el._sentence = d.options[i].sentence;
+    el.querySelector('.sent').innerHTML = d.options[i].front_html;
+  };
+  const checked = wrap.querySelector('input:checked');
+  if (checked) apply(+checked.value);
+  wrap.querySelectorAll('input').forEach(inp => inp.onchange = () => apply(+inp.value));
 }
 
 /* swipe right = make card, left = discard */
@@ -1205,6 +1254,7 @@ function attachSwipe(el, id) {
   let x0 = null, y0 = 0, dx = 0, active = false, committed = false;
   el.addEventListener('pointerdown', e => {
     if (el.dataset.busy || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    if (e.target.closest('.sentopts, .pickbtn, .clip')) return;   // let the controls work
     x0 = e.clientX; y0 = e.clientY; dx = 0; active = committed = false;
     el.style.transition = 'none';
   });
@@ -1253,7 +1303,7 @@ async function swipeCommit(el, id, decision, dx) {
   try {
     await api(`/candidates/${id}/decision`, {
       method:'POST', headers:{'content-type':'application/json'},
-      body: JSON.stringify({decision})
+      body: JSON.stringify({ decision, sentence: decision === 'yes' ? (el._sentence || null) : null })
     });
     setTimeout(() => collapseGap(el), 200);
   } catch (e) {
@@ -1285,7 +1335,7 @@ async function decide(id, decision, el) {
     await Promise.all([
       api(`/candidates/${id}/decision`, {
         method:'POST', headers:{'content-type':'application/json'},
-        body: JSON.stringify({decision})
+        body: JSON.stringify({ decision, sentence: decision === 'yes' ? (el._sentence || null) : null })
       }),
       sleep(140),                              // let the flash register
     ]);

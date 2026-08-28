@@ -267,6 +267,192 @@ def get_subtitle_line(line_id):
     return dict(r) if r else None
 
 
+_SENT_SPLIT = _re.compile(r"(?<=[.!?…])\s+")
+_CLAUSE_SPLIT = _re.compile(r"\s*[—–,;:]\s+")
+_WORD_RE = _re.compile(r"[А-Яа-яЁёA-Za-z]+")
+_STARTS_MID = _re.compile(r"^(и|а|но|что|чтобы|как|это|то|же|ну|вот|потому|поэтому|или|да)\b")
+
+
+def _stems(span):
+    return [s for s in (_legacy._stem(w) for w in (span or "").split()) if len(s) >= 3]
+
+
+def _contains(text, span, stems):
+    tl = norm(text)
+    if norm(span) and norm(span) in tl:
+        return True
+    toks = _re.split(r"[^а-яёa-z-]+", tl)
+    return any(any(tok.startswith(s) for s in stems) for tok in toks if tok)
+
+
+def _pieces(texts, lo, hi):
+    blob = _re.sub(r"\s+", " ", " ".join(texts[max(0, lo):hi])).strip()
+    return [p.strip() for p in _SENT_SPLIT.split(blob) if p.strip()]
+
+
+def _best_sentence(texts, center, span, stems):
+    """One readable sentence around line `center` containing `span` — extend a
+    fragment with its neighbour, trim a run-on to the clause around the span."""
+    sents = _pieces(texts, center - 2, center + 4)
+    i = next((k for k, s in enumerate(sents) if _contains(s, span, stems)), None)
+    if i is None:
+        return " ".join(texts[max(0, center):center + 2]).strip()
+    hit = sents[i]
+    if len(hit.split()) < 5:                      # fragment — glue a neighbour
+        nb = sents[i + 1] if i + 1 < len(sents) else (sents[i - 1] if i else "")
+        if nb:
+            hit = f"{hit} {nb}" if i + 1 < len(sents) else f"{nb} {hit}"
+    if len(hit.split()) > 22:                     # run-on — trim to a clause window
+        cl = _CLAUSE_SPLIT.split(hit)
+        j = next((k for k, c in enumerate(cl) if _contains(c, span, stems)), None)
+        if j is not None:
+            hit = ", ".join(cl[max(0, j - 1):j + 2]).strip(" ,")
+    return hit
+
+
+def context_for(video_id, timestamp, span):
+    """Improved `sentence_for` — a proper sentence, not a stitched fragment."""
+    c = connect()
+    rows = c.execute(
+        "SELECT start_time, text FROM subtitle_lines WHERE video_id=? ORDER BY id",
+        (video_id,)).fetchall()
+    c.close()
+    if not rows:
+        return ""
+    texts = [r["text"] for r in rows]
+    times = [r["start_time"] or "" for r in rows]
+    stems = _stems(span)
+    anchor = next((i for i, t in enumerate(times) if timestamp and t >= timestamp),
+                  len(times) - 1)
+    center = None
+    for off in range(14):
+        for i in (anchor - off, anchor + off):
+            if 0 <= i < len(texts) and _contains(texts[i], span, stems):
+                center = i
+                break
+        if center is not None:
+            break
+    if center is None:
+        center = next((i for i, t in enumerate(texts) if _contains(t, span, stems)), anchor)
+    return _best_sentence(texts, center, span, stems)
+
+
+def _score_sentence(text, span, stems, rank_of):
+    """Higher = better flashcard context: right length, common surrounding
+    vocab, complete thought, target not jammed against an edge."""
+    words = _WORD_RE.findall(text)
+    n = len(words)
+    if n == 0:
+        return -1e9
+    s = -abs(n - 10) * 0.5
+    if n < 5:
+        s -= 7
+    if n > 20:
+        s -= (n - 20) * 1.6
+    tlem = lemma_key(span)
+    ranks = []
+    for w in words:
+        lk = lemma_key(w)
+        if lk == tlem:
+            continue
+        ranks.append(rank_of.get(lk) or 55000)
+    if ranks:
+        s -= sum(1 for r in ranks if r > 25000) * 2.2       # too many other rare words
+        s -= (sum(ranks) / len(ranks)) / 9000
+    if text[-1:] in ".!?…":
+        s += 3
+    if text[:1].isupper():
+        s += 1.5
+    if _STARTS_MID.match(norm(text)):
+        s -= 2.5
+    low = [norm(w) for w in words]
+    pos = next((k for k, w in enumerate(low)
+                if norm(span) in w or any(w.startswith(st) for st in stems)), None)
+    if pos is not None and 1 <= pos <= n - 2:
+        s += 2
+    return s
+
+
+def transcript_texts(video_id):
+    c = connect()
+    rows = c.execute("SELECT text FROM subtitle_lines WHERE video_id=? ORDER BY id",
+                     (video_id,)).fetchall()
+    c.close()
+    return [r["text"] for r in rows]
+
+
+def stem_line_index(texts):
+    """stem -> set(line indices) — for a cheap 'how many times does this word
+    appear' count without re-scanning the transcript per candidate."""
+    idx = {}
+    for i, t in enumerate(texts):
+        for tok in _re.split(r"[^а-яёa-z-]+", norm(t)):
+            if len(tok) >= 3:
+                idx.setdefault(_legacy._stem(tok), set()).add(i)
+    return idx
+
+
+def occurrence_count(span, idx):
+    lines = set()
+    for st in _stems(span):
+        lines |= idx.get(st, set())
+    return len(lines)
+
+
+def rank_map(words):
+    """{lemma: freq rank} for a set of lemmas, one query."""
+    words = {w for w in words if w}
+    out = {}
+    if not words:
+        return out
+    c = connect()
+    q = ",".join("?" * len(words))
+    for r in c.execute(
+        f"SELECT normalized_text, rank FROM freq WHERE normalized_text IN ({q})",
+        tuple(words),
+    ):
+        out[r["normalized_text"]] = r["rank"]
+    c.close()
+    return out
+
+
+def score_sentence(text, span):
+    """Public: higher = better flashcard context."""
+    stems = _stems(span)
+    ranks = rank_map({lemma_key(w) for w in _WORD_RE.findall(text)})
+    return round(_score_sentence(text, span, stems, ranks), 1)
+
+
+def candidate_windows(cand_id, limit=6):
+    """Raw context windows around each distinct occurrence of the candidate's
+    word across the video — for the LLM to clean into flashcard sentences.
+    -> [{"raw": str, "timestamp": "HH:MM:SS"}]."""
+    cand = get_candidate(cand_id)
+    if not cand:
+        return []
+    span = cand["span_text"]
+    stems = _stems(span)
+    c = connect()
+    rows = c.execute(
+        "SELECT start_time, text FROM subtitle_lines WHERE video_id=? ORDER BY id",
+        (cand["video_id"],)).fetchall()
+    c.close()
+    texts = [r["text"] for r in rows]
+    times = [r["start_time"] or "" for r in rows]
+
+    out, last = [], -99
+    for i, t in enumerate(texts):
+        if not _contains(t, span, stems) or i - last < 3:
+            continue
+        raw = _re.sub(r"\s+", " ",
+                      " ".join(texts[max(0, i - 2):i + 3])).strip()
+        out.append({"raw": raw, "timestamp": (times[i] or "")[:8]})
+        last = i
+        if len(out) >= limit:
+            break
+    return out
+
+
 def sentence_for(video_id, timestamp, span):
     """Rebuild a readable sentence for `span` from the indexed transcript, near
     `timestamp`. The extractor no longer echoes sentences (speed) — we stitch a
@@ -628,6 +814,13 @@ def delete_text(text_id):
     c.commit()
     c.close()
     return n
+
+
+def update_candidate_sentence(cand_id, sentence):
+    c = connect()
+    c.execute("UPDATE candidates SET sentence=? WHERE id=?", (sentence, cand_id))
+    c.commit()
+    c.close()
 
 
 def resolve_candidate(cand_id, decision):

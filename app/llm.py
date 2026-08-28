@@ -374,3 +374,27 @@ def translate_span(sentence, span, model=None):
         text, _ = run_claude(prompt, TRANSLATE_SYSTEM,
                              model=model or TRANSLATE_MODEL, timeout=60)
         return _parse_obj(text)
+
+
+_CLEAN_SYSTEM = """You are given several Russian ASR excerpts (rough auto-caption text). Each contains the word or phrase the learner is studying, possibly in an inflected form.
+
+For EACH excerpt, output ONE line: the single natural sentence that contains that word, lightly cleaned — restore capitalization and punctuation, fix obvious ASR mis-hearings and word-boundary errors, drop stray filler, keep it faithful and at most ~16 words. It MUST still contain a form of the target word. Do not translate, do not add information, do not merge excerpts.
+
+Output exactly one cleaned sentence per input line, in the same order, numbered "1. ", "2. " … and nothing else."""
+
+
+def clean_sentences(word, excerpts, model=None):
+    """Clean each raw excerpt into one flashcard sentence containing `word`.
+    Returns a list aligned to `excerpts` (best-effort; missing -> '')."""
+    if not excerpts:
+        return []
+    numbered = "\n".join(f"{i + 1}. {e}" for i, e in enumerate(excerpts))
+    prompt = f"Target word: {word}\n\nExcerpts:\n{numbered}"
+    text, _ = run_claude(prompt, _CLEAN_SYSTEM,
+                         model=model or TRANSLATE_MODEL, timeout=45)
+    by_num = {}
+    for ln in text.splitlines():
+        m = re.match(r"\s*(\d+)[.)]\s*(.+)", ln.strip())
+        if m:
+            by_num[int(m.group(1))] = m.group(2).strip().strip('"')
+    return [by_num.get(i + 1, "") for i in range(len(excerpts))]
