@@ -2541,9 +2541,18 @@ async function renderMediaRow(id) {
       ${DL_ICON} ${part > 0 ? 'Resume saving' : 'Save to phone'}${estMb ? ` · ~${estMb} MB` : ''}</button>`;
     return;
   }
-  const note = v.youtube_id ? (estMb ? ` · ~${estMb} MB` : ' · 360p') : ' · needed to watch this source';
+  let q = 240; try { q = +(localStorage.getItem('dlq') || 240); } catch {}
+  const perMin = { 144: 1.4, 240: 2.3, 360: 3.4 }[q] || 2.3;
+  const est = v.duration ? Math.round(v.duration / 60 * perMin) : null;
   row.innerHTML = `<button class="btn sm ghost" id="dlBtn" onclick="downloadMedia(${id})">
-    ${DL_ICON} Download video${note}</button>`;
+      ${DL_ICON} Download${est ? ` · ~${est} MB` : ''}</button>
+    <select class="minisel" id="dlQ" onchange="try{localStorage.setItem('dlq',this.value)}catch{};renderMediaRow(${id})"
+      style="margin-left:.5rem">
+      <option value="144"${q===144?' selected':''}>144p</option>
+      <option value="240"${q===240?' selected':''}>240p</option>
+      <option value="360"${q===360?' selected':''}>360p</option>
+    </select>
+    ${!v.youtube_id ? '<span class="pmeta" style="display:block;margin-top:.3rem">needed to watch this source · captions render separately, so low res is fine</span>' : ''}`;
 }
 
 async function downloadMedia(id) {
@@ -2551,10 +2560,11 @@ async function downloadMedia(id) {
   mediaDL[id] = true;
   mediaCancel[id] = false;
   renderMediaProgress(id, 'server', 0);
+  let q = 240; try { q = +(localStorage.getItem('dlq') || 240); } catch {}
   try {
     let s = await api(`/videos/${id}/download`).catch(() => ({ state: 'idle' }));
     if (s.state === 'idle' || s.state === 'error')
-      s = await api(`/videos/${id}/download`, { method: 'POST' });   // idempotent server-side
+      s = await api(`/videos/${id}/download?q=${q}`, { method: 'POST' });   // idempotent server-side
     for (;;) {
       if (mediaCancel[id]) throw new Error('cancelled');
       s = await api(`/videos/${id}/download`);
