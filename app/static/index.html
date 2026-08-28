@@ -292,9 +292,10 @@
   /* watch view */
   .watch-cta { width:100%; margin:.4rem 0 .2rem; }
   #watchView { position:fixed; inset:0; background:var(--bg); z-index:15;
-               display:flex; flex-direction:column;
+               display:flex; flex-direction:column; overflow:hidden; overscroll-behavior:none;
                padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
                touch-action:manipulation; }   /* no double-tap zoom in the player */
+  html.watching, html.watching body { overflow:hidden; overscroll-behavior:none; }
   #watchView button, #watchView .tap-layer, #watchView .cap-overlay,
   #watchView .capw { touch-action:manipulation; }
   #watchView .transcript { touch-action:pan-y; }
@@ -393,10 +394,12 @@
                            border:0; color:var(--accent); font-size:.76rem; cursor:pointer; text-align:left; }
 
   /* immersive / fullscreen watch — video fills the view, caption stays on top */
-  #watchView.fs { padding:0; background:#000; }
+  #watchView.fs { padding:0; background:#000; height:100dvh;
+                  overflow:hidden; overscroll-behavior:none; }
   #watchView.fs .watchbar, #watchView.fs .watchhint, #watchView.fs .transcript,
   #watchView.fs .wctrls { display:none; }
-  #watchView.fs .player-wrap { flex:1; aspect-ratio:auto; height:100%; }
+  #watchView.fs .player-wrap { flex:1; aspect-ratio:auto; height:100%;
+                               touch-action:none; }   /* swipe owns all touch here */
   #watchView.fs .cap-overlay { bottom:4.4rem; }
   /* while paused the scrubber owns the bottom strip — lift captions clear of it */
   #watchView.paused .cap-overlay { bottom:3rem; }
@@ -1856,6 +1859,7 @@ async function openWatch(id, seekTo) {
   WCANDS = data.cands || {};
   WDATA = data;
   wActive = -1; WP = null; audioMode = false;
+  document.documentElement.classList.add('watching');
   $('#detailView').hidden = true;
   $('#watchView').hidden = false;
   $('#watchView').classList.remove('audiomode');
@@ -2484,6 +2488,7 @@ function setupMediaSession(meta) {
 
 function closeWatch() {
   savePos();
+  document.documentElement.classList.remove('watching');
   clearInterval(capTimer); capTimer = null;
   clearTimeout(ctrlTimer);
   if (WP) { try { WP.pause(); } catch {} }
@@ -2563,7 +2568,10 @@ function attachPlayerSwipe() {
     if (x0 === null || vbail) return;
     const dx = e.clientX - x0, dy = e.clientY - y0;
     if (!moved && Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
-    if (!moved && Math.abs(dy) > Math.abs(dx) * 2 && Math.abs(dy) > 26) { vbail = true; return; }  // clearly vertical
+    // in fullscreen there's nothing to scroll — every drag is a seek. Otherwise
+    // a clearly-vertical drag is a scroll / the iOS home swipe, so let it go.
+    const inFs = $('#watchView').classList.contains('fs');
+    if (!moved && !inFs && Math.abs(dy) > Math.abs(dx) * 2 && Math.abs(dy) > 26) { vbail = true; return; }
     moved = true;
     pw.classList.add('swiping');
     try { pw.setPointerCapture(e.pointerId); } catch {}
@@ -2572,11 +2580,12 @@ function attachPlayerSwipe() {
   const end = e => {
     pw.classList.remove('swiping');
     try { pw.releasePointerCapture(e.pointerId); } catch {}
+    const inFs = $('#watchView').classList.contains('fs');
     const live = x0 !== null && !vbail;
     const dx = live ? e.clientX - x0 : 0, dy = live ? e.clientY - y0 : 0, dt = Date.now() - t0;
     x0 = null;
     // decide at release from the net displacement — symmetric for both directions
-    if (live && Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) && dt < 900 && WCUES.length) {
+    if (live && Math.abs(dx) > 40 && (inFs || Math.abs(dx) > Math.abs(dy)) && dt < 1100 && WCUES.length) {
       justSwiped = Date.now();
       const dir = dx > 0 ? -1 : 1;   // swipe right → previous line, swipe left → next line
       seekLine(dir); flashSeek(dir); bumpCtrls();
