@@ -314,21 +314,28 @@
 
   /* immersive / fullscreen watch — video fills the view, caption stays on top */
   #watchView.fs { padding:0; background:#000; }
-  /* devices that won't honour screen.orientation.lock (iOS): rotate the view by hand */
-  @media (orientation: portrait) {
-    #watchView.fs.rotate { inset:auto; width:100vh; height:100vw;
-      top:calc((100vh - 100vw) / 2); left:calc((100vw - 100vh) / 2);
-      transform:rotate(90deg); transform-origin:center center; }
-  }
   #watchView.fs .watchbar, #watchView.fs .watchhint, #watchView.fs .transcript,
   #watchView.fs .wctrls { display:none; }
   #watchView.fs .player-wrap { flex:1; aspect-ratio:auto; height:100%; }
   #watchView.fs .cap-overlay { bottom:4.4rem; }
   #watchView.fs .cap-overlay:not(:empty) { font-size:clamp(1.05rem, 3.6vh, 1.9rem); }
 
+  /* "turn your phone" nudge — iOS can't rotate for us */
+  .rotate-hint { display:none; }
+  #watchView.fs.needrotate .rotate-hint {
+      display:flex; flex-direction:column; align-items:center; gap:.6rem;
+      position:absolute; left:50%; top:calc(env(safe-area-inset-top) + .8rem);
+      transform:translateX(-50%); z-index:5; color:#fff;
+      background:rgba(16,17,20,.62); -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
+      border:1px solid rgba(255,255,255,.16); border-radius:.8rem; padding:.7rem 1rem;
+      font-size:.8rem; text-align:center; pointer-events:none; }
+  .rotate-hint svg { width:1.6rem; height:1.6rem; fill:currentColor;
+      animation:rotnudge 1.8s ease-in-out infinite; }
+  @keyframes rotnudge { 0%,60%,100% { transform:rotate(0); } 30% { transform:rotate(90deg); } }
+
   .fs-seek, .fs-exit { display:none; }
   #watchView.fs .fs-seek {
-      display:flex; align-items:center; justify-content:center; z-index:4;
+      display:flex; align-items:center; justify-content:center; z-index:6;
       position:absolute; bottom:calc(1.1rem + env(safe-area-inset-bottom));
       width:3rem; height:3rem; border-radius:50%; color:#fff;
       background:rgba(16,17,20,.4); border:1px solid rgba(255,255,255,.14);
@@ -338,15 +345,17 @@
   #watchView.fs .fs-seek:active { background:var(--accent); transform:scale(.92); }
   #watchView.fs .fs-seek.prev { left:calc(1rem + env(safe-area-inset-left)); }
   #watchView.fs .fs-seek.next { right:calc(1rem + env(safe-area-inset-right)); }
-  #watchView.fs.hidectrls .fs-seek { opacity:0; pointer-events:none; }
-  #watchView.fs.paused .fs-exit {
-      display:flex; align-items:center; justify-content:center; z-index:4; position:absolute;
+  #watchView.fs .fs-exit {
+      display:flex; align-items:center; justify-content:center; z-index:6; position:absolute;
       top:calc(.9rem + env(safe-area-inset-top)); right:calc(.9rem + env(safe-area-inset-right));
       width:2.6rem; height:2.6rem; border-radius:50%; color:#fff;
-      background:rgba(18,18,20,.42); border:1px solid rgba(255,255,255,.16);
+      background:rgba(18,18,20,.5); border:1px solid rgba(255,255,255,.18);
       -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
-      box-shadow:0 4px 16px rgba(0,0,0,.3); }
-  #watchView.fs.paused .fs-exit svg { width:1.3rem; height:1.3rem; }
+      box-shadow:0 4px 16px rgba(0,0,0,.3); transition:opacity .3s ease, transform .1s; }
+  #watchView.fs .fs-exit svg { width:1.3rem; height:1.3rem; }
+  #watchView.fs .fs-exit:active { background:var(--accent); transform:scale(.92); }
+  #watchView.fs.hidectrls .fs-seek,
+  #watchView.fs.hidectrls .fs-exit { opacity:0; pointer-events:none; }
 
   /* landscape on a phone, not fullscreen: give the video the height, transcript the rest */
   @media (orientation:landscape) and (max-height:540px) {
@@ -449,8 +458,12 @@
     </div>
     <div class="player-wrap">
       <div id="ytplayer"></div>
-      <button class="tap-layer" onclick="togglePlay()" aria-label="play / pause"></button>
+      <button class="tap-layer" onclick="tapVideo()" aria-label="play / pause"></button>
       <div id="capOverlay" class="cap-overlay"></div>
+      <div class="rotate-hint">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 21.5C4 20 1.5 16.5 1.5 12.5H0l3-3 3 3H4.5c0 3.5 2 6.4 5 7.8zM16.5 2.5C20 4 22.5 7.5 22.5 11.5H24l-3 3-3-3h1.5c0-3.5-2-6.4-5-7.8zM12 7.3l4.7 4.7L12 16.7 7.3 12z"/></svg>
+        turn your phone sideways
+      </div>
       <button class="fs-seek prev" onclick="seekLine(-1)" aria-label="previous line">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6a1 1 0 0 1 2 0v4.6l7.5-4.9A1 1 0 0 1 19 6.5v11a1 1 0 0 1-1.5.8L10 13.4V18a1 1 0 0 1-2 0z"/></svg>
       </button>
@@ -1354,7 +1367,7 @@ function togglePlay() {
 }
 
 /* ---- fullscreen / immersive ---- */
-let fsManual = false, ctrlTimer = null;
+let fsManual = false, ctrlTimer = null, orientationLocked = false;
 const VP_DEFAULT = 'width=device-width, initial-scale=1, viewport-fit=cover';
 const VP_LOCKED = VP_DEFAULT + ', maximum-scale=1, user-scalable=no';
 function enterFs() {
@@ -1362,21 +1375,25 @@ function enterFs() {
   el.classList.add('fs');
   $('#vp').setAttribute('content', VP_LOCKED);   // no pinch-zoom while immersive
   if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
-  let locked = false;
+  orientationLocked = false;
   try {
     const p = screen.orientation && screen.orientation.lock &&
-              screen.orientation.lock('landscape');
-    if (p && p.then) { locked = true; p.catch(() => applyRotateFallback()); }
+              screen.orientation.lock('landscape');   // works on Android; not iOS
+    if (p && p.then) p.then(() => { orientationLocked = true; updateRotateHint(); })
+                      .catch(() => {});
   } catch {}
-  if (!locked) applyRotateFallback();   // iOS etc. — can't lock, rotate with CSS
+  updateRotateHint();
   bumpCtrls();
 }
-function applyRotateFallback() {
-  $('#watchView').classList.toggle('rotate',
-    matchMedia('(orientation: portrait)').matches);
+function updateRotateHint() {
+  // iOS can't rotate for us — nudge the user to turn the phone instead
+  const el = $('#watchView');
+  const portrait = matchMedia('(orientation: portrait)').matches;
+  el.classList.toggle('needrotate',
+    el.classList.contains('fs') && portrait && !orientationLocked);
 }
 function exitFs() {
-  $('#watchView').classList.remove('fs', 'hidectrls', 'rotate');
+  $('#watchView').classList.remove('fs', 'hidectrls', 'needrotate');
   $('#vp').setAttribute('content', VP_DEFAULT);
   clearTimeout(ctrlTimer);
   try { screen.orientation && screen.orientation.unlock && screen.orientation.unlock(); } catch {}
@@ -1386,12 +1403,18 @@ function toggleFs() {
   fsManual = true;
   $('#watchView').classList.contains('fs') ? exitFs() : enterFs();
 }
-function bumpCtrls() {   // reveal the seek buttons, then fade them while playing
+function tapVideo() {   // tap reveals hidden controls first, otherwise play/pause
+  const w = $('#watchView');
+  if (w.classList.contains('fs') && w.classList.contains('hidectrls')) { bumpCtrls(); return; }
+  togglePlay();
+}
+function bumpCtrls() {   // reveal seek + exit buttons, then fade them while playing
   const w = $('#watchView');
   if (!w.classList.contains('fs')) return;
   w.classList.remove('hidectrls');
   clearTimeout(ctrlTimer);
-  if (WP && !WP.paused()) ctrlTimer = setTimeout(() => w.classList.add('hidectrls'), 2800);
+  if (WP && !WP.paused() && !w.classList.contains('needrotate'))
+    ctrlTimer = setTimeout(() => w.classList.add('hidectrls'), 2800);
 }
 function cueIdxAt(t) {
   let lo = 0, hi = WCUES.length - 1, idx = -1;
@@ -1795,7 +1818,10 @@ async function hardRefresh() {
 function navBack() {
   if (!$('#inlineDecide').hidden) { closeInline(true); return true; }
   if (!$('#modalWrap').hidden) { closeCardModal(); return true; }
-  if (!$('#watchView').hidden) { closeWatch(); return true; }
+  if (!$('#watchView').hidden) {
+    if ($('#watchView').classList.contains('fs')) { fsManual = true; exitFs(); return true; }
+    closeWatch(); return true;
+  }
   if (!$('#detailView').hidden) { showList(); return true; }
   return false;
 }
@@ -1846,7 +1872,8 @@ matchMedia('(orientation: landscape)').addEventListener('change', e => {
   if ($('#watchView').hidden) return;
   if (e.matches && !fsManual) enterFs();
   else if (!e.matches && !fsManual) exitFs();
-  if ($('#watchView').classList.contains('fs')) applyRotateFallback();
+  updateRotateHint();
+  if ($('#watchView').classList.contains('fs')) bumpCtrls();
 });
 probeHealth();
 refreshQueuePill();
