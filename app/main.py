@@ -543,19 +543,26 @@ async def video_frame(video_id: int, t: float):
 
 
 @app.get("/videos/{video_id}/clip")
-async def video_clip(video_id: int, t: float, pad: float = 2.5):
-    """~5s of audio around `t` seconds — the listening clip on a review card."""
+async def video_clip(video_id: int, t: float, w: str = ""):
+    """The listening clip for a review card. `t` is the stored (line-start)
+    timestamp; `w` is the target lemma — when given, the window is snapped to
+    the transcript line that actually contains the word and spans it fully."""
     v = store.get_video(video_id)
     if not v:
         raise HTTPException(404, "no such video")
-    pad = max(1.0, min(6.0, pad))
-    out = os.path.join(ytdlp.CLIP_DIR, f"{video_id}-{max(0, int(t))}-{int(pad * 10)}.m4a")
+    if w:
+        start, dur = store.clip_window(video_id, w, max(0.0, t))
+    else:
+        start, dur = max(0.0, t - 1.5), 6.5
+    out = os.path.join(ytdlp.CLIP_DIR,
+                       f"{video_id}-{int(start * 10)}-{int(dur * 10)}.m4a")
     if not os.path.exists(out):
         src, headers = await _media_src(video_id, v)
         async with _CLIP_SEM:
             if not os.path.exists(out):
                 try:
-                    await asyncio.to_thread(ytdlp.extract_clip, src, t, out, headers, pad)
+                    await asyncio.to_thread(ytdlp.extract_clip, src, start, dur,
+                                            out, headers)
                 except Exception as e:  # noqa: BLE001
                     raise HTTPException(502, f"clip extract failed ({str(e)[:150]})")
     return FileResponse(out, media_type="audio/mp4",

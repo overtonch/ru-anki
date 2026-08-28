@@ -461,6 +461,43 @@ def occurrence_count(lemma, video_id):
     return len(set(_lemma_index(video_id)[2].get(lemma_key(lemma), ())))
 
 
+_HMS_RE = _re.compile(r"(?:(\d+):)?(\d{1,2}):(\d{2}(?:\.\d+)?)")
+
+
+def _to_secs(hms):
+    m = _HMS_RE.match(str(hms or ""))
+    if not m:
+        return None
+    return int(m.group(1) or 0) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+
+
+def clip_window(video_id, normalized_text, approx_sec, lead=1.2, trail=1.5):
+    """Where the audio clip for a card should actually start/run. The stored
+    timestamp is only the transcript LINE start (and the LLM sometimes tags a
+    neighbouring line), so snap to the line that really contains this lemma
+    nearest `approx_sec`, then span that line plus a little trailing context.
+    -> (start_sec, duration_sec)."""
+    try:
+        texts, times, idx = _lemma_index(video_id)
+    except Exception:  # noqa: BLE001
+        return max(0.0, approx_sec - lead), lead + 5.0
+    secs = [_to_secs(t) for t in times]
+    lines = [i for i in idx.get(lemma_key(normalized_text or ""), [])
+             if secs[i] is not None]
+    if not lines:                       # phrase / lemma not indexed → nearest line
+        lines = [i for i, s in enumerate(secs) if s is not None]
+    if not lines:
+        return max(0.0, approx_sec - lead), lead + 5.0
+    hit = min(lines, key=lambda i: abs(secs[i] - approx_sec))
+    start = max(0.0, secs[hit] - lead)
+    # end = start of the line two positions on, if that's a sane gap; else fixed
+    nxt = next((secs[j] for j in range(hit + 1, min(hit + 3, len(secs)))
+                if secs[j] is not None and secs[j] > secs[hit]), None)
+    end = (nxt + trail) if (nxt and nxt - secs[hit] <= 10) else secs[hit] + 6.0
+    dur = min(12.0, max(3.0, end - start))
+    return start, dur
+
+
 def rank_map(words):
     """{lemma: freq rank} for a set of lemmas, one query."""
     words = {w for w in words if w}

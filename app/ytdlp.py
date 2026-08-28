@@ -120,17 +120,20 @@ def extract_frame(src, seconds, out_path, headers=None):
     return out_path
 
 
-def extract_clip(src, seconds, out_path, headers=None, pad=2.5):
-    """~2*pad seconds of mono AAC audio centred on `seconds` — the listening clip
-    on a review card. `src` is a local file or an http(s) URL."""
+def extract_clip(src, start, dur, out_path, headers=None):
+    """`dur` seconds of mono AAC audio starting at `start` — the listening clip
+    on a review card. `src` is a local file or an http(s) URL. Uses a coarse
+    seek to just before `start` then an accurate seek, so the cut is sample-
+    accurate without decoding the whole file up to `start`."""
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    start = max(0.0, float(seconds) - pad)
-    args = [FFMPEG, "-nostdin", "-y", "-ss", f"{start:.2f}"]
+    start = max(0.0, float(start))
+    coarse = max(0.0, start - 4.0)
+    args = [FFMPEG, "-nostdin", "-y", "-ss", f"{coarse:.2f}"]
     if headers:
         args += ["-headers", "".join(f"{k}: {v}\r\n" for k, v in headers.items())]
-    args += ["-i", src, "-t", f"{pad * 2:.2f}", "-vn", "-ac", "1",
-             "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart",
-             "-f", "mp4", out_path]
+    args += ["-i", src, "-ss", f"{start - coarse:.2f}", "-t", f"{float(dur):.2f}",
+             "-vn", "-ac", "1", "-c:a", "aac", "-b:a", "96k",
+             "-movflags", "+faststart", "-f", "mp4", out_path]
     r = subprocess.run(args, capture_output=True, text=True, timeout=60)
     if r.returncode != 0 or not os.path.exists(out_path) or os.path.getsize(out_path) < 200:
         raise RuntimeError("ffmpeg clip extract failed: " + (r.stderr or "")[-300:])

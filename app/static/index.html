@@ -1992,7 +1992,7 @@ async function flushSrs() {
 
 function studyCard() { return STUDY && STUDY.queue[STUDY.i]; }
 function clipUrl(c) { return c && c.seconds != null && c.video_id != null
-  ? `/videos/${c.video_id}/clip?t=${Math.round(c.seconds)}` : null; }
+  ? `/videos/${c.video_id}/clip?t=${Math.round(c.seconds)}&w=${encodeURIComponent(c.normalized_text || '')}` : null; }
 let STUDY_AUDIO_FIRST = (() => { try { return localStorage.getItem('studyAudioFirst') === '1'; } catch { return false; } })();
 function setAudioFirst(on) {
   STUDY_AUDIO_FIRST = on;
