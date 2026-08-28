@@ -293,6 +293,27 @@ def card_lemmas():
     return {r["normalized_text"] for r in rows}
 
 
+def recent_discards(limit=50):
+    """Surface forms the learner explicitly discarded (rejected as too easy /
+    not useful), newest first — a difficulty-calibration signal for extraction."""
+    c = connect()
+    rows = c.execute(
+        """SELECT c.span_text FROM candidates c
+           JOIN resolved_words r ON r.normalized_text = c.normalized_text
+           WHERE c.status = 'discarded' AND r.reason = 'known'
+           ORDER BY c.id DESC LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    c.close()
+    seen, out = set(), []
+    for r in rows:
+        s = (r["span_text"] or "").strip()
+        if s and s.lower() not in seen:
+            seen.add(s.lower())
+            out.append(s)
+    return out
+
+
 def resolved_words_list():
     """Surface forms of everything already decided — fed to the extractor so it
     doesn't re-propose them. Small and user-specific (the stoplist is applied

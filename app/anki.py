@@ -1,7 +1,9 @@
 """AnkiConnect client. Desktop Anki must be running with the AnkiConnect add-on
 (localhost:8765) for any card creation to work."""
+import html
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -18,9 +20,9 @@ DECK = os.environ.get("ANKI_DECK", "Russian::YouTube mining")
 MODEL_NAME = "RU context recognition"
 
 _CSS = (
-    ".card{font-size:20px;text-align:center;color:#222;background:#fff}"
-    ".sent{margin:14px}.tr{font-size:22px;color:#222}"
-    ".src{margin-top:18px;font-size:13px;color:#999}"
+    ".card{font-size:20px;text-align:center}"          # inherit Anki's theme (light/night)
+    ".sent{margin:14px}.tr{font-size:22px}"
+    ".src{margin-top:18px;font-size:13px;opacity:.6}.src a{color:inherit}"
     "b{font-weight:700;color:inherit}"
 )
 _FRONT = '<div class="sent">{{Front}}</div>'
@@ -70,6 +72,26 @@ def ensure_model():
 def ensure_deck(deck=DECK):
     if deck not in (invoke("deckNames") or []):
         invoke("createDeck", deck=deck)
+
+
+_HMS = re.compile(r"(\d+):(\d\d):(\d\d)")
+
+
+def source_html(title, channel, url, timestamp):
+    """The Source field: 'channel · title · ▶ 1:16' where the whole thing links
+    to the exact moment in the video."""
+    link = url or ""
+    label = ""
+    m = _HMS.search(timestamp or "")
+    if m:
+        secs = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
+        sep = "&" if "?" in link else "?"
+        link = f"{link}{sep}t={secs}s"
+        mm, ss = divmod(secs, 60)
+        label = f" · ▶ {mm}:{ss:02d}"
+    parts = " · ".join(p for p in (channel, title) if p)
+    inner = html.escape(parts) + label
+    return f'<a href="{html.escape(link)}">{inner}</a>' if link else inner
 
 
 def front_html(sentence, span, is_phrase):

@@ -257,6 +257,7 @@ def _run_extraction(video_id, model):
         v = store.get_video(video_id)
         transcript = ytdlp.transcript_block(v["raw_subs"])
         decided = store.resolved_words_list()
+        discards = store.recent_discards()
         added = {"n": 0}
 
         def on_chunk(items):
@@ -274,7 +275,7 @@ def _run_extraction(video_id, model):
 
         items, errors, usage = llm.extract_candidates(
             v["title"], transcript, decided, model=model,
-            progress=prog, on_chunk=on_chunk)
+            progress=prog, on_chunk=on_chunk, discards=discards)
         store.discard_unbolded(video_id)
         detail = f"{added['n']} candidates ready"
         if errors:
@@ -388,10 +389,12 @@ def decide(cand_id: int, body: DecisionIn):
     anki_result = None
     if body.decision == "yes":
         v = store.get_video(cand["video_id"])
+        src = anki.source_html(v["title"] if v else "", v.get("channel") if v else None,
+                               v["url"] if v else "", cand["timestamp_start"])
         try:
             anki_result = anki.add_card(
                 cand["sentence"], cand["span_text"], cand["is_phrase"],
-                cand["translation"], v["title"] if v else "", tags=["ru-anki", "batch"],
+                cand["translation"], src, tags=["ru-anki", "batch"],
             )
         except anki.AnkiError as e:
             raise HTTPException(502, f"Anki: {e}")
@@ -511,8 +514,9 @@ def _make_one_card(video_id, subtitle_line_id, span, timestamp=None, sentence=No
 
     cid = store.create_candidate(video_id, span_text, ph, sent, ts,
                                  translation, source="live")
+    src = anki.source_html(v["title"], v.get("channel"), v["url"], ts)
     anki_result = anki.add_card(sent, span_text, ph, translation,
-                                v["title"], tags=["ru-anki", "live"])
+                                src, tags=["ru-anki", "live"])
     anki_result["sync_error"] = None
     _sync_soon()
     store.resolve_candidate(cid, "yes")
@@ -569,11 +573,18 @@ def make_card(video_id: int, body: MakeCardIn):
 
 STATIC = os.path.join(HERE, "static")
 app.mount("/app", StaticFiles(directory=STATIC, html=True), name="static")
+app.mount("/icons", StaticFiles(directory=os.path.join(STATIC, "icons")), name="icons")
 
 
 @app.get("/")
 def index():
     return FileResponse(os.path.join(STATIC, "index.html"))
+
+
+@app.get("/manifest.json")
+def manifest():
+    return FileResponse(os.path.join(STATIC, "manifest.json"),
+                        media_type="application/manifest+json")
 
 
 @app.get("/sw.js")

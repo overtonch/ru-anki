@@ -141,8 +141,12 @@ def parse_items(text):
     return out
 
 
-def _extract_chunk(title, part, decided, model):
+def _extract_chunk(title, part, decided, discards, model):
     prompt = f"Video: {title}\n\n{part}" if title else part
+    if discards:
+        prompt += ("\n\nCALIBRATION — the learner recently REJECTED these as too "
+                   "easy or not worth a card. Keep your bar clearly above this "
+                   f"level; do not suggest words of comparable difficulty:\n{discards}")
     if decided:
         prompt += f"\n\n(Already covered — do not output these: {decided})"
     text, usage = run_claude(prompt, EXTRACT_SYSTEM, model=model, timeout=180)
@@ -150,7 +154,7 @@ def _extract_chunk(title, part, decided, model):
 
 
 def extract_candidates(title, transcript, already_decided, model=DEFAULT_MODEL,
-                       progress=None, on_chunk=None, workers=WORKERS):
+                       progress=None, on_chunk=None, workers=WORKERS, discards=()):
     """Extract over the whole transcript, one headless call per chunk, `workers`
     at a time. A failed chunk is logged and skipped, not fatal.
 
@@ -162,6 +166,7 @@ def extract_candidates(title, transcript, already_decided, model=DEFAULT_MODEL,
     timestamp_start; the sentence is reconstructed downstream.
     """
     decided = ", ".join(list(already_decided)[:120]) if already_decided else ""
+    disc = ", ".join(list(discards)[:50]) if discards else ""
     parts = _chunks(transcript)
     total = len(parts)
     merged, seen, errors, done = [], set(), [], 0
@@ -170,7 +175,7 @@ def extract_candidates(title, transcript, already_decided, model=DEFAULT_MODEL,
         progress(0, total, errors)
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futs = {pool.submit(_extract_chunk, title, part, decided, model): i
+        futs = {pool.submit(_extract_chunk, title, part, decided, disc, model): i
                 for i, part in enumerate(parts, 1)}
         for fut in as_completed(futs):
             done += 1
