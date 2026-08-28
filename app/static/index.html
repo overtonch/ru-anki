@@ -991,7 +991,15 @@ function paintProgress(ex) {
 }
 function renderProgressDone(ex) {
   const panel = $('#progressPanel');
-  if (!ex || ex.state === 'idle') { panel.innerHTML = ''; return; }
+  if (!ex || ex.state === 'idle') {
+    // never extracted (or the in-memory status was lost on a restart) — offer it
+    // unless candidates already exist
+    const pend = (DETAIL_V && DETAIL_V.pending) || 0;
+    panel.innerHTML = pend > 0 ? '' :
+      `<div class="panel"><div class="pmeta">No card suggestions yet for this one.</div>
+       <div style="margin-top:.55rem"><button class="btn sm" onclick="retryExtract()">Suggest vocabulary cards</button></div></div>`;
+    return;
+  }
   if (ex.state === 'error') {
     panel.innerHTML = `<div class="panel"><h3 style="color:var(--no)">Extraction failed</h3>
       <div class="pmeta">${escapeHtml(ex.detail || '')}</div>
@@ -1006,7 +1014,8 @@ function renderProgressDone(ex) {
 }
 async function retryExtract() {
   try {
-    await api(`/videos/${CURRENT}/extract`, {method:'POST'});
+    const m = $('#model') ? $('#model').value : 'sonnet';
+    await api(`/videos/${CURRENT}/extract?model=${m}`, {method:'POST'});
     const v = VIDEOS.find(x => x.id === CURRENT) || await api(`/videos/${CURRENT}`);
     startProgress(v, {state:'queued', added:0, elapsed:0});
   } catch (e) { toast('error: ' + e.message, 3500); }
