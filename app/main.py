@@ -13,7 +13,7 @@ import traceback
 
 import re as _re
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -299,7 +299,7 @@ def download_status(video_id: int):
             "pct": 100.0 if v and v.get("media_status") == "ready" else 0.0}
 
 
-@app.get("/videos/{video_id}/media")
+@app.api_route("/videos/{video_id}/media", methods=["GET", "HEAD"])
 def media(video_id: int):
     v = store.get_video(video_id)
     if not v or not v.get("media_path") or not os.path.exists(v["media_path"]):
@@ -725,6 +725,22 @@ def _make_one_card(video_id, subtitle_line_id, span, timestamp=None, sentence=No
 def gloss(span: str):
     """Instant local-dictionary gloss (no LLM) — shown while /translate runs."""
     return {"span": span, "gloss": store.gloss_for(span)}
+
+
+@app.post("/client-log")
+async def client_log(req: Request):
+    """The phone posts JS errors here so they land in ~/Library/Logs/ru-anki.log
+    and can be inspected when a bug is reported."""
+    try:
+        b = await req.json()
+    except Exception:  # noqa: BLE001
+        b = {}
+    tag = str(b.get("tag", "?"))[:60]
+    msg = " ".join(str(b.get("msg", "")).split())[:1500]
+    ctx = json.dumps(b.get("ctx") or {}, ensure_ascii=False)[:600]
+    ua = str(b.get("ua", ""))[:200]
+    print(f"[client] {tag}: {msg} | ctx={ctx} | {ua}", flush=True)
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------ reading

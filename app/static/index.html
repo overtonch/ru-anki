@@ -690,14 +690,41 @@ function toast(msg, ms=2400) {
   clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), ms);
 }
 async function api(path, opts) {
-  const r = await fetch(path, opts);
+  let r;
+  try {
+    r = await fetch(path, opts);
+  } catch (e) {
+    if (navigator.onLine && !/client-log/.test(path)) logClient('api.fetch', e, { path });
+    throw e;
+  }
   const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(body.detail || r.statusText);
+  if (!r.ok) {
+    if (r.status >= 500) logClient('api.http' + r.status, new Error(body.detail || r.statusText), { path });
+    throw new Error(body.detail || r.statusText);
+  }
   return body;
 }
 function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 }
+// ship JS errors to the server log so bugs are diagnosable after the fact
+let _logCount = 0;
+function logClient(tag, err, ctx) {
+  if (_logCount++ > 40) return;
+  try {
+    const msg = err && (err.stack || err.message || err.reason || String(err)) || 'unknown';
+    const payload = JSON.stringify({ tag, msg: String(msg), ctx: ctx || {},
+      ua: navigator.userAgent, url: location.pathname + location.search });
+    if (navigator.sendBeacon)
+      navigator.sendBeacon('/client-log', new Blob([payload], { type: 'application/json' }));
+    else
+      fetch('/client-log', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: payload, keepalive: true }).catch(() => {});
+  } catch {}
+}
+addEventListener('error', e => logClient('window.error', e.error || e.message,
+  { src: e.filename, line: e.lineno, col: e.colno }));
+addEventListener('unhandledrejection', e => logClient('unhandledrejection', e.reason));
 function fmtTime(sec) {
   sec = Math.max(0, Math.round(sec || 0));
   const m = Math.floor(sec/60), s = sec%60;
@@ -2351,12 +2378,16 @@ async function opfsDir() {
   const root = await navigator.storage.getDirectory();
   return root.getDirectoryHandle('media', { create: true });
 }
-async function opfsHas(id) {
-  try { await (await opfsDir()).getFileHandle(id + '.mp4'); return true; } catch { return false; }
-}
 async function opfsSize(id) {
   try { return (await (await (await opfsDir()).getFileHandle(id + '.mp4')).getFile()).size; }
   catch { return 0; }
+}
+// "has" now means *fully* downloaded — a partial (resumable) file doesn't count
+async function opfsHas(id) {
+  const sz = await opfsSize(id);
+  if (!sz) return false;
+  let want = 0; try { want = +(localStorage.getItem('msz:' + id) || 0); } catch {}
+  return want ? sz >= want - 4 : true;   // no stored size (old download) → trust existence
 }
 async function opfsURL(id) {
   const f = await (await (await opfsDir()).getFileHandle(id + '.mp4')).getFile();
@@ -2365,36 +2396,113 @@ async function opfsURL(id) {
 async function opfsDelete(id) {
   try { await (await opfsDir()).removeEntry(id + '.mp4'); } catch {}
 }
-async function opfsSave(id, onProgress) {
-  const res = await fetch(`/videos/${id}/media`);
-  if (!res.ok) throw new Error('server has no file yet');
-  const total = +res.headers.get('content-length') || 0;
-  const fh = await (await opfsDir()).getFileHandle(id + '.mp4', { create: true });
-  const w = await fh.createWritable();
-  const reader = res.body.getReader();
-  let got = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      await w.write(value);
-      got += value.length;
-      if (onProgress) onProgress(total ? got / total : 0, got);
-    }
-    await w.close();
-  } catch (e) { try { await w.abort(); } catch {} await opfsDelete(id); throw e; }
-  return got;
+async function rangeGet(id, start, end) {
+  let err;
+  for (let a = 0; a < 5; a++) {
+    try {
+      const res = await fetch(`/videos/${id}/media`, {
+        headers: { Range: `bytes=${start}-${end}` }, cache: 'no-store' });
+      if (res.status !== 206 && res.status !== 200) throw new Error('HTTP ' + res.status);
+      return await res.arrayBuffer();
+    } catch (e) { err = e; await sleep(700 * (a + 1)); }
+  }
+  throw err || new Error('range fetch failed');
 }
 
-let mediaDL = {};   // id -> true while this tab is driving the download+save
+// Save the server-side media file into OPFS in small ranged chunks. On Safari
+// this uses a sync access handle so it *resumes* across an app kill; each ~6 MB
+// fetch is short enough that backgrounding rarely drops one, and drops are
+// retried. `onProgress(frac, bytes)`.
+async function opfsSave(id, onProgress, shouldStop) {
+  const CHUNK = 6 * 1024 * 1024;
+  const fh = await (await opfsDir()).getFileHandle(id + '.mp4', { create: true });
 
-function renderMediaProgress(id, phase, pct) {
+  let total = 0;
+  try {
+    const h = await fetch(`/videos/${id}/media`, { method: 'HEAD', cache: 'no-store' });
+    if (h.ok) total = +h.headers.get('content-length') || 0;
+  } catch {}
+  if (!total) {   // HEAD unavailable — probe with a 1-byte range, read the total off Content-Range
+    try {
+      const p = await fetch(`/videos/${id}/media`, { headers: { Range: 'bytes=0-0' }, cache: 'no-store' });
+      const cr = p.headers.get('content-range');
+      total = (cr && +cr.split('/')[1]) || +p.headers.get('content-length') || 0;
+    } catch {}
+  }
+  if (!total) {   // last resort — one stream (the pre-existing behaviour)
+    const res = await fetch(`/videos/${id}/media`);
+    if (!res.ok) throw new Error('server has no file yet');
+    const w = await fh.createWritable();
+    const rd = res.body.getReader();
+    let got = 0;
+    try {
+      for (;;) { const { done, value } = await rd.read(); if (done) break;
+        await w.write(value); got += value.length; onProgress && onProgress(0, got); }
+      await w.close();
+    } catch (e) { try { await w.abort(); } catch {} throw e; }
+    return got;
+  }
+
+  try { localStorage.setItem('msz:' + id, String(total)); } catch {}
+  let have = await opfsSize(id);
+  if (have > total) { await opfsDelete(id); have = 0; }
+  if (have >= total) { onProgress && onProgress(1, have); return have; }
+
+  let ah = null;
+  try { ah = await fh.createSyncAccessHandle(); } catch {}
+  logClient('opfs.save', { message: ah ? 'sync-handle' : 'writable-fallback' }, { id, total, have });
+
+  if (ah) {                       // durable + resumable (Safari)
+    try {
+      have = ah.getSize();
+      if (have > total) { ah.truncate(0); have = 0; }
+      while (have < total) {
+        if (shouldStop && shouldStop()) throw new Error('cancelled');
+        const end = Math.min(have + CHUNK, total) - 1;
+        const buf = await rangeGet(id, have, end);
+        ah.write(new Uint8Array(buf), { at: have });
+        ah.flush();
+        have += buf.byteLength;
+        onProgress && onProgress(have / total, have);
+      }
+      return have;
+    } finally { try { ah.close(); } catch {} }
+  }
+
+  // fallback: one writable held open, chunked ranged fetches (each short enough
+  // to survive backgrounding); resumes from the on-disk size on a retry
+  const w = await fh.createWritable({ keepExistingData: true });
+  try {
+    await w.seek(have);
+    while (have < total) {
+      if (shouldStop && shouldStop()) throw new Error('cancelled');
+      const end = Math.min(have + CHUNK, total) - 1;
+      const buf = await rangeGet(id, have, end);
+      await w.write(new Uint8Array(buf));
+      have += buf.byteLength;
+      onProgress && onProgress(have / total, have);
+    }
+    await w.close();
+    return have;
+  } catch (e) {
+    // commit what we've written so a retry resumes from here
+    try { await w.close(); } catch { try { await w.abort(); } catch {} }
+    throw e;
+  }
+}
+
+let mediaDL = {};      // id -> true while this tab is driving the download+save
+let mediaCancel = {};  // id -> true to stop it
+
+function renderMediaProgress(id, phase, pct, mb) {
   const row = $('#mediaRow');
   const pc = Math.max(2, Math.min(100, Math.round(pct || 0)));
   const label = phase === 'phone' ? 'saving to phone' : 'downloading on server';
   row.innerHTML = `<div class="pbar"><div class="pfill" style="width:${pc}%"></div></div>
-    <div class="pmeta"><span class="spin"></span> ${label} · ${pc}%</div>`;
+    <div class="pmeta"><span class="spin"></span> ${label} · ${pc}%${mb ? ` · ${mb} MB` : ''}
+      · <button class="backlink" onclick="cancelMedia(${id})">cancel</button></div>`;
 }
+function cancelMedia(id) { mediaCancel[id] = true; }
 
 async function renderMediaRow(id) {
   if (mediaDL[id]) return;   // an active download owns this row
@@ -2421,9 +2529,16 @@ async function renderMediaRow(id) {
     return;
   }
   const estMb = v.duration ? Math.round(v.duration / 60 * 3.4) : null;
-  if (s && s.state === 'done') {          // on the server, not yet on this phone
+  if (s && s.state === 'done') {          // on the server, not yet fully on this phone
+    const part = await opfsSize(id);
+    let want = 0; try { want = +(localStorage.getItem('msz:' + id) || 0); } catch {}
+    if (part > 0 && want && part < want) {
+      renderMediaProgress(id, 'phone', part / want * 100, Math.round(part / 1e6));
+      downloadMedia(id);                  // resume automatically
+      return;
+    }
     row.innerHTML = `<button class="btn sm ghost" id="dlBtn" onclick="downloadMedia(${id})">
-      ${DL_ICON} Save to phone${estMb ? ` · ~${estMb} MB` : ''}</button>`;
+      ${DL_ICON} ${part > 0 ? 'Resume saving' : 'Save to phone'}${estMb ? ` · ~${estMb} MB` : ''}</button>`;
     return;
   }
   const note = v.youtube_id ? (estMb ? ` · ~${estMb} MB` : ' · 360p') : ' · needed to watch this source';
@@ -2434,12 +2549,14 @@ async function renderMediaRow(id) {
 async function downloadMedia(id) {
   if (mediaDL[id]) return;
   mediaDL[id] = true;
+  mediaCancel[id] = false;
   renderMediaProgress(id, 'server', 0);
   try {
     let s = await api(`/videos/${id}/download`).catch(() => ({ state: 'idle' }));
     if (s.state === 'idle' || s.state === 'error')
       s = await api(`/videos/${id}/download`, { method: 'POST' });   // idempotent server-side
     for (;;) {
+      if (mediaCancel[id]) throw new Error('cancelled');
       s = await api(`/videos/${id}/download`);
       if (s.state === 'error') throw new Error(s.detail || 'server download failed');
       renderMediaProgress(id, 'server', s.pct);
@@ -2447,12 +2564,12 @@ async function downloadMedia(id) {
       await sleep(2000);
     }
     let last = -2;
-    await opfsSave(id, (p) => {
+    await opfsSave(id, (p, bytes) => {
       const pct = p ? Math.round(p * 100) : -1;
       if (pct === last) return;
       last = pct;
-      renderMediaProgress(id, 'phone', p ? p * 100 : 0);
-    });
+      renderMediaProgress(id, 'phone', p ? p * 100 : 0, bytes ? Math.round(bytes / 1e6) : 0);
+    }, () => mediaCancel[id]);
     renderMediaProgress(id, 'phone', 100);
     // cache everything else the watch view needs offline: captions, transcript, thumbnail
     try { await idbPut('offline', 'w' + id, await api(`/videos/${id}/watch`)); } catch {}
@@ -2464,13 +2581,15 @@ async function downloadMedia(id) {
     toast('video saved — works fully offline');
     loadVideosQuiet();
   } catch (e) {
-    toast('download failed: ' + e.message, 4000);
+    if (/cancell?ed/i.test(e.message)) toast('download stopped — resume any time');
+    else { toast('download failed: ' + e.message, 4000); logClient('download', e, { id }); }
   }
   mediaDL[id] = false;
   renderMediaRow(id);
 }
 async function removeMedia(id) {
   await opfsDelete(id);
+  try { localStorage.removeItem('msz:' + id); } catch {}
   try { await api(`/videos/${id}/media`, { method: 'DELETE' }); } catch {}
   toast('removed');
   renderMediaRow(id);
