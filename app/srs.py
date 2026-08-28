@@ -191,14 +191,24 @@ def _raw(card_id):
     return r
 
 
-def review(card_id, rating, elapsed_ms=None):
-    """Grade a card (rating 1..4), reschedule, log. Returns the updated card dict."""
+def review(card_id, rating, elapsed_ms=None, at=None):
+    """Grade a card (rating 1..4), reschedule, log. Returns the updated card dict.
+    `at` (ISO string) backdates the review — used when flushing offline reviews."""
     from fsrs import Rating
     row = _raw(card_id)
     if not row:
         raise KeyError(card_id)
     rating = int(rating)
     now = _utc()
+    if at:
+        try:
+            p = _parse(at)
+            if p and p.tzinfo is None:
+                p = p.replace(tzinfo=_dt.timezone.utc)
+            if p and p <= now:
+                now = p
+        except ValueError:
+            pass
     card, _log = _scheduler().review_card(
         _row_to_fsrs(row), Rating(rating), review_datetime=now,
         review_duration=_td(elapsed_ms))
@@ -346,6 +356,57 @@ def _card_dict_from_plain(d):
         d["sentence"], d["span_text"], bool(d["is_phrase"]))
     d["is_new"] = d["last_review"] is None
     return d
+
+
+# ---------------------------------------------------------------- analytics
+
+def analytics(days=30):
+    c = store.connect()
+    q = c.execute
+    new = q("SELECT COUNT(*) n FROM srs_cards WHERE suspended=0 AND last_review IS NULL").fetchone()["n"]
+    learning = q("SELECT COUNT(*) n FROM srs_cards WHERE suspended=0 AND last_review IS NOT NULL "
+                 "AND fsrs_state IN (1,3)").fetchone()["n"]
+    review = q("SELECT COUNT(*) n FROM srs_cards WHERE suspended=0 AND last_review IS NOT NULL "
+               "AND fsrs_state=2").fetchone()["n"]
+    suspended = q("SELECT COUNT(*) n FROM srs_cards WHERE suspended=1").fetchone()["n"]
+    mature = q("SELECT COUNT(*) n FROM srs_cards WHERE suspended=0 AND stability >= 21").fetchone()["n"]
+    total = q("SELECT COUNT(*) n FROM srs_cards").fetchone()["n"]
+    total_reviews = q("SELECT COUNT(*) n FROM srs_reviews").fetchone()["n"]
+    today0 = _day_start_iso()
+    reviews_today = q("SELECT COUNT(*) n FROM srs_reviews WHERE reviewed_at >= ?",
+                      (today0,)).fetchone()["n"]
+
+    by_day = {r["d"]: r["n"] for r in q(
+        """SELECT date(reviewed_at, 'localtime') d, COUNT(*) n
+           FROM srs_reviews WHERE reviewed_at >= date('now', ?, 'localtime')
+           GROUP BY d""", (f"-{days} days",))}
+    days_list = []
+    cur = _dt.date.today()
+    for i in range(days - 1, -1, -1):
+        d = (cur - _dt.timedelta(days=i)).isoformat()
+        days_list.append({"date": d, "count": by_day.get(d, 0)})
+
+    # true retention: of reviews on already-learned cards, share not rated Again
+    ret = q("""SELECT COUNT(*) tot, SUM(CASE WHEN rating > 1 THEN 1 ELSE 0 END) ok
+               FROM srs_reviews WHERE prev_state = 2""").fetchone()
+    retention = round(ret["ok"] / ret["tot"], 3) if ret["tot"] else None
+
+    # streak: consecutive days up to today with >=1 review
+    streak = 0
+    d = cur
+    if not by_day.get(cur.isoformat()):
+        d = cur - _dt.timedelta(days=1)       # today not done yet doesn't break it
+    while by_day.get(d.isoformat()):
+        streak += 1
+        d -= _dt.timedelta(days=1)
+    c.close()
+    return {
+        "counts": {"new": new, "learning": learning, "review": review,
+                   "mature": mature, "suspended": suspended, "total": total},
+        "reviews_today": reviews_today, "total_reviews": total_reviews,
+        "retention": retention, "streak": streak,
+        "reviews_by_day": days_list,
+    }
 
 
 # ---------------------------------------------------------------- settings

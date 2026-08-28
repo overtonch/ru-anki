@@ -348,11 +348,13 @@ def delete_video(video_id: int):
         except OSError:
             pass
     import glob as _glob
-    for fr in _glob.glob(os.path.join(ytdlp.FRAME_DIR, f"{video_id}-*.jpg")):
-        try:
-            os.remove(fr)
-        except OSError:
-            pass
+    for pat in (os.path.join(ytdlp.FRAME_DIR, f"{video_id}-*.jpg"),
+                os.path.join(ytdlp.CLIP_DIR, f"{video_id}-*.m4a")):
+        for f in _glob.glob(pat):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
     n = store.delete_video(video_id)
     backup.snapshot_async("delete-video")
     return {"deleted": n}
@@ -502,6 +504,22 @@ async def stream(video_id: int, request: Request):
 
 
 _FRAME_SEM = asyncio.Semaphore(2)
+_CLIP_SEM = asyncio.Semaphore(2)
+
+
+async def _media_src(video_id, v, need_video=False):
+    """(src, headers) for ffmpeg — a downloaded file if we have one, else the
+    resolved stream URL. `need_video` skips the audio-only file."""
+    cands = [v.get("media_path")]
+    if not need_video:
+        cands.append(ytdlp.audio_path(video_id))
+    for p in cands:
+        if p and os.path.exists(p):
+            return p, None
+    try:
+        return await _resolve_stream_cached(video_id, v["url"])
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(404, f"no media source ({str(e)[:120]})")
 
 
 @app.get("/videos/{video_id}/frame")
@@ -513,14 +531,7 @@ async def video_frame(video_id: int, t: float):
         raise HTTPException(404, "no such video")
     out = os.path.join(ytdlp.FRAME_DIR, f"{video_id}-{max(0, int(t))}.jpg")
     if not os.path.exists(out):
-        headers = None
-        if v.get("media_path") and os.path.exists(v["media_path"]):
-            src = v["media_path"]
-        else:
-            try:
-                src, headers = await _resolve_stream_cached(video_id, v["url"])
-            except Exception as e:  # noqa: BLE001
-                raise HTTPException(404, f"no frame source ({str(e)[:120]})")
+        src, headers = await _media_src(video_id, v, need_video=True)
         async with _FRAME_SEM:
             if not os.path.exists(out):
                 try:
@@ -528,6 +539,26 @@ async def video_frame(video_id: int, t: float):
                 except Exception as e:  # noqa: BLE001
                     raise HTTPException(502, f"frame extract failed ({str(e)[:150]})")
     return FileResponse(out, media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=604800"})
+
+
+@app.get("/videos/{video_id}/clip")
+async def video_clip(video_id: int, t: float, pad: float = 2.5):
+    """~5s of audio around `t` seconds — the listening clip on a review card."""
+    v = store.get_video(video_id)
+    if not v:
+        raise HTTPException(404, "no such video")
+    pad = max(1.0, min(6.0, pad))
+    out = os.path.join(ytdlp.CLIP_DIR, f"{video_id}-{max(0, int(t))}-{int(pad * 10)}.m4a")
+    if not os.path.exists(out):
+        src, headers = await _media_src(video_id, v)
+        async with _CLIP_SEM:
+            if not os.path.exists(out):
+                try:
+                    await asyncio.to_thread(ytdlp.extract_clip, src, t, out, headers, pad)
+                except Exception as e:  # noqa: BLE001
+                    raise HTTPException(502, f"clip extract failed ({str(e)[:150]})")
+    return FileResponse(out, media_type="audio/mp4",
                         headers={"Cache-Control": "public, max-age=604800"})
 
 
@@ -1035,6 +1066,17 @@ class ReviewIn(BaseModel):
     elapsed_ms: int | None = None
 
 
+class OfflineReview(BaseModel):
+    card_id: int
+    rating: int
+    elapsed_ms: int | None = None
+    reviewed_at: str | None = None
+
+
+class ReviewFlushIn(BaseModel):
+    reviews: list[OfflineReview]
+
+
 class SettingIn(BaseModel):
     key: str
     value: object
@@ -1073,6 +1115,11 @@ def srs_stats():
     return s
 
 
+@app.get("/srs/analytics")
+def srs_analytics(days: int = 30):
+    return srs.analytics(days=max(7, min(120, days)))
+
+
 @app.get("/srs/queue")
 def srs_queue(limit: int = 60):
     cards = srs.queue(limit=limit)
@@ -1102,6 +1149,27 @@ def srs_review(card_id: int, body: ReviewIn):
         raise HTTPException(404, "no such card")
     backup.snapshot_async("srs-review")
     return {"card": _study_card_view(card), **srs.stats()}
+
+
+@app.post("/srs/reviews/flush")
+def srs_reviews_flush(body: ReviewFlushIn):
+    """Replay reviews queued while the phone was offline, oldest first."""
+    revs = sorted(body.reviews, key=lambda r: r.reviewed_at or "")
+    out = []
+    for r in revs:
+        if r.rating not in (1, 2, 3, 4):
+            out.append({"card_id": r.card_id, "ok": False, "error": "bad rating"})
+            continue
+        try:
+            srs.review(r.card_id, r.rating, r.elapsed_ms, at=r.reviewed_at)
+            out.append({"card_id": r.card_id, "ok": True})
+        except KeyError:
+            out.append({"card_id": r.card_id, "ok": True, "error": "gone"})  # card deleted — drop it
+        except Exception as e:  # noqa: BLE001
+            out.append({"card_id": r.card_id, "ok": False, "error": str(e)[:120]})
+    if any(o["ok"] for o in out):
+        backup.snapshot_async("srs-flush")
+    return {"results": out, **srs.stats()}
 
 
 @app.post("/srs/cards/{card_id}/undo")

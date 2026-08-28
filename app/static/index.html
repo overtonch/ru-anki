@@ -499,6 +499,28 @@
                padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
   #studyView[hidden] { display:none; }
   #studyView:not([hidden]) { display:flex; }
+  #statsView { position:fixed; inset:0; z-index:16; background:var(--bg); flex-direction:column;
+               padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+  #statsView[hidden] { display:none; }
+  #statsView:not([hidden]) { display:flex; }
+  .stat-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:.6rem; margin:.6rem 0 1.4rem; }
+  .stat-cell { background:var(--card-2); border:1px solid var(--line-soft); border-radius:var(--r-sm);
+               padding:.7rem .5rem; text-align:center; }
+  .stat-cell .v { font-size:1.5rem; font-weight:750; }
+  .stat-cell .k { font-size:.7rem; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; margin-top:.2rem; }
+  .stat-h { font-size:.8rem; color:var(--muted); text-transform:uppercase; letter-spacing:.06em;
+            margin:1.2rem 0 .5rem; }
+  .cal { display:flex; gap:2px; align-items:flex-end; height:80px; }
+  .cal i { flex:1; background:var(--accent); border-radius:1px; min-height:2px; opacity:.85; }
+  .cal i.z { background:var(--line); opacity:1; }
+  .cal-x { display:flex; justify-content:space-between; font-size:.68rem; color:var(--muted); margin-top:.3rem; }
+  .mix { display:flex; height:14px; border-radius:99px; overflow:hidden; background:var(--line); }
+  .mix i.mnew { background:#e6b93c; } .mix i.mlearn { background:#5b9bd5; }
+  .mix i.mrev { background:var(--accent); } .mix i.mmat { background:var(--ok); }
+  .mix-legend { display:flex; flex-wrap:wrap; gap:.7rem; font-size:.75rem; color:var(--muted); margin-top:.5rem; }
+  .mix-legend span::before { content:"●"; margin-right:.3rem; }
+  .mix-legend .lnew::before { color:#e6b93c; } .mix-legend .llearn::before { color:#5b9bd5; }
+  .mix-legend .lrev::before { color:var(--accent); } .mix-legend .lmat::before { color:var(--ok); }
   .studybar { display:flex; align-items:center; gap:.5rem; padding:.5rem .9rem; flex:none;
               border-bottom:1px solid var(--line-soft); }
   .studybar .prog { flex:1; text-align:center; font-size:.82rem; color:var(--muted);
@@ -524,6 +546,14 @@
                              background:rgba(0,0,0,.6); color:#fff; padding:.15rem .45rem; border-radius:.3rem; }
   .study-a .a-clip.noimg img { display:none; }
   .study-a .a-clip.noimg::after { content:"▶ watch this moment"; display:block; padding:.7rem; font-size:.85rem; color:var(--accent); }
+  .study-a .a-replay { background:var(--card-2); border:1px solid var(--line); color:var(--fg);
+                       border-radius:99px; padding:.4rem .9rem; font-size:.85rem; cursor:pointer; margin-bottom:.6rem; }
+  .study-a .a-replay:active { border-color:var(--accent); }
+  .study-listen { margin:auto 0; text-align:center; }
+  .study-listen .listen-btn { background:var(--accent-soft); border:1px solid var(--accent); color:var(--accent);
+                              border-radius:99px; padding:1rem 2rem; font-size:1.2rem; font-weight:650; cursor:pointer; }
+  .study-listen .listen-btn:active { transform:scale(.97); }
+  .study-listen .listen-hint { color:var(--muted); font-size:.85rem; margin-top:.8rem; }
   .study-a .a-links { margin-top:.8rem; font-size:.82rem; }
   .study-a .a-links button { background:none; border:0; color:var(--accent); cursor:pointer; font:inherit;
                              text-decoration:underline; padding:.2rem; }
@@ -645,7 +675,7 @@
   <h1>ru-anki</h1>
   <span class="sub" id="netpill"><span class="netdot"></span><span id="netword">…</span></span>
   <span class="hdr-right">
-    <button class="pill" id="queuePill" hidden onclick="flushQueue(true)"></button>
+    <button class="pill" id="queuePill" hidden onclick="flushQueue(true); flushSrs().then(()=>{refreshQueuePill();refreshStudyBanner();})"></button>
     <button class="iconbtn" id="refreshBtn" aria-label="reload the app" onclick="hardRefresh()">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/></svg>
     </button>
@@ -789,6 +819,16 @@
       <button class="sbtn" id="studyUndo" onclick="studyUndo()" disabled>↩ undo</button>
     </div>
     <div class="studybody" id="studyBody"></div>
+  </div>
+
+  <!-- STATS VIEW -->
+  <div id="statsView" hidden>
+    <div class="readbar">
+      <button class="backlink" onclick="history.back()">← back</button>
+      <div class="rtitle">Progress</div>
+      <span style="width:2rem"></span>
+    </div>
+    <div id="statsBody" class="wordbody"></div>
   </div>
 
   <!-- READ VIEW -->
@@ -1889,7 +1929,11 @@ async function refreshStudyBanner() {
   const b = $('#studyBanner');
   if (!b) return;
   let s;
-  try { s = await api('/srs/stats'); } catch { b.hidden = true; return; }
+  try { s = await api('/srs/stats'); idbPut('srsCache', 'stats', s).catch(() => {}); }
+  catch { s = await idbGet('srsCache', 'stats').catch(() => null); }
+  if (!s) { b.hidden = true; return; }
+  const pend = (await idbAll('srsOut').catch(() => [])).length;
+  if (pend) s = { ...s, due: Math.max(0, (s.due || 0) - pend) };
   const n = (s.due || 0) + (s.new || 0);
   if (!n && !s.total) { b.hidden = true; return; }
   b.hidden = false;
@@ -1914,16 +1958,54 @@ async function openStudy() {
 function closeStudy() { $('#studyView').hidden = true; STUDY = null; refreshStudyBanner(); }
 
 async function loadStudyQueue() {
-  let d;
-  try { d = await api('/srs/queue'); }
-  catch (e) { $('#studyBody').innerHTML = `<div class="study-done"><div class="msg">couldn’t load</div><div class="sub">${escapeHtml(e.message)}</div></div>`; return; }
-  STUDY.queue = d.cards || [];
+  await flushSrs();
+  let d, offline = false;
+  try { d = await api('/srs/queue'); idbPut('srsCache', 'queue', d).catch(() => {}); }
+  catch (e) {
+    d = await idbGet('srsCache', 'queue').catch(() => null);
+    offline = true;
+    if (!d) { $('#studyBody').innerHTML = `<div class="study-done"><div class="big">📡</div><div class="msg">offline</div><div class="sub">connect once to download your review queue</div></div>`; return; }
+  }
+  STUDY.offline = offline;
+  const already = new Set((await idbAll('srsOut').catch(() => [])).map(x => x.card_id));
+  STUDY.queue = (d.cards || []).filter(c => !already.has(c.id));
   STUDY.i = 0;
   STUDY.total = STUDY.queue.length + STUDY.done;
   renderStudyCard();
 }
 
+async function flushSrs() {
+  let items;
+  try { items = await idbAll('srsOut'); } catch { return; }
+  if (!items || !items.length) return;
+  try {
+    await api('/srs/reviews/flush', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ reviews: items.map(i => ({ card_id: i.card_id, rating: i.rating,
+        elapsed_ms: i.elapsed_ms, reviewed_at: i.reviewed_at })) }),
+    });
+    for (const i of items) await idbDel('srsOut', i.client_id);
+  } catch { /* still offline — try again next time */ }
+}
+
 function studyCard() { return STUDY && STUDY.queue[STUDY.i]; }
+function clipUrl(c) { return c && c.seconds != null && c.video_id != null
+  ? `/videos/${c.video_id}/clip?t=${Math.round(c.seconds)}` : null; }
+let STUDY_AUDIO_FIRST = (() => { try { return localStorage.getItem('studyAudioFirst') === '1'; } catch { return false; } })();
+function setAudioFirst(on) {
+  STUDY_AUDIO_FIRST = on;
+  try { localStorage.setItem('studyAudioFirst', on ? '1' : '0'); } catch {}
+}
+function playStudyAudio() {
+  const a = $('#studyAudio');
+  if (a) { a.currentTime = 0; a.play().catch(() => {}); }
+}
+function prefetchStudyNext() {
+  const nx = STUDY && STUDY.queue[STUDY.i + 1];
+  const u = clipUrl(nx);
+  if (u) fetch(u).catch(() => {});
+  if (nx && nx.seconds != null) fetch(`/videos/${nx.video_id}/frame?t=${Math.round(nx.seconds)}`).catch(() => {});
+}
 
 function renderStudyCard() {
   const c = studyCard();
@@ -1933,10 +2015,21 @@ function renderStudyCard() {
   STUDY.revealed = false;
   STUDY.shownAt = Date.now();
   const left = STUDY.queue.length - STUDY.i;
-  $('#studyProg').innerHTML = `<b>${STUDY.done}</b> done · ${left} left`;
+  $('#studyProg').innerHTML = `<b>${STUDY.done}</b> done · ${left} left${STUDY.offline ? ' · <span style="color:var(--muted)">offline</span>' : ''}`;
+  const cu = clipUrl(c);
+  const audioFirst = STUDY_AUDIO_FIRST && cu;
+  const q = audioFirst
+    ? `<div class="study-listen">
+         <audio id="studyAudio" src="${cu}" preload="auto"></audio>
+         <button class="listen-btn" onclick="playStudyAudio()">🔊 listen</button>
+         <div class="listen-hint">what word don’t you know?</div>
+       </div>`
+    : `<div class="study-q">${c.front_html}</div>`;
   $('#studyBody').innerHTML = `
-    <div class="study-scroll"><div class="study-q">${c.front_html}</div></div>
+    <div class="study-scroll">${q}</div>
     <div class="study-foot"><button class="study-show" onclick="studyReveal()">Show answer</button></div>`;
+  if (audioFirst) playStudyAudio();
+  prefetchStudyNext();
 }
 
 function studyReveal() {
@@ -1944,6 +2037,7 @@ function studyReveal() {
   if (!c) return;
   STUDY.revealed = true;
   const p = c.preview || {};
+  const cu = clipUrl(c);
   const clip = c.seconds != null ? `
     <button class="a-clip" onclick="studyJump(${c.video_id}, ${c.seconds})">
       <img loading="lazy" src="/videos/${c.video_id}/frame?t=${Math.round(c.seconds)}" alt=""
@@ -1954,6 +2048,8 @@ function studyReveal() {
     <div class="study-scroll">
       <div class="study-q" style="font-size:1.05rem;margin:0;color:var(--muted)">${c.front_html}</div>
       <div class="study-a">
+        ${cu ? `<audio id="studyAudio" src="${cu}" preload="auto"></audio>
+                <button class="a-replay" onclick="playStudyAudio()">🔊 replay line</button>` : ''}
         <div class="a-tr">${escapeHtml(c.translation || '—')}</div>
         ${c.accented ? `<div class="a-acc">${escapeHtml(c.accented)}</div>` : ''}
         ${clip}
@@ -1966,6 +2062,7 @@ function studyReveal() {
       <button class="good" onclick="studyRate(3)"><span class="rl">Good</span><span class="ri">${p[3] || ''}</span></button>
       <button onclick="studyRate(4)"><span class="rl">Easy</span><span class="ri">${p[4] || ''}</span></button>
     </div></div>`;
+  if (cu && !STUDY_AUDIO_FIRST) playStudyAudio();   // in audio-first it already played on the question
 }
 
 async function studyRate(rating) {
@@ -1973,22 +2070,34 @@ async function studyRate(rating) {
   if (!c || STUDY._busy) return;
   STUDY._busy = true;
   $('#studyBody').querySelectorAll('.study-rate button').forEach(b => b.disabled = true);
+  const elapsed = Date.now() - STUDY.shownAt;
+  let queuedOffline = false;
   try {
     await api(`/srs/cards/${c.id}/review`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ rating, elapsed_ms: Date.now() - STUDY.shownAt }),
+      body: JSON.stringify({ rating, elapsed_ms: elapsed }),
     });
-  } catch (e) { toast('review failed — ' + e.message, 3000); STUDY._busy = false;
-    $('#studyBody').querySelectorAll('.study-rate button').forEach(b => b.disabled = false); return; }
-  STUDY.history.push(c.id);
+  } catch (e) {
+    const off = NET === 'offline' || NET === 'noserver' || navigator.onLine === false
+      || /network|failed to fetch|load failed|timed out/i.test(e.message || '');
+    if (!off) { toast('review failed — ' + e.message, 3000); STUDY._busy = false;
+      $('#studyBody').querySelectorAll('.study-rate button').forEach(b => b.disabled = false); return; }
+    const cid = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    await idbPut('srsOut', cid, { client_id: cid, card_id: c.id, rating,
+      elapsed_ms: elapsed, reviewed_at: new Date().toISOString() }).catch(() => {});
+    queuedOffline = true;
+    STUDY.offline = true;
+  }
+  STUDY.history.push({ card: c, rating, offline: queuedOffline });
   STUDY.done++;
-  STUDY.queue.splice(STUDY.i, 1);          // remove from queue
+  STUDY.queue.splice(STUDY.i, 1);
   if (rating === 1) STUDY.queue.push(c);   // "Again" — see it again later this session
-  else if (STUDY.i >= STUDY.queue.length) STUDY.i = 0;   // wrap for the tail
+  else if (STUDY.i >= STUDY.queue.length) STUDY.i = 0;
   STUDY._busy = false;
-  if (!STUDY.queue.length) { await loadStudyQueue(); }   // pick up anything newly due
+  if (!STUDY.queue.length && !STUDY.offline) await loadStudyQueue();
   else renderStudyCard();
   refreshStudyBanner();
+  refreshQueuePill();
 }
 
 async function studyDelete() {
@@ -2000,28 +2109,35 @@ async function studyDelete() {
   catch (e) { toast('couldn’t delete — ' + e.message, 3000); STUDY._busy = false; return; }
   STUDY._busy = false;
   STUDY.queue = STUDY.queue.filter(x => x.id !== c.id);
-  STUDY.history = STUDY.history.filter(x => x !== c.id);
+  STUDY.history = STUDY.history.filter(h => h.card.id !== c.id);
   if (STUDY.i >= STUDY.queue.length) STUDY.i = 0;
   toast('card deleted', 1800);
-  if (!STUDY.queue.length) loadStudyQueue(); else renderStudyCard();
+  if (!STUDY.queue.length && !STUDY.offline) loadStudyQueue(); else renderStudyCard();
   refreshStudyBanner();
 }
 
 async function studyUndo() {
   if (!STUDY || !STUDY.history.length) return;
-  const id = STUDY.history[STUDY.history.length - 1];
-  let d;
-  try { d = await api(`/srs/cards/${id}/undo`, { method: 'POST' }); }
-  catch (e) { toast('nothing to undo', 2000); return; }
+  const h = STUDY.history[STUDY.history.length - 1];
+  const id = h.card.id;
+  let card = h.card;
+  if (h.offline) {
+    const pend = (await idbAll('srsOut').catch(() => []))
+      .filter(x => x.card_id === id).sort((a, b) => (a.reviewed_at < b.reviewed_at ? 1 : -1))[0];
+    if (pend) await idbDel('srsOut', pend.client_id).catch(() => {});
+  } else {
+    try { const d = await api(`/srs/cards/${id}/undo`, { method: 'POST' }); card = d.card || h.card; }
+    catch (e) { toast('couldn’t undo — need a connection', 2500); return; }
+  }
   STUDY.history.pop();
   STUDY.done = Math.max(0, STUDY.done - 1);
-  // drop any copy of this card already in the queue, then put it back at the front
   STUDY.queue = STUDY.queue.filter(x => x.id !== id);
-  STUDY.queue.unshift(d.card);
+  STUDY.queue.unshift(card);
   STUDY.i = 0;
   renderStudyCard();
   studyReveal();          // show it answered so they can re-grade
   refreshStudyBanner();
+  refreshQueuePill();
 }
 
 function studyJump(videoId, secs) {
@@ -2039,7 +2155,10 @@ function renderStudyDone() {
         <div class="big">${STUDY.done ? '✅' : '🎉'}</div>
         <div class="msg">${STUDY.done ? STUDY.done + ' review' + (STUDY.done === 1 ? '' : 's') + ' done' : 'All caught up'}</div>
         <div class="sub">${s.due || 0} due · ${s.new || 0} new left today · ${s.total} cards total</div>
-        <label class="study-set"><input type="checkbox" id="dualWrite" ${s.anki_dual_write ? 'checked' : ''}
+        <button class="study-set" onclick="openStats()" style="background:none;border:0;cursor:pointer;text-decoration:underline;padding:0">📊 progress &amp; stats</button>
+        <label class="study-set"><input type="checkbox" ${STUDY_AUDIO_FIRST ? 'checked' : ''}
+          onchange="setAudioFirst(this.checked)"> audio-first review (hide the sentence, play the line)</label>
+        <label class="study-set"><input type="checkbox" ${s.anki_dual_write ? 'checked' : ''}
           onchange="setDualWrite(this.checked)"> also save new cards to Anki</label>
         <a class="study-set" href="/srs/export" download>⬇ export .apkg</a>
       </div>`;
@@ -2050,6 +2169,47 @@ async function setDualWrite(on) {
     body: JSON.stringify({ key: 'anki_dual_write', value: on }) });
     toast(on ? 'new cards will also go to Anki' : 'new cards stay in-app only', 2600);
   } catch (e) { toast('couldn’t save — ' + e.message, 3000); }
+}
+
+/* ---- progress / stats ---- */
+async function openStats() {
+  $('#statsView').hidden = false;
+  $('#statsBody').innerHTML = SPINNER;
+  let d;
+  try { d = await api('/srs/analytics'); }
+  catch (e) { $('#statsBody').innerHTML = `<div class="empty">couldn’t load — ${escapeHtml(e.message)}</div>`; return; }
+  renderStats(d);
+}
+function closeStats() { $('#statsView').hidden = true; }
+function renderStats(d) {
+  const cn = d.counts, mx = cn.total || 1;
+  const max = Math.max(1, ...d.reviews_by_day.map(x => x.count));
+  const bars = d.reviews_by_day.map(x =>
+    `<i class="${x.count ? '' : 'z'}" style="height:${Math.round(x.count / max * 100)}%" title="${x.date}: ${x.count}"></i>`).join('');
+  const first = d.reviews_by_day[0].date.slice(5), last = d.reviews_by_day[d.reviews_by_day.length - 1].date.slice(5);
+  const seg = (n, cls) => n ? `<i class="${cls}" style="flex:${n}"></i>` : '';
+  $('#statsBody').innerHTML = `
+    <div class="stat-grid">
+      <div class="stat-cell"><div class="v">${d.streak}</div><div class="k">day streak</div></div>
+      <div class="stat-cell"><div class="v">${d.reviews_today}</div><div class="k">today</div></div>
+      <div class="stat-cell"><div class="v">${d.retention != null ? Math.round(d.retention * 100) + '%' : '—'}</div><div class="k">retention</div></div>
+      <div class="stat-cell"><div class="v">${cn.total}</div><div class="k">cards</div></div>
+      <div class="stat-cell"><div class="v">${cn.mature}</div><div class="k">mature</div></div>
+      <div class="stat-cell"><div class="v">${d.total_reviews}</div><div class="k">reviews</div></div>
+    </div>
+    <div class="stat-h">reviews · last ${d.reviews_by_day.length} days</div>
+    <div class="cal">${bars}</div>
+    <div class="cal-x"><span>${first}</span><span>${last}</span></div>
+    <div class="stat-h">collection</div>
+    <div class="mix">
+      ${seg(cn.new, 'mnew')}${seg(cn.learning, 'mlearn')}
+      ${seg(cn.review - cn.mature, 'mrev')}${seg(cn.mature, 'mmat')}
+    </div>
+    <div class="mix-legend">
+      <span class="lnew">${cn.new} new</span><span class="llearn">${cn.learning} learning</span>
+      <span class="lrev">${Math.max(0, cn.review - cn.mature)} young</span><span class="lmat">${cn.mature} mature</span>
+      ${cn.suspended ? `<span>${cn.suspended} suspended</span>` : ''}
+    </div>`;
 }
 
 /* ---- resume where you left off (per video, this device) ---- */
@@ -2984,13 +3144,16 @@ async function deleteText() {
 
 /* ---------------- offline queue + flush ---------------- */
 async function refreshQueuePill() {
-  const n = (await idbAll('queue')).length;
+  const nc = (await idbAll('queue')).length;
+  const nr = (await idbAll('srsOut').catch(() => [])).length;
+  const n = nc + nr;
   const pill = $('#queuePill');
   if (!n) { pill.hidden = true; return; }
   pill.hidden = false;
-  pill.innerHTML = flushing
-    ? `<span class="spin"></span> uploading ${n}…`
-    : `${n} card${n>1?'s':''} to upload`;
+  const label = nc && nr ? `${nc} card${nc > 1 ? 's' : ''} + ${nr} review${nr > 1 ? 's' : ''}`
+    : nc ? `${nc} card${nc > 1 ? 's' : ''} to upload`
+    : `${nr} review${nr > 1 ? 's' : ''} to sync`;
+  pill.innerHTML = flushing ? `<span class="spin"></span> syncing ${n}…` : label;
 }
 let flushing = false;
 async function flushQueue(manual) {
@@ -3342,10 +3505,11 @@ let _db;
 function idb() {
   if (_db) return _db;
   _db = new Promise((res, rej) => {
-    const r = indexedDB.open('ru-anki', 1);
+    const r = indexedDB.open('ru-anki', 2);
     r.onupgradeneeded = () => {
-      r.result.createObjectStore('offline');
-      r.result.createObjectStore('queue');
+      const db = r.result;
+      for (const s of ['offline', 'queue', 'srsCache', 'srsOut'])
+        if (!db.objectStoreNames.contains(s)) db.createObjectStore(s);
     };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
@@ -3394,6 +3558,8 @@ function paintNet() { probeHealth(); }
 
 function onReconnect() {
   flushQueue();
+  flushSrs().then(() => { refreshQueuePill(); refreshStudyBanner();
+    if (STUDY && !$('#studyView').hidden && STUDY.offline) loadStudyQueue(); });
   if (CURRENT && !$('#detailView').hidden) { renderOfflineRow(CURRENT); loadCandidates(true); }
 }
 window.addEventListener('online', probeHealth);
@@ -3426,6 +3592,7 @@ function navBack() {
     if ($('#watchView').classList.contains('fs')) { fsManual = true; exitFs(); return true; }
     closeWatch(); return true;
   }
+  if (!$('#statsView').hidden) { closeStats(); return true; }
   if (!$('#readView').hidden) { closeReader(); return true; }
   if (!$('#studyView').hidden) { closeStudy(); return true; }
   if (!$('#detailView').hidden) { showList(); return true; }
@@ -3464,7 +3631,7 @@ addEventListener('popstate', () => { navBack(); try { history.pushState({ ru: 1 
 
 /* ---------------- boot ---------------- */
 // belt-and-suspenders: full-screen overlays must never be left showing
-['#studyView'].forEach(s => { const e = $(s); if (e) e.hidden = true; });
+['#studyView', '#statsView'].forEach(s => { const e = $(s); if (e) e.hidden = true; });
 if (!READING_ENABLED) ['#readView', '#pasteWrap', '#tocPanel'].forEach(s => { const e = $(s); if (e) e.hidden = true; });
 
 if ('serviceWorker' in navigator) {
