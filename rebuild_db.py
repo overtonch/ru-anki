@@ -5,11 +5,12 @@ are both gone.
 Usage:
   python rebuild_db.py <path-to-backup-git-dir> [out.db]
 
-Then re-derive subtitle_lines and the stoplist:
+Then re-derive subtitle_lines and the lookup tables (freq / stoplist / dict_ru):
   python -c "import sys;sys.path.insert(0,'app');import store,ytdlp; \
              [store.replace_subtitle_lines(v['id'], ytdlp.subtitle_lines(store.get_video(v['id'])['raw_subs'])) \
               for v in store.list_videos()]"
   python build_stoplist.py vocab.db
+  python build_dict.py --db vocab.db
 """
 import json
 import os
@@ -62,7 +63,7 @@ def main():
     c.commit()
     c.close()
     print(f"rebuilt {out}: {v} videos, {k} candidates, {r} resolved_words")
-    print("now re-derive subtitle_lines + stoplist (see this file's docstring)")
+    print("now re-derive subtitle_lines + freq/stoplist/dict_ru (see this file's docstring)")
 
 
 if __name__ == "__main__":

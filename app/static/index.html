@@ -232,6 +232,10 @@
   #modalPreview .pv .sent { font-size:1rem; }
   #modalPreview .pv .sent b { font-weight:700; }
   #modalPreview .pv .tr { color:var(--accent); font-size:1rem; margin-top:.25rem; }
+  #modalPreview .pv.quick .tr { color:var(--fg-dim); }
+  #modalPreview .qtag { font-size:.62rem; text-transform:uppercase; letter-spacing:.06em;
+                        color:var(--muted); border:1px solid var(--line); border-radius:.3rem;
+                        padding:.02em .3em; vertical-align:.12em; }
   #modalPreview .wait { font-size:.82rem; color:var(--muted); display:flex; gap:.4rem; align-items:center; }
   .modalbtns { display:flex; justify-content:flex-end; gap:1rem; align-items:center;
                margin-top:.8rem; }
@@ -1239,6 +1243,14 @@ function updatePreview(span, immediate) {
   }
   box.innerHTML = '<div class="wait"><span class="spin"></span> translating…</div>';
   const seq = ++MODAL.pvSeq;
+  // instant best-effort gloss from the local dictionary while the LLM runs
+  api('/gloss?span=' + encodeURIComponent(span)).then(g => {
+    if (seq === MODAL.pvSeq && !MODAL.preview && g && g.gloss)
+      box.innerHTML = `<div class="pv quick">
+        <div class="tr">${escapeHtml(g.gloss)} <span class="qtag">quick</span></div>
+        <div class="wait" style="margin-top:.45rem"><span class="spin"></span> full translation…</div>
+      </div>`;
+  }).catch(() => {});
   MODAL.pvTimer = setTimeout(async () => {
     try {
       const p = await api('/translate', {

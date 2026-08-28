@@ -338,6 +338,27 @@ def freq_hint(normalized_text, is_phrase=False):
     return {"rank": rank, "label": f"{label} · ~#{rank // 1000}k", "band": band}
 
 
+def gloss_for(span):
+    """Instant best-effort Russian->English gloss from the local dictionary, or
+    None. Tries the surface form, then the pymorphy lemma. Placeholder only —
+    the card is always LLM-translated."""
+    s = (span or "").strip().lower().replace("ё", "е")
+    if not s:
+        return None
+    c = connect()
+    try:
+        row = c.execute("SELECT gloss FROM dict_ru WHERE headword=?", (s,)).fetchone()
+        if not row:
+            lem = lemma_key(s)
+            if lem != s:
+                row = c.execute("SELECT gloss FROM dict_ru WHERE headword=?", (lem,)).fetchone()
+        return row["gloss"] if row else None
+    except sqlite3.OperationalError:      # table not built yet
+        return None
+    finally:
+        c.close()
+
+
 def card_lemmas():
     """normalized_text of every word/phrase you have an Anki card for."""
     c = connect()

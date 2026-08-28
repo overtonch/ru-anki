@@ -417,8 +417,14 @@ def _run_extraction(video_id, model):
 
         def on_chunk(items):
             for it in items:
-                it["sentence"] = store.sentence_for(
-                    video_id, it.get("timestamp_start"), it["span_text"])
+                # prefer the model's lightly-cleaned sentence; fall back to the
+                # stitched raw subtitle context if it's missing or lost the span
+                s = (it.get("sentence") or "").strip()
+                ph = bool(it.get("is_phrase"))
+                if not s or "\x00" not in store.bold(s, it["span_text"], ph, "\x00"):
+                    s = store.sentence_for(
+                        video_id, it.get("timestamp_start"), it["span_text"])
+                it["sentence"] = s
             got, _ = store.add_candidates(video_id, items, source="batch")
             added["n"] += len(got)
 
@@ -690,6 +696,12 @@ def _make_one_card(video_id, subtitle_line_id, span, timestamp=None, sentence=No
     return {"candidate_id": cid, "span_text": span_text, "is_phrase": ph,
             "translation": translation, "anki": anki_result,
             "bolded": anki_result["bolded"]}
+
+
+@app.get("/gloss")
+def gloss(span: str):
+    """Instant local-dictionary gloss (no LLM) — shown while /translate runs."""
+    return {"span": span, "gloss": store.gloss_for(span)}
 
 
 @app.post("/translate")

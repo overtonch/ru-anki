@@ -87,9 +87,10 @@ EXTRACT_SYSTEM = """You build a Russian vocabulary study list for ONE specific l
 You are given an excerpt of a de-overlapped ASR transcript, lines prefixed with a [HH:MM:SS] tag.
 
 Output ONLY pipe-delimited lines, one item per line, and NOTHING else:
-SPAN|TRANSLATION|HH:MM:SS
-- HH:MM:SS: copy the tag of the line where the span occurs.
+SPAN|TRANSLATION|SENTENCE|HH:MM:SS
 - TRANSLATION: concise English gloss; "a / b" if ambiguous; gloss idioms by meaning.
+- SENTENCE: the single line/utterance where the span occurs, lightly cleaned for a flashcard — restore capitalization and punctuation, and fix ONLY unambiguous ASR mishearings (wrong word boundaries, a clearly wrong homophone). Keep it faithful and short: one sentence, at most ~20 words, no added information, no paraphrase. It MUST still contain an inflected form of SPAN. Never use the "|" character inside SENTENCE.
+- HH:MM:SS: copy the tag of the line where the span occurs.
 
 FLAG a word/phrase only if it clears ALL of these:
 1. A strong B2–C1 learner would plausibly NOT know it, or would be unsure of its exact meaning.
@@ -121,7 +122,9 @@ def _chunks(transcript, n=CHUNK_LINES):
 
 
 def parse_items(text):
-    """Parse the model's pipe-delimited output. Ignores any stray prose lines."""
+    """Parse the model's pipe-delimited output. Handles both the current
+    SPAN|TRANSLATION|SENTENCE|HH:MM:SS and the older SPAN|TRANSLATION|HH:MM:SS.
+    Ignores any stray prose lines."""
     out = []
     for ln in text.splitlines():
         ln = ln.strip().strip("`").strip()
@@ -129,14 +132,23 @@ def parse_items(text):
             continue
         parts = [p.strip() for p in ln.split("|")]
         span, tr = parts[0], parts[1]
-        m = _TS.search(parts[2]) if len(parts) > 2 else None
         if not span or not tr or span.lower() in ("span", "span_text"):
             continue
+        # the timestamp is the last field that looks like one
+        tsi = next((i for i in range(len(parts) - 1, 1, -1)
+                    if _TS.search(parts[i])), None)
+        ts, sentence = None, None
+        if tsi is not None:
+            m = _TS.search(parts[tsi])
+            ts = f"{m.group(1)}:{m.group(2)}:{m.group(3)}"
+            if tsi >= 3:                       # SPAN|TR|SENTENCE|TS
+                sentence = " ".join(parts[2:tsi]).strip() or None
         out.append({
             "span_text": span,
             "is_phrase": 1 if " " in span else 0,
             "translation": tr,
-            "timestamp_start": f"{m.group(1)}:{m.group(2)}:{m.group(3)}" if m else None,
+            "sentence": sentence,
+            "timestamp_start": ts,
         })
     return out
 

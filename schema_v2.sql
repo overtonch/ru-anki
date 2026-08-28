@@ -21,6 +21,14 @@ CREATE TABLE IF NOT EXISTS freq (
     rank            INTEGER
 );
 
+-- Local Russian->English glosses (populated by build_dict.py from WikDict), for
+-- the instant best-effort translation shown while the real LLM call runs. The
+-- card is always LLM-translated; this is only a placeholder.
+CREATE TABLE IF NOT EXISTS dict_ru (
+    headword TEXT PRIMARY KEY,
+    gloss    TEXT
+);
+
 -- Every word/phrase that has been shown to the user and decided, either way.
 -- Checked (with the static stoplist) before anything is flagged as a candidate
 -- again. reason: 'known' | 'garbage' | 'has_card'.
