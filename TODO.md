@@ -21,7 +21,7 @@
   `storeMediaFile` → `[sound:…]`. Turns reading cards into listening cards.
 - **Audio-only download mode** — also gives background playback (screen off) and
   true offline listening. Lighter than caching video.
-- **Offline video** (Phase B) — 360p download + SW range-request handling.
+- (done) Offline video + audio, OPFS + <video>, Media Session — needs device testing
 
 ## Rough edges / smaller
 
