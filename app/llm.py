@@ -153,8 +153,14 @@ def parse_items(text):
     return out
 
 
-def _extract_chunk(title, part, decided, discards, model):
+def _extract_chunk(title, part, decided, discards, recurring, model):
     prompt = f"Video: {title}\n\n{part}" if title else part
+    if recurring:
+        prompt += ("\n\nRECURRING — these words are said many times across this "
+                   "video (count in parens). If one appears in the excerpt above "
+                   "and is real vocabulary a B2/C1 learner might not know, INCLUDE "
+                   "it even if it reads like a name — but still skip pure proper "
+                   f"nouns / character names:\n{recurring}")
     if discards:
         prompt += ("\n\nCALIBRATION — the learner recently REJECTED these as too "
                    "easy or not worth a card. Keep your bar clearly above this "
@@ -166,7 +172,8 @@ def _extract_chunk(title, part, decided, discards, model):
 
 
 def extract_candidates(title, transcript, already_decided, model=DEFAULT_MODEL,
-                       progress=None, on_chunk=None, workers=WORKERS, discards=()):
+                       progress=None, on_chunk=None, workers=WORKERS, discards=(),
+                       recurring=()):
     """Extract over the whole transcript, one headless call per chunk, `workers`
     at a time. A failed chunk is logged and skipped, not fatal.
 
@@ -179,6 +186,7 @@ def extract_candidates(title, transcript, already_decided, model=DEFAULT_MODEL,
     """
     decided = ", ".join(list(already_decided)[:120]) if already_decided else ""
     disc = ", ".join(list(discards)[:50]) if discards else ""
+    rec = ", ".join(f"{w} ({n}×)" for w, n in recurring) if recurring else ""
     parts = _chunks(transcript)
     total = len(parts)
     merged, seen, errors, done = [], set(), [], 0
@@ -187,7 +195,7 @@ def extract_candidates(title, transcript, already_decided, model=DEFAULT_MODEL,
         progress(0, total, errors)
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futs = {pool.submit(_extract_chunk, title, part, decided, disc, model): i
+        futs = {pool.submit(_extract_chunk, title, part, decided, disc, rec, model): i
                 for i, part in enumerate(parts, 1)}
         for fut in as_completed(futs):
             done += 1

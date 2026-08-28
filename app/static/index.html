@@ -553,6 +553,7 @@
     <button class="btn watch-cta" id="watchBtn" onclick="openWatch(CURRENT)">▶ Watch with captions</button>
     <div id="offlineRow" class="status"></div>
     <div id="mediaRow" class="status"></div>
+    <div id="transcribeRow" class="status"></div>
     <div id="progressPanel"></div>
 
     <div class="panel">
@@ -958,6 +959,7 @@ async function openDetail(id) {
   try { $('#reviewPanel').classList.toggle('collapsed', localStorage.getItem('reviewCollapsed') === '1'); } catch {}
   await renderOfflineRow(id);
   renderMediaRow(id);
+  renderTranscribeRow(id);
   const ex = (v && v.extract) || {state:'idle'};
   if (['queued','running'].includes(ex.state) && navigator.onLine) startProgress(v, ex);
   else renderProgressDone(ex);
@@ -2708,6 +2710,35 @@ async function downloadMedia(id) {
   }
   mediaDL[id] = false;
   renderMediaRow(id);
+}
+async function renderTranscribeRow(id) {
+  const row = $('#transcribeRow');
+  if (!row) return;
+  if (!navigator.onLine) { row.textContent = ''; return; }
+  let s = null;
+  try { s = await api(`/videos/${id}/transcribe`); } catch { row.textContent = ''; return; }
+  clearTimeout(row._t);
+  if (s.state === 'running') {
+    row.innerHTML = `<span class="spin"></span> re-transcribing with Whisper · ${Math.round(s.pct || 0)}% — ${escapeHtml(s.detail || '')}`;
+    row._t = setTimeout(() => { if (CURRENT === id) renderTranscribeRow(id); }, 4000);
+    return;
+  }
+  if (s.state === 'done') {
+    row.innerHTML = `✓ ${escapeHtml(s.detail || 're-transcribed with Whisper')}`;
+    return;
+  }
+  const kind = (DETAIL_V && DETAIL_V.subs_kind) || 'auto';
+  const err = s.state === 'error'
+    ? `<span style="color:var(--no)">last run failed: ${escapeHtml(s.detail || '')}</span> · ` : '';
+  row.innerHTML = `${err}captions: ${kind === 'manual' ? 'manual' : kind === 'whisper' ? 'Whisper' : 'auto'} ·
+    <button class="backlink" onclick="retranscribe(${id})">re-transcribe with Whisper${kind === 'whisper' ? ' again' : ''}</button>`;
+}
+async function retranscribe(id) {
+  if (!confirm('Re-transcribe the audio with Whisper?\n\nRuns on the Mac (no cost), ~2–4 min per 10 min of video, and replaces the current captions. Re-extract cards afterward for the cleaner text.')) return;
+  try { await api(`/videos/${id}/transcribe`, { method: 'POST' }); }
+  catch (e) { toast('couldn’t start: ' + e.message); return; }
+  toast('transcription started — it runs in the background');
+  renderTranscribeRow(id);
 }
 async function removeMedia(id) {
   await opfsDelete(id);

@@ -30,6 +30,7 @@ import backup  # noqa: E402
 import epub  # noqa: E402
 import heartbeat  # noqa: E402
 import llm  # noqa: E402
+import whisper_rt  # noqa: E402
 import store  # noqa: E402
 import subs  # noqa: E402
 import ytdlp  # noqa: E402
@@ -432,6 +433,56 @@ async def video_frame(video_id: int, t: float):
                         headers={"Cache-Control": "public, max-age=604800"})
 
 
+TRANSCRIBE_STATUS = {}   # video_id -> {"state","pct","detail"}
+
+
+def _run_transcribe(video_id):
+    v = store.get_video(video_id)
+    TRANSCRIBE_STATUS[video_id] = {"state": "running", "pct": 0.0, "detail": "preparing audio"}
+    try:
+        src = (v["media_path"] if v.get("media_path") and os.path.exists(v["media_path"])
+               else ytdlp.audio_path(video_id))
+        if not src:
+            TRANSCRIBE_STATUS[video_id] = {"state": "running", "pct": 0.0,
+                                           "detail": "downloading audio"}
+            src, _ = ytdlp.download_audio(v["url"], video_id)
+        cues = whisper_rt.transcribe(
+            src, v.get("duration") or 0,
+            progress=lambda f: TRANSCRIBE_STATUS.__setitem__(
+                video_id, {"state": "running", "pct": round(f * 100, 1),
+                           "detail": f"transcribing {f * 100:.0f}%"}))
+        if not cues:
+            raise RuntimeError("whisper produced no transcript")
+        vtt = whisper_rt.cues_to_vtt(cues)
+        store.set_raw_subs(video_id, vtt, kind="whisper")
+        store.replace_subtitle_lines(video_id, ytdlp.subtitle_lines(vtt))
+        TRANSCRIBE_STATUS[video_id] = {"state": "done", "pct": 100.0,
+                                       "detail": f"{len(cues)} lines — re-extract for fresh cards"}
+        backup.snapshot_async("transcribe")
+        print(f"[whisper] video {video_id}: {len(cues)} cues")
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        TRANSCRIBE_STATUS[video_id] = {"state": "error", "pct": 0.0, "detail": str(e)[:200]}
+
+
+@app.post("/videos/{video_id}/transcribe")
+def transcribe_start(video_id: int, background: BackgroundTasks):
+    v = store.get_video(video_id)
+    if not v:
+        raise HTTPException(404, "no such video")
+    st = TRANSCRIBE_STATUS.get(video_id, {})
+    if st.get("state") == "running":
+        return {"video_id": video_id, **st}
+    TRANSCRIBE_STATUS[video_id] = {"state": "running", "pct": 0.0, "detail": "queued"}
+    background.add_task(_run_transcribe, video_id)
+    return {"video_id": video_id, "state": "running"}
+
+
+@app.get("/videos/{video_id}/transcribe")
+def transcribe_status(video_id: int):
+    return TRANSCRIBE_STATUS.get(video_id) or {"state": "idle"}
+
+
 AUDIO_STATUS = {}   # video_id -> {"state","pct","detail"}
 
 
@@ -559,6 +610,7 @@ def _run_extraction(video_id, model):
         transcript = ytdlp.transcript_block(v["raw_subs"])
         decided = store.resolved_words_list()
         discards = store.recent_discards()
+        recurring = store.notable_recurring(video_id)
         added = {"n": 0}
 
         def on_chunk(items):
@@ -582,7 +634,7 @@ def _run_extraction(video_id, model):
 
         items, errors, usage = llm.extract_candidates(
             v["title"], transcript, decided, model=model,
-            progress=prog, on_chunk=on_chunk, discards=discards)
+            progress=prog, on_chunk=on_chunk, discards=discards, recurring=recurring)
         store.discard_unbolded(video_id)
         detail = f"{added['n']} candidates ready"
         if errors:

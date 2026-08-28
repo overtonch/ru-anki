@@ -176,6 +176,14 @@ def set_media(video_id, **kw):
     c.close()
 
 
+def set_raw_subs(video_id, raw_subs, kind="whisper", lang="ru"):
+    c = connect()
+    c.execute("UPDATE videos SET raw_subs=?, subs_kind=?, subs_lang=? WHERE id=?",
+              (raw_subs, kind, lang, video_id))
+    c.commit()
+    c.close()
+
+
 def set_video_meta(video_id, channel, channel_url, thumbnail_url, duration):
     c = connect()
     c.execute(
@@ -376,6 +384,27 @@ def lemma_counts(video_id):
             k = lemma_key(tok)
             counts[k] = counts.get(k, 0) + 1
     return counts
+
+
+def notable_recurring(video_id, min_count=4, limit=20):
+    """Lemmas spoken >= min_count times that AREN'T in the stoplist and haven't
+    been decided — words this specific video leans on that the generic extractor
+    might skip (character-name-adjacent nouns, borderline terms). -> [(lemma, n)]."""
+    counts = lemma_counts(video_id)
+    c = connect()
+    out = []
+    for lem, n in sorted(counts.items(), key=lambda x: -x[1]):
+        if n < min_count:
+            break
+        if len(lem) < 4 or "-" in lem:
+            continue
+        if exclusion_reason(c, lem):        # in stoplist, or already known/carded
+            continue
+        out.append((lem, n))
+        if len(out) >= limit:
+            break
+    c.close()
+    return out
 
 
 def card_lemmas():

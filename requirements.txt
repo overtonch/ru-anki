@@ -11,3 +11,7 @@ genanki==0.13.1
 pymorphy3==2.0.6
 pymorphy3-dicts-ru==2.4.417150.4580142
 # (reading feature: EPUB parsed with stdlib — no new deps)
+
+# Local Whisper re-transcription (Apple Silicon only; optional — the
+# /videos/{id}/transcribe endpoint no-ops without it)
+mlx-whisper==0.4.3
