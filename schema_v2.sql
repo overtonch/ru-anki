@@ -14,6 +14,13 @@ CREATE TABLE IF NOT EXISTS subtitle_lines (
 );
 CREATE INDEX IF NOT EXISTS idx_sublines_video ON subtitle_lines(video_id);
 
+-- Full ~50k lemma frequency ranks (populated by build_stoplist.py), for the
+-- review-time "how rare is this word" hint.
+CREATE TABLE IF NOT EXISTS freq (
+    normalized_text TEXT PRIMARY KEY,
+    rank            INTEGER
+);
+
 -- Every word/phrase that has been shown to the user and decided, either way.
 -- Checked (with the static stoplist) before anything is flagged as a candidate
 -- again. reason: 'known' | 'garbage' | 'has_card'.

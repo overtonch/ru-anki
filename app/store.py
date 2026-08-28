@@ -296,6 +296,26 @@ def exclusion_reason(c, normalized):
     return r["reason"] if r else None
 
 
+def freq_hint(normalized_text, is_phrase=False):
+    """How rare is this word — a judgment aid during review. Review candidates
+    are all past the 13k stoplist, so the bands start there."""
+    if is_phrase or " " in (normalized_text or ""):
+        return {"rank": None, "label": "phrase", "band": "rare"}
+    c = connect()
+    r = c.execute("SELECT rank FROM freq WHERE normalized_text=?", (normalized_text,)).fetchone()
+    c.close()
+    if not r:
+        return {"rank": None, "label": "very rare", "band": "rare"}
+    rank = r["rank"]
+    if rank <= 16000:
+        band, label = "mid", "borderline"      # near what you already know
+    elif rank <= 32000:
+        band, label = "uncommon", "uncommon"
+    else:
+        band, label = "rare", "rare"
+    return {"rank": rank, "label": f"{label} · ~#{rank // 1000}k", "band": band}
+
+
 def card_lemmas():
     """normalized_text of every word/phrase you have an Anki card for."""
     c = connect()

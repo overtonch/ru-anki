@@ -1,10 +1,9 @@
-"""Populate the stoplist table from a public Russian *lemma* frequency list.
+"""Populate `stoplist` (top-CUTOFF backstop) and `freq` (all ~50k lemma ranks,
+for the review-time "how rare is this" hint) from a public Russian *lemma*
+frequency list.
 
 Source: hingston/russian, 50000-russian-words-cyrillic-only.txt - lemmas
-(infinitives, nominative singular, ...) ordered by frequency. This is a lemma
-list, not a surface-form list, so a rank means what it should. We take the top
-CUTOFF lemmas as the "don't bother asking me about this" backstop; candidates
-are lemmatised with pymorphy3 before being checked against it (see db.py).
+(infinitives, nominative singular, ...) ordered by frequency.
 
 CUTOFF is calibrated to the user (2026-08): they knew every probe word at
 lemma-rank <= ~11.5k and wanted a card for every probe at rank >= ~15.5k, so
@@ -36,15 +35,19 @@ def main() -> None:
             continue
         seen.add(w)
         rows.append((w, len(rows) + 1))
-        if len(rows) >= CUTOFF:
-            break
 
     con = sqlite3.connect(DB)
+    con.execute("""CREATE TABLE IF NOT EXISTS freq
+                   (normalized_text TEXT PRIMARY KEY, rank INTEGER)""")
     con.execute("DELETE FROM stoplist")
-    con.executemany("INSERT INTO stoplist(normalized_text, rank) VALUES (?, ?)", rows)
+    con.execute("DELETE FROM freq")
+    con.executemany("INSERT INTO stoplist(normalized_text, rank) VALUES (?, ?)",
+                    [r for r in rows if r[1] <= CUTOFF])
+    con.executemany("INSERT INTO freq(normalized_text, rank) VALUES (?, ?)", rows)
     con.commit()
-    n = con.execute("SELECT count(*) FROM stoplist").fetchone()[0]
-    print(f"stoplist: {n} lemmas (cutoff {CUTOFF})")
+    ns = con.execute("SELECT count(*) FROM stoplist").fetchone()[0]
+    nf = con.execute("SELECT count(*) FROM freq").fetchone()[0]
+    print(f"stoplist: {ns} lemmas (cutoff {CUTOFF}) · freq: {nf} lemmas")
     con.close()
 
 

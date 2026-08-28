@@ -383,6 +383,7 @@ def candidates(video_id: int, status: str = "pending"):
         r["bolded"] = bolded
         r["source_label"] = title
         r["duplicate"] = r["normalized_text"] in have
+        r["freq"] = store.freq_hint(r["normalized_text"], r["is_phrase"])
     return rows
 
 
