@@ -107,6 +107,16 @@ def front_html(sentence, span, is_phrase):
     return marked, bolded
 
 
+def delete_note(note_id):
+    """Best-effort — the note may already be gone."""
+    if not note_id:
+        return
+    try:
+        invoke("deleteNotes", notes=[int(note_id)])
+    except AnkiError:
+        pass
+
+
 def add_card(sentence, span, is_phrase, translation, source, deck=DECK, tags=None):
     """Create the note in Anki. Returns dict(note_id, bolded, front)."""
     ensure_model()

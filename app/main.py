@@ -780,9 +780,31 @@ def decide(cand_id: int, body: DecisionIn):
             raise HTTPException(502, f"Anki: {e}")
         _sync_soon()  # don't block the response on the AnkiWeb sync
 
-    updated = store.resolve_candidate(cand_id, body.decision)
+    updated = store.resolve_candidate(
+        cand_id, body.decision,
+        note_id=(anki_result or {}).get("note_id") if body.decision == "yes" else None)
     backup.snapshot_async("decision")
     return {"candidate": updated, "anki": anki_result}
+
+
+@app.post("/candidates/{cand_id}/undo")
+def undo_decision(cand_id: int):
+    """Reverse an inline card / skip made while watching — deletes the Anki note
+    if there was one and puts the candidate back to pending."""
+    cand = store.get_candidate(cand_id)
+    if not cand:
+        raise HTTPException(404, "no such candidate")
+    if cand["status"] not in ("card_created", "discarded"):
+        raise HTTPException(409, f"nothing to undo (status {cand['status']})")
+    was = cand["status"]
+    updated, note_id = store.unresolve_candidate(cand_id)
+    removed = False
+    if was == "card_created" and note_id:
+        anki.delete_note(note_id)
+        _sync_soon()
+        removed = True
+    backup.snapshot_async("undo")
+    return {"candidate": updated, "undone": was, "card_removed": removed}
 
 
 @app.get("/candidates/{cand_id}/sentences")
@@ -853,6 +875,7 @@ def watch(video_id: int):
     pend_rows = store.list_candidates(video_id, status="pending")
     pending = {r["normalized_text"]: r["id"]
                for r in pend_rows if r.get("normalized_text")}
+    decided = store.video_decided_lemmas(video_id)   # {lemma: {id,status,note_id}}
     out = []
     for cue in cues:
         words = []
@@ -865,6 +888,11 @@ def watch(video_id: int):
                     w["c"] = True
                 elif lem in pending:
                     w["p"] = pending[lem]
+                d = decided.get(lem)
+                if d and d["status"] == "card_created":
+                    w["cc"] = d["id"]        # carded via this candidate — undoable
+                elif d and d["status"] == "discarded":
+                    w["dd"] = d["id"]        # skipped — restorable
             words.append(w)
         out.append({"s": cue["s"], "e": cue["e"], "re": cue.get("re", cue["e"]),
                     "text": cue["text"], "words": words})
@@ -953,7 +981,7 @@ def _make_one_card(video_id, subtitle_line_id, span, timestamp=None, sentence=No
                                 src, tags=["ru-anki", "live"])
     anki_result["sync_error"] = None
     _sync_soon()
-    store.resolve_candidate(cid, "yes")
+    store.resolve_candidate(cid, "yes", note_id=anki_result.get("note_id"))
     return {"candidate_id": cid, "span_text": span_text, "is_phrase": ph,
             "translation": translation, "anki": anki_result,
             "bolded": anki_result["bolded"]}

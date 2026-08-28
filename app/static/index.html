@@ -417,6 +417,26 @@
   #watchView.fs .fs-exit:active { background:var(--accent); transform:scale(.92); }
   #watchView.fs.hidectrls .fs-seek,
   #watchView.fs.hidectrls .fs-exit { opacity:0; pointer-events:none; }
+  #watchView.paused.fs .fs-seek { bottom:calc(3.2rem + env(safe-area-inset-bottom)); }
+
+  /* scrubber — a position bar at the bottom of the player while paused */
+  .scrubber { position:absolute; left:0; right:0; bottom:0; z-index:7;
+              padding:.9rem .95rem calc(.55rem + env(safe-area-inset-bottom));
+              background:linear-gradient(transparent, rgba(0,0,0,.6));
+              opacity:0; pointer-events:none; transition:opacity .2s;
+              touch-action:none; }
+  #watchView.paused .scrubber { opacity:1; pointer-events:auto; }
+  .scrub-track { position:relative; height:4px; border-radius:99px;
+                 background:rgba(255,255,255,.3); }
+  .scrub-fill { position:absolute; left:0; top:0; bottom:0; width:0;
+                background:var(--accent); border-radius:99px; transition:width .12s linear; }
+  .scrub-knob { position:absolute; top:50%; left:0; width:13px; height:13px;
+                border-radius:50%; background:#fff; transform:translate(-50%,-50%);
+                box-shadow:0 1px 4px rgba(0,0,0,.55); transition:left .12s linear; }
+  .scrubber.dragging .scrub-fill, .scrubber.dragging .scrub-knob { transition:none; }
+  .scrubber.dragging .scrub-track { height:6px; }
+  .scrub-time { color:#fff; font-size:.72rem; margin-top:.4rem;
+                font-variant-numeric:tabular-nums; text-shadow:0 1px 3px rgba(0,0,0,.9); }
 
   /* landscape on a phone, not fullscreen: give the video the height, transcript the rest */
   @media (orientation:landscape) and (max-height:540px) {
@@ -631,6 +651,10 @@
       <button class="fs-exit" onclick="exitFs()" aria-label="exit full screen">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4v3a2 2 0 0 1-2 2H4M20 9h-3a2 2 0 0 1-2-2V4M4 15h3a2 2 0 0 1 2 2v3M15 20v-3a2 2 0 0 1 2-2h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
+      <div class="scrubber" id="scrubber">
+        <div class="scrub-track"><div class="scrub-fill" id="scrubFill"></div><div class="scrub-knob" id="scrubKnob"></div></div>
+        <div class="scrub-time" id="scrubTime"></div>
+      </div>
     </div>
     <div class="wctrls">
       <button onclick="seekLine(-1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6a1 1 0 0 1 2 0v4.6l7.5-4.9A1 1 0 0 1 19 6.5v11a1 1 0 0 1-1.5.8L10 13.4V18a1 1 0 0 1-2 0z"/></svg> prev line</button>
@@ -643,10 +667,7 @@
     <div id="inlineDecide" hidden>
       <div class="id-head"><b id="idSpan"></b> <span id="idTr"></span></div>
       <div class="id-freq" id="idFreq"></div>
-      <div class="id-btns">
-        <button class="id-no" onclick="inlineCommit('no')">✕ skip</button>
-        <button class="id-yes" onclick="inlineCommit('yes')">✓ add card</button>
-      </div>
+      <div class="id-btns" id="idBtns"></div>
     </div>
   </div>
 
@@ -2101,12 +2122,48 @@ function renderCaption(idx) {
     sp.className = 'capw' + (w.c ? ' has-card' : (w.p ? ' pending' : ''));
     if (w.p) sp.dataset.cand = w.p;
     sp.textContent = w.t;
-    if (w.t) sp.onclick = ev => {
-      ev.stopPropagation();
-      (w.p && !w.c) ? inlineDecide(w.p, sp) : watchTapWord(idx, wi);
-    };
+    if (w.t) sp.onclick = ev => { ev.stopPropagation(); wordAction(w, sp, idx, wi); };
     c.append(sp, document.createTextNode(' '));
   });
+}
+let scrubDragging = false;
+function updateScrubber() {
+  if (scrubDragging || !WP) return;
+  const d = WP.dur();
+  if (!d || !isFinite(d)) return;
+  const p = Math.max(0, Math.min(1, WP.time() / d));
+  $('#scrubFill').style.width = (p * 100) + '%';
+  $('#scrubKnob').style.left = (p * 100) + '%';
+  $('#scrubTime').textContent = fmtTime(WP.time()) + ' / ' + fmtTime(d);
+}
+function attachScrubber() {
+  const sc = $('#scrubber'), track = sc.querySelector('.scrub-track');
+  if (!sc || sc._wired) return;
+  sc._wired = true;
+  const fracAt = e => {
+    const r = track.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+  };
+  const show = p => {
+    $('#scrubFill').style.width = (p * 100) + '%';
+    $('#scrubKnob').style.left = (p * 100) + '%';
+    if (WP && WP.dur()) $('#scrubTime').textContent = fmtTime(p * WP.dur()) + ' / ' + fmtTime(WP.dur());
+  };
+  sc.addEventListener('pointerdown', e => {
+    if (!WP || !WP.dur()) return;
+    scrubDragging = true; sc.classList.add('dragging');
+    try { sc.setPointerCapture(e.pointerId); } catch {}
+    show(fracAt(e));
+  });
+  sc.addEventListener('pointermove', e => { if (scrubDragging) show(fracAt(e)); });
+  const end = e => {
+    if (!scrubDragging) return;
+    scrubDragging = false; sc.classList.remove('dragging');
+    if (WP && WP.dur()) { WP.seek(fracAt(e) * WP.dur()); }
+    bumpCtrls();
+  };
+  sc.addEventListener('pointerup', end);
+  sc.addEventListener('pointercancel', end);
 }
 function tick() {
   if (!WP) return;
@@ -2116,6 +2173,7 @@ function tick() {
       playbackRate: WP.el ? WP.el.playbackRate : 1 }); } catch {}
   }
   if (Date.now() - lastPosSave > 4000) { lastPosSave = Date.now(); savePos(); }
+  updateScrubber();
 
   // fade the caption overlay out during a silent gap instead of leaving a line
   // hanging until the next one: real reading time + 1s grace, capped at 5.5s
@@ -2157,7 +2215,7 @@ function renderTranscript() {
       sp.className = 'cw' + (w.c ? ' has-card' : (w.p ? ' pending' : ''));
       if (w.p) sp.dataset.cand = w.p;
       sp.textContent = w.t;
-      sp.onclick = () => (w.p && !w.c) ? inlineDecide(w.p, sp) : watchTapWord(i, wi);
+      sp.onclick = () => wordAction(w, sp, i, wi);
       line.append(sp, document.createTextNode(' '));
     });
     box.appendChild(line);
@@ -2180,31 +2238,78 @@ function markWordCarded(span) {
   WCUES.forEach(c => (c.words || []).forEach(w => { if (hit(w.t)) w.c = true; }));
 }
 
-/* ---- inline approve/deny for a suggested (pending) card, from the watch view ---- */
-function inlineDecide(candId, anchor) {
-  const cand = WCANDS[candId];
-  if (!cand) {   // no detail for this candidate (stale offline cache) — don't leave it stuck
-    anchor.classList.remove('pending');
-    toast('reopen the video to review this one');
-    return;
-  }
+/* route a tapped word to the right action */
+function wordAction(w, sp, ci, wi) {
+  if (w.p && !w.c) return inlineDecide(w.p, sp);
+  if (w.cc) return inlineUndo(w.cc, sp, 'carded');
+  if (w.dd && !w.c) return inlineUndo(w.dd, sp, 'skipped');
+  watchTapWord(ci, wi);
+}
+function _openInlinePop(anchor, span, sub, freqHtml, btns) {
   if (WP && !WP.paused()) { try { WP.pause(); } catch {} wPausedForModal = true; }
   const pop = $('#inlineDecide');
-  $('#idSpan').textContent = cand.span || '';
-  $('#idTr').textContent = cand.tr ? '— ' + cand.tr : '';
-  const fq = cand.freq;
-  $('#idFreq').innerHTML = fq && fq.label
-    ? `<span class="fq ${fq.band || ''}">${escapeHtml(fq.label)}</span>` : '';
-  pop.dataset.cand = candId;
+  $('#idSpan').textContent = span || '';
+  $('#idTr').textContent = sub || '';
+  $('#idFreq').innerHTML = freqHtml || '';
+  $('#idBtns').innerHTML = btns;
   pop.hidden = false;
   const r = anchor.getBoundingClientRect();
   const pw = pop.offsetWidth, ph = pop.offsetHeight;
-  let left = r.left + r.width / 2 - pw / 2;
-  left = Math.max(8, Math.min(left, innerWidth - pw - 8));
+  let left = Math.max(8, Math.min(r.left + r.width / 2 - pw / 2, innerWidth - pw - 8));
   let top = r.top - ph - 10;
   if (top < 8) top = Math.min(r.bottom + 10, innerHeight - ph - 8);
   pop.style.left = left + 'px';
   pop.style.top = top + 'px';
+}
+
+/* ---- inline approve/deny for a suggested (pending) card ---- */
+function inlineDecide(candId, anchor) {
+  const cand = WCANDS[candId];
+  if (!cand) {
+    anchor.classList.remove('pending');
+    toast('reopen the video to review this one');
+    return;
+  }
+  const fq = cand.freq;
+  $('#inlineDecide').dataset.cand = candId;
+  _openInlinePop(anchor, cand.span, cand.tr ? '— ' + cand.tr : '',
+    fq && fq.label ? `<span class="fq ${fq.band || ''}">${escapeHtml(fq.label)}</span>` : '',
+    `<button class="id-no" onclick="inlineCommit('no')">✕ skip</button>
+     <button class="id-yes" onclick="inlineCommit('yes')">✓ add card</button>`);
+}
+
+/* ---- undo a card / skip made while watching ---- */
+function inlineUndo(candId, anchor, kind) {
+  const word = anchor.textContent.replace(/^[^А-Яа-яЁёA-Za-z-]+|[^А-Яа-яЁёA-Za-z-]+$/g, '');
+  $('#inlineDecide').dataset.cand = candId;
+  _openInlinePop(anchor, word,
+    kind === 'carded' ? '— you made a card for this' : '— you skipped this', '',
+    `<button class="id-no" onclick="closeInline(true)">keep</button>
+     <button class="id-yes" onclick="inlineUndoCommit('${kind}')">${kind === 'carded' ? 'remove card' : 'add back to review'}</button>`);
+}
+async function inlineUndoCommit(kind) {
+  const id = +$('#inlineDecide').dataset.cand;
+  $('#inlineDecide').hidden = true;
+  let cand, removed;
+  try {
+    const r = await api(`/candidates/${id}/undo`, { method: 'POST' });
+    cand = r.candidate; removed = r.card_removed;
+  } catch (e) {
+    toast('couldn’t undo — ' + e.message, 3000);
+    if (wPausedForModal && WP) { wPausedForModal = false; try { WP.play(); } catch {} }
+    return;
+  }
+  WCANDS[id] = { span: cand.span_text, tr: cand.translation, freq: WCANDS[id] && WCANDS[id].freq };
+  WCUES.forEach(cue => (cue.words || []).forEach(w => {
+    if (w.cc === id || w.dd === id) { delete w.cc; delete w.dd; w.c = false; w.p = id; }
+  }));
+  renderTranscript();
+  if ($('#capOverlay').textContent && $('#capOverlay').textContent !== 'tap to play')
+    renderCaption(wActive);
+  toast(kind !== 'carded' ? 'back in review'
+        : removed ? 'card removed — back in review'
+        : 'back in review (Anki card kept — delete it there)', 3200);
+  if (wPausedForModal && WP) { wPausedForModal = false; try { WP.play(); } catch {} }
 }
 function closeInline(resume) {
   $('#inlineDecide').hidden = true;
@@ -2241,10 +2346,11 @@ async function inlineCommit(decision) {
     if (carded) s.classList.add('has-card');
   });
   WCUES.forEach(cue => (cue.words || []).forEach(w => {
-    if (+w.p === id) { delete w.p; if (carded) w.c = true; }
+    if (+w.p === id) { delete w.p; if (carded) { w.c = true; w.cc = id; } else w.dd = id; }
   }));
-  delete WCANDS[id];
-  toast(carded ? (dupe ? 'already in Anki ✓' : '✓ added to Anki') : 'skipped');
+  // keep the candidate info around so an undo can re-show it
+  toast(carded ? (dupe ? 'already in Anki ✓' : '✓ added to Anki · tap again to undo')
+               : 'skipped · tap again to undo');
   resume();
 }
 document.addEventListener('pointerdown', e => {
@@ -2977,6 +3083,7 @@ matchMedia('(orientation: landscape)').addEventListener('change', e => {
   if ($('#watchView').classList.contains('fs')) bumpCtrls();
 });
 attachPlayerSwipe();
+attachScrubber();
 if (READING_ENABLED) $('#readingControls').hidden = false;
 probeHealth();
 refreshQueuePill();

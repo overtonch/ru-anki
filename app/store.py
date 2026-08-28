@@ -45,6 +45,8 @@ def init_db():
     # candidates.source was added by the plan; older DBs predate it.
     if not _has_column(c, "candidates", "source"):
         c.execute("ALTER TABLE candidates ADD COLUMN source TEXT NOT NULL DEFAULT 'batch'")
+    if not _has_column(c, "candidates", "anki_note_id"):
+        c.execute("ALTER TABLE candidates ADD COLUMN anki_note_id INTEGER")
     # channel / thumbnail metadata for the video picker (nullable, backfilled).
     for col in ("channel TEXT", "channel_url TEXT", "thumbnail_url TEXT",
                 "duration INTEGER",
@@ -823,7 +825,7 @@ def update_candidate_sentence(cand_id, sentence):
     c.close()
 
 
-def resolve_candidate(cand_id, decision):
+def resolve_candidate(cand_id, decision, note_id=None):
     """decision: 'yes' -> status card_created + resolved_words(has_card);
                  'no'  -> status discarded  + resolved_words(known).
     Returns the updated candidate row (dict)."""
@@ -836,7 +838,8 @@ def resolve_candidate(cand_id, decision):
         status, reason = "card_created", "has_card"
     else:
         status, reason = "discarded", "known"
-    c.execute("UPDATE candidates SET status=? WHERE id=?", (status, cand_id))
+    c.execute("UPDATE candidates SET status=?, anki_note_id=COALESCE(?, anki_note_id) WHERE id=?",
+              (status, note_id, cand_id))
     c.execute(
         """INSERT INTO resolved_words(normalized_text, reason, video_id)
            VALUES(?,?,?)
@@ -849,3 +852,34 @@ def resolve_candidate(cand_id, decision):
     out = dict(c.execute("SELECT * FROM candidates WHERE id=?", (cand_id,)).fetchone())
     c.close()
     return out
+
+
+def unresolve_candidate(cand_id):
+    """Put a decided candidate back to 'pending' and forget the decision — the
+    undo for an inline card/skip made while watching. -> (row, freed_note_id)."""
+    c = connect()
+    row = c.execute("SELECT * FROM candidates WHERE id=?", (cand_id,)).fetchone()
+    if not row:
+        c.close()
+        raise KeyError(cand_id)
+    note_id = row["anki_note_id"]
+    c.execute("UPDATE candidates SET status='pending', anki_note_id=NULL WHERE id=?", (cand_id,))
+    c.execute("DELETE FROM resolved_words WHERE normalized_text=?", (row["normalized_text"],))
+    c.commit()
+    out = dict(c.execute("SELECT * FROM candidates WHERE id=?", (cand_id,)).fetchone())
+    c.close()
+    return out, note_id
+
+
+def video_decided_lemmas(video_id):
+    """{lemma: {'id', 'status', 'note_id'}} for this video's card_created /
+    discarded candidates — lets the watch view offer an undo on a green word or
+    a word you skipped."""
+    c = connect()
+    rows = c.execute(
+        """SELECT id, normalized_text, status, anki_note_id FROM candidates
+           WHERE video_id=? AND status IN ('card_created','discarded')""",
+        (video_id,)).fetchall()
+    c.close()
+    return {r["normalized_text"]: {"id": r["id"], "status": r["status"],
+                                   "note_id": r["anki_note_id"]} for r in rows}
