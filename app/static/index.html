@@ -2292,7 +2292,8 @@ async function ensureAudioFile(id, btn) {
 
 function onPlayState(playing) {
   $('#watchView').classList.toggle('paused', !playing);
-  if (playing) { armScrub(false); const c = $('#capOverlay'); if (c.textContent === 'tap to play') c.textContent = ''; }
+  armScrub(false);   // reset scrub UI on every play/pause transition
+  if (playing) { const c = $('#capOverlay'); if (c.textContent === 'tap to play') c.textContent = ''; }
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
   bumpCtrls();
 }
@@ -2386,34 +2387,34 @@ function attachPlayerSwipe() {
   const pw = $('.player-wrap');
   if (!pw || pw._swipe) return;
   pw._swipe = true;
-  let x0 = null, y0 = 0, horiz = false;
+  let x0 = null, y0 = 0, t0 = 0, moved = false, vbail = false;
   pw.addEventListener('pointerdown', e => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
-    x0 = e.clientX; y0 = e.clientY; horiz = false;
+    if (e.target.closest && e.target.closest('#scrubber')) return;   // scrubber owns its own drags
+    x0 = e.clientX; y0 = e.clientY; t0 = Date.now(); moved = false; vbail = false;
   });
   pw.addEventListener('pointermove', e => {
-    if (x0 === null) return;
+    if (x0 === null || vbail) return;
     const dx = e.clientX - x0, dy = e.clientY - y0;
-    if (!horiz) {
-      if (Math.abs(dx) < 10) return;
-      if (Math.abs(dx) < Math.abs(dy) * 1.4) { x0 = null; return; }  // vertical — let it be
-      horiz = true;
-      try { pw.setPointerCapture(e.pointerId); } catch {}
-      pw.classList.add('swiping');
-    }
+    if (!moved && Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+    if (!moved && Math.abs(dy) > Math.abs(dx) * 2 && Math.abs(dy) > 26) { vbail = true; return; }  // clearly vertical
+    moved = true;
+    pw.classList.add('swiping');
+    try { pw.setPointerCapture(e.pointerId); } catch {}
+    e.preventDefault();
   });
   const end = e => {
-    if (x0 === null) { pw.classList.remove('swiping'); return; }
-    try { pw.releasePointerCapture(e.pointerId); } catch {}
     pw.classList.remove('swiping');
-    const dx = e.clientX - x0;
+    try { pw.releasePointerCapture(e.pointerId); } catch {}
+    const live = x0 !== null && !vbail;
+    const dx = live ? e.clientX - x0 : 0, dy = live ? e.clientY - y0 : 0, dt = Date.now() - t0;
     x0 = null;
-    if (horiz && Math.abs(dx) > 45) {
+    // decide at release from the net displacement — symmetric for both directions
+    if (live && Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) && dt < 900 && WCUES.length) {
       justSwiped = Date.now();
-      const dir = dx > 0 ? -1 : 1;   // drag right → back a line, drag left → forward
-      if (WCUES.length) { seekLine(dir); flashSeek(dir); bumpCtrls(); }
+      const dir = dx > 0 ? -1 : 1;   // swipe right → previous line, swipe left → next line
+      seekLine(dir); flashSeek(dir); bumpCtrls();
     }
-    horiz = false;
   };
   pw.addEventListener('pointerup', end);
   pw.addEventListener('pointercancel', end);
@@ -2477,7 +2478,14 @@ let scrubDragging = false, scrubArmed = false, scrubArmTimer = null;
 function armScrub(on) {
   scrubArmed = on;
   const sc = $('#scrubber');
-  if (sc) sc.classList.toggle('armed', on);
+  if (sc) {
+    sc.classList.toggle('armed', on);
+    if (!on) {
+      sc.classList.remove('scrubbing', 'dragging');
+      const pi = $('#scrubPreviewImg'); if (pi) pi.removeAttribute('src');
+      _prevT = -1;
+    }
+  }
   clearTimeout(scrubArmTimer);
   if (on) scrubArmTimer = setTimeout(() => armScrub(false), 4000);
 }
@@ -2513,42 +2521,42 @@ function attachScrubber() {
       _prevTimer = setTimeout(() => { $('#scrubPreviewImg').src = `/videos/${CURRENT}/frame?t=${rt}`; }, 110);
     }
   };
-  let x0 = 0, y0 = 0, go = false, dead = false;
-  const down = e => {
-    if (!WP || !WP.dur()) return;
-    const onKnob = e.target === knob || (e.target.closest && e.target.closest('.scrub-knob'));
-    if (!onKnob && !scrubArmed) return;        // track only responds once armed
-    x0 = e.clientX; y0 = e.clientY; go = false; dead = false;
-    armScrub(true);
-    scrubDragging = true; sc.classList.add('dragging');
-    try { sc.setPointerCapture(e.pointerId); } catch {}
-    if (!onKnob) { go = true; sc.classList.add('scrubbing'); paint(fracAt(e.clientX)); }
-  };
+  let x0 = 0, y0 = 0, go = false;
   const move = e => {
-    if (!scrubDragging || dead) return;
+    if (!scrubDragging) return;
     const dx = e.clientX - x0, dy = e.clientY - y0;
     if (!go) {
-      if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) {   // vertical → not a scrub
-        dead = true; scrubDragging = false; sc.classList.remove('dragging');
-        try { sc.releasePointerCapture(e.pointerId); } catch {}
-        return;
-      }
+      if (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx)) { finish(e, true); return; }  // vertical → abort
       if (Math.abs(dx) < 5) return;
       go = true; sc.classList.add('scrubbing');
     }
     e.preventDefault();
     paint(fracAt(e.clientX));
   };
-  const up = e => {
+  const finish = (e, aborted) => {
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', up);
     sc.classList.remove('dragging', 'scrubbing');
-    if (scrubDragging && go && WP && WP.dur()) WP.seek(fracAt(e.clientX) * WP.dur());
+    if (!aborted && scrubDragging && go && WP && WP.dur()) WP.seek(fracAt(e.clientX) * WP.dur());
     scrubDragging = false; _prevT = -1;
-    if (!dead) armScrub(true);
+    if (aborted) armScrub(false); else armScrub(true);
+  };
+  const up = e => finish(e, false);
+  const down = e => {
+    if (!WP || !WP.dur()) return;
+    const onKnob = e.target === knob || (e.target.closest && e.target.closest('.scrub-knob'));
+    if (!onKnob && !scrubArmed) return;        // track only responds once armed
+    x0 = e.clientX; y0 = e.clientY; go = false;
+    armScrub(true);
+    scrubDragging = true; sc.classList.add('dragging');
+    // listen on window so the drag survives the finger leaving the thin bar
+    window.addEventListener('pointermove', move, { passive: false });
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+    if (!onKnob) { go = true; sc.classList.add('scrubbing'); paint(fracAt(e.clientX)); }
   };
   sc.addEventListener('pointerdown', down);
-  sc.addEventListener('pointermove', move);
-  sc.addEventListener('pointerup', up);
-  sc.addEventListener('pointercancel', up);
 }
 function tick() {
   if (!WP) return;
