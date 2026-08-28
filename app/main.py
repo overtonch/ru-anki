@@ -31,10 +31,16 @@ import subs  # noqa: E402
 import ytdlp  # noqa: E402
 
 store.init_db()
-try:
-    backup.snapshot("startup")
-except Exception as e:  # noqa: BLE001
-    print(f"[backup] startup snapshot failed (is iCloud Drive available?): {e}")
+
+
+def _startup_backup():
+    try:
+        backup.snapshot("startup")
+    except Exception as e:  # noqa: BLE001
+        print(f"[backup] startup snapshot failed: {e}")
+
+
+threading.Thread(target=_startup_backup, daemon=True).start()  # never block boot
 backup.start_scheduler()
 
 

@@ -1,35 +1,44 @@
-"""Crash-safe backups of vocab.db to a synced folder (iCloud Drive by default).
+"""Crash-safe backups of vocab.db.
 
-The working database stays in the project dir — running SQLite directly on an
-iCloud-synced file invites corruption. Instead we periodically write a
-*consistent* snapshot with `VACUUM INTO` (safe while the DB is in use) plus
-plain-text NDJSON exports of the rows that are expensive to recreate, into a
-folder that iCloud syncs off-machine.
+Two layers:
+  1. Local `VACUUM INTO` snapshots (fast, safe while the DB is in use) kept in
+     Application Support — covers "the server crashed / I discarded everything".
+  2. An off-machine git repo of plain-text exports that fully rebuild the DB
+     (RU_BACKUP_GIT_DIR) — covers "the Mac died". Verifiable: check `git log`.
+
+(iCloud Drive was the first target but its sync can wedge and block writes
+indefinitely — avoid pointing BACKUP_DIR at it.)
 
 Snapshot triggers: on startup, after each extraction, after review decisions
-(debounced), and on a timer. Nothing is lost beyond the last ~minute of taps
-even if the server or disk dies.
+(debounced), and on a timer.
 """
 import json
 import os
 import shutil
 import sqlite3
+import subprocess
 import threading
 import time
 
 import store
 
-DEFAULT_DIR = os.path.expanduser(
-    "~/Library/Mobile Documents/com~apple~CloudDocs/ru-anki-backup"
-)
+DEFAULT_DIR = os.path.expanduser("~/Library/Application Support/ru-anki/backups")
 BACKUP_DIR = os.environ.get("RU_BACKUP_DIR", DEFAULT_DIR)
 KEEP = int(os.environ.get("RU_BACKUP_KEEP", "24"))      # timestamped .db snapshots
 MIN_INTERVAL = int(os.environ.get("RU_BACKUP_MIN_INTERVAL", "45"))  # seconds
 TIMER_INTERVAL = int(os.environ.get("RU_BACKUP_INTERVAL", "600"))
 
+# Off-machine, verifiable backup: a git repo of plain-text exports that fully
+# rebuild the DB (see rebuild_db.py). Set RU_BACKUP_GIT_DIR to a directory that
+# is a git repo with a private remote; snapshots commit + push there.
+GIT_DIR = os.environ.get("RU_BACKUP_GIT_DIR", "")
+
 _lock = threading.Lock()
+_git_lock = threading.Lock()
 _last_snapshot_at = 0.0
 _last_db_mtime = 0.0
+_last_git_push = 0.0
+_last_git_ok = None
 
 
 def _db_mtime():
@@ -115,7 +124,44 @@ def snapshot(reason="manual"):
 
         _last_snapshot_at = time.time()
         _last_db_mtime = _db_mtime()
-        return manifest
+
+    if GIT_DIR:
+        threading.Thread(target=_git_backup, args=(reason,), daemon=True).start()
+    return manifest
+
+
+def _git_backup(reason):
+    """Export the full DB as text into the git repo and push it. Best-effort."""
+    global _last_git_push, _last_git_ok
+    with _git_lock:
+        try:
+            conn = sqlite3.connect(store.DB)
+            conn.row_factory = sqlite3.Row
+            try:
+                _export_ndjson(conn, os.path.join(GIT_DIR, "videos.ndjson"),
+                               "SELECT * FROM videos ORDER BY id")
+                _export_ndjson(conn, os.path.join(GIT_DIR, "candidates.ndjson"),
+                               "SELECT * FROM candidates ORDER BY id")
+                _export_ndjson(conn, os.path.join(GIT_DIR, "resolved_words.ndjson"),
+                               "SELECT * FROM resolved_words ORDER BY resolved_at")
+            finally:
+                conn.close()
+
+            def g(*a):
+                return subprocess.run(["git", "-C", GIT_DIR, *a],
+                                      capture_output=True, text=True, timeout=90)
+
+            g("add", "-A")
+            if g("status", "--porcelain").stdout.strip():
+                g("commit", "-m", f"backup ({reason}) {time.strftime('%Y-%m-%d %H:%M')}")
+            push = g("push", "--quiet")     # also retries a previously-failed push
+            _last_git_push = time.time()
+            _last_git_ok = push.returncode == 0
+            if not _last_git_ok:
+                print(f"[backup] git push failed: {push.stderr.strip()[:300]}")
+        except Exception as e:  # noqa: BLE001
+            _last_git_ok = False
+            print(f"[backup] git backup error: {e}")
 
 
 def maybe_snapshot(reason="auto"):
@@ -163,6 +209,11 @@ def status():
     if os.path.isdir(BACKUP_DIR):
         snaps = sorted(f for f in os.listdir(BACKUP_DIR)
                        if f.startswith("vocab-") and f.endswith(".db"))
+    git = None
+    if GIT_DIR:
+        git = {"dir": GIT_DIR, "last_push_iso":
+               time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(_last_git_push))
+               if _last_git_push else None, "last_ok": _last_git_ok}
     return {"dir": BACKUP_DIR, "exists": os.path.isdir(BACKUP_DIR),
-            "snapshots": snaps, "manifest": m,
+            "snapshots": snaps, "manifest": m, "git": git,
             "pending_changes": _db_mtime() > _last_db_mtime}
