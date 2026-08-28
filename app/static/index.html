@@ -927,7 +927,8 @@ async function openDetail(id) {
   const localOK = await opfsHas(id);
   $('#watchBtn').hidden = !navigator.onLine && !localOK;
   $('#watchBtn').textContent = (DETAIL_V.youtube_id || localOK)
-    ? '▶ Watch with captions' : '⬇ Download to watch (can’t stream this source)';
+    ? '▶ Watch with captions'
+    : (navigator.onLine ? '▶ Stream with captions' : '▶ Watch with captions');
   try { $('#reviewPanel').classList.toggle('collapsed', localStorage.getItem('reviewCollapsed') === '1'); } catch {}
   await renderOfflineRow(id);
   renderMediaRow(id);
@@ -1547,11 +1548,6 @@ async function openWatch(id) {
   catch { data = await idbGet('offline', 'w' + id); }
   if (!haveLocal && !navigator.onLine) { toast('download this video to watch it offline'); return; }
   if (!haveLocal && !data) { toast('couldn’t load this video'); return; }
-  if (!haveLocal && data && !data.video.youtube_id) {
-    toast('this source can’t be streamed — download it first', 3200);
-    downloadMedia(id);
-    return;
-  }
   if (!data) {
     // downloaded, but captions were never cached — play the video without them
     data = { video: (await offlineVideoMeta(id)), cues: [], cands: {} };
@@ -1595,12 +1591,19 @@ function clearPos(id) { try { localStorage.removeItem('wp:' + id); } catch {} }
 async function startPlayer(id, seekTo = 0) {
   const data = WDATA; if (!data) return;
   teardownVideo();
-  if (await opfsHas(id)) {
+  const seekWhenReady = () => {
+    if (!seekTo || !WP) return;
+    WP.seek(seekTo);
+    if (WP.el) WP.el.addEventListener('loadedmetadata', () => WP.seek(seekTo), { once: true });
+  };
+  if (await opfsHas(id)) {                    // downloaded — play from OPFS
     await useLocalVideo(id, data.video);
-    if (seekTo && WP) {
-      WP.seek(seekTo);
-      if (WP.el) WP.el.addEventListener('loadedmetadata', () => WP.seek(seekTo), { once: true });
-    }
+    seekWhenReady();
+    return;
+  }
+  if (!data.video.youtube_id) {               // non-YouTube — proxy-stream via the Mac
+    mountVideoEl(`/videos/${id}/stream`, data.video, id, false);
+    seekWhenReady();
     return;
   }
   try { await loadYTApi(); }
@@ -1633,8 +1636,11 @@ async function startPlayer(id, seekTo = 0) {
 async function useLocalVideo(id, meta) {
   try { if (localURL) URL.revokeObjectURL(localURL); } catch {}
   localURL = await opfsURL(id);
+  mountVideoEl(localURL, meta, id, true);
+}
+function mountVideoEl(src, meta, id, isBlob) {
   const vid = document.createElement('video');
-  vid.src = localURL; vid.playsInline = true; vid.setAttribute('playsinline', '');
+  vid.src = src; vid.playsInline = true; vid.setAttribute('playsinline', '');
   vid.setAttribute('webkit-playsinline', ''); vid.preload = 'auto';
   $('#ytplayer').appendChild(vid);
   WP = {
@@ -1646,6 +1652,10 @@ async function useLocalVideo(id, meta) {
   vid.addEventListener('play', () => onPlayState(true));
   vid.addEventListener('pause', () => onPlayState(false));
   vid.addEventListener('ended', () => { onPlayState(false); clearPos(id); });
+  if (!isBlob) vid.addEventListener('error', () => {
+    $('#capOverlay').textContent = '⚠ stream failed — try Download in the detail view';
+    logClient('stream.video', new Error('media error ' + (vid.error && vid.error.code)), { id });
+  });
   clearInterval(capTimer); capTimer = setInterval(tick, 120);
   setupMediaSession(meta);
   vid.play().catch(() => {});
@@ -1949,13 +1959,24 @@ function cueIdxAt(t) {
   return idx;
 }
 function seekLine(dir) {
-  if (!WP || !WCUES.length) return;
-  const t = WP.time();
+  if (!WP) return;
+  const t = WP.time(), dur = WP.dur() || 0;
+  const n = WCUES.length;
+  // outside the captioned stretch (intro before the first line, credits after
+  // the last) → jump in 30s steps instead of by caption line
+  if (!n || t < WCUES[0].s - 0.4 || t >= WCUES[n - 1].e) {
+    let nt = t + dir * 30;
+    if (dir > 0 && n && t < WCUES[0].s && nt >= WCUES[0].s) nt = WCUES[0].s;   // snap into captions
+    if (dir < 0 && n && t >= WCUES[n - 1].e && nt < WCUES[n - 1].s) nt = WCUES[n - 1].s;
+    WP.seek(Math.max(0, dur ? Math.min(nt, dur - 0.5) : nt));
+    WP.play();
+    return;
+  }
   let i = cueIdxAt(t);
   if (i < 0) i = 0;
   let target;
   if (dir < 0) target = (t - WCUES[i].s > 1.2) ? i : Math.max(0, i - 1);  // 1st tap: restart line
-  else target = Math.min(WCUES.length - 1, i + 1);
+  else target = Math.min(n - 1, i + 1);
   WP.seek(WCUES[target].s);
   WP.play();
 }
@@ -2567,7 +2588,7 @@ async function renderMediaRow(id) {
       <option value="240"${q===240?' selected':''}>240p</option>
       <option value="360"${q===360?' selected':''}>360p</option>
     </select>
-    ${!v.youtube_id ? '<span class="pmeta" style="display:block;margin-top:.3rem">needed to watch this source · captions render separately, so low res is fine</span>' : ''}`;
+    ${!v.youtube_id ? '<span class="pmeta" style="display:block;margin-top:.3rem">optional — streams fine without it; download only for offline. captions render separately so low res is OK</span>' : ''}`;
 }
 
 async function downloadMedia(id) {

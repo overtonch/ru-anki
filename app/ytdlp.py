@@ -177,6 +177,35 @@ def download_audio(url, video_id, progress=None):
     return path, os.path.getsize(path)
 
 
+def resolve_stream(url, height=360):
+    """Resolve a single progressive (muxed video+audio, non-HLS) http MP4 URL
+    plus the request headers yt-dlp would use, for proxy-streaming to the phone.
+    -> (media_url, headers). Raises RuntimeError."""
+    r = _run(["-J", "--skip-download", url])
+    if r.returncode != 0:
+        raise RuntimeError(f"yt-dlp resolve failed: {r.stderr.strip()[:300]}")
+    info = json.loads(r.stdout)
+    fmts = info.get("formats") or []
+
+    def http_mp4(f):
+        return (str(f.get("protocol", "")).startswith("http")
+                and (f.get("ext") == "mp4" or "mp4" in str(f.get("format_id", "")))
+                and f.get("url"))
+
+    # VK/others expose legacy muxed formats as url144/url240/... — prefer those
+    muxed = [f for f in fmts if http_mp4(f)
+             and (str(f.get("format_id", "")).startswith("url")
+                  or (f.get("vcodec", "none") != "none"
+                      and f.get("acodec", "none") not in ("none", None)))]
+    pool = muxed or [f for f in fmts if http_mp4(f) and f.get("vcodec", "none") != "none"]
+    if not pool:
+        raise RuntimeError("no progressive MP4 stream (only HLS/DASH?)")
+    pool.sort(key=lambda f: ((f.get("height") or 0) > height,
+                             abs((f.get("height") or 9999) - height)))
+    f = pool[0]
+    return f["url"], (f.get("http_headers") or {})
+
+
 def subtitle_lines(raw_vtt):
     """-> list of (start_time 'HH:MM:SS', text): de-overlapped cues, one short
     fragment of genuinely-new words each. Backs live search + sentence rebuild."""

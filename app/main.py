@@ -13,9 +13,11 @@ import traceback
 
 import re as _re
 
+import httpx
+
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -307,6 +309,90 @@ def media(video_id: int):
     return FileResponse(v["media_path"], media_type="video/mp4",
                         headers={"Accept-Ranges": "bytes",
                                  "Cache-Control": "no-store"})
+
+
+# Proxy-stream a non-YouTube source (VK, RuTube, …) through the Mac so the phone
+# can play it without downloading the whole thing. The upstream URL is IP- and
+# UA-locked to whoever resolved it (the Mac), so the phone can't hit it directly.
+_STREAM_CACHE = {}   # video_id -> {"url", "headers", "at"}
+_STREAM_TTL = 1200
+
+
+async def _resolve_stream_cached(video_id, url, force=False):
+    c = _STREAM_CACHE.get(video_id)
+    if not force and c and time.time() - c["at"] < _STREAM_TTL:
+        return c["url"], c["headers"]
+    murl, hdrs = await asyncio.to_thread(ytdlp.resolve_stream, url)
+    _STREAM_CACHE[video_id] = {"url": murl, "headers": hdrs, "at": time.time()}
+    return murl, hdrs
+
+
+@app.api_route("/videos/{video_id}/stream", methods=["GET", "HEAD"])
+async def stream(video_id: int, request: Request):
+    v = store.get_video(video_id)
+    if not v:
+        raise HTTPException(404, "no such video")
+    if v.get("media_path") and os.path.exists(v["media_path"]):     # already downloaded
+        return FileResponse(v["media_path"], media_type="video/mp4",
+                            headers={"Accept-Ranges": "bytes", "Cache-Control": "no-store"})
+    try:
+        murl, hdrs = await _resolve_stream_cached(video_id, v["url"])
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"couldn’t resolve a stream: {str(e)[:200]}")
+
+    is_head = request.method == "HEAD"
+    rng = None if is_head else request.headers.get("range")
+    client = httpx.AsyncClient(follow_redirects=True,
+                               timeout=httpx.Timeout(20.0, read=180.0))
+
+    async def open_upstream(u, h):
+        req_h = {k: val for k, val in h.items() if k.lower() != "range"}
+        req_h["Range"] = rng or "bytes=0-"          # always range so we get 206 + real total
+        return await client.send(client.build_request("GET", u, headers=req_h), stream=True)
+
+    up = await open_upstream(murl, hdrs)
+    if up.status_code in (400, 401, 403, 410, 404):        # stale signed URL — re-resolve once
+        await up.aclose()
+        murl, hdrs = await _resolve_stream_cached(video_id, v["url"], force=True)
+        up = await open_upstream(murl, hdrs)
+    if up.status_code >= 400:
+        code = up.status_code
+        await up.aclose(); await client.aclose()
+        raise HTTPException(502, f"upstream {code}")
+
+    out_h = {"Accept-Ranges": "bytes", "Cache-Control": "no-store",
+             "Content-Type": up.headers.get("content-type", "video/mp4")}
+    total = None
+    cr = up.headers.get("content-range")              # "bytes a-b/total"
+    if cr and "/" in cr:
+        try:
+            total = int(cr.rsplit("/", 1)[1])
+        except ValueError:
+            pass
+    if rng and cr:
+        out_h["Content-Range"] = cr
+        out_h["Content-Length"] = up.headers.get("content-length", "")
+        status = 206
+    else:
+        if total is not None:
+            out_h["Content-Length"] = str(total)
+        status = 200
+
+    if is_head:
+        await up.aclose(); await client.aclose()
+        return Response(status_code=status, headers=out_h)
+
+    async def relay():
+        try:
+            async for chunk in up.aiter_bytes(65536):
+                yield chunk
+        except (httpx.HTTPError, RuntimeError):
+            pass
+        finally:
+            await up.aclose()
+            await client.aclose()
+
+    return StreamingResponse(relay(), status_code=status, headers=out_h)
 
 
 AUDIO_STATUS = {}   # video_id -> {"state","pct","detail"}
