@@ -47,7 +47,10 @@ def init_db():
         c.execute("ALTER TABLE candidates ADD COLUMN source TEXT NOT NULL DEFAULT 'batch'")
     # channel / thumbnail metadata for the video picker (nullable, backfilled).
     for col in ("channel TEXT", "channel_url TEXT", "thumbnail_url TEXT",
-                "duration INTEGER"):
+                "duration INTEGER",
+                # downloaded media for offline watching
+                "media_path TEXT", "media_bytes INTEGER", "media_quality INTEGER",
+                "media_status TEXT"):
         if not _has_column(c, "videos", col.split()[0]):
             c.execute(f"ALTER TABLE videos ADD COLUMN {col}")
     # Fold any legacy known_lexicon rows into resolved_words.
@@ -107,6 +110,8 @@ def _thumb(url, stored):
 def _enrich(d):
     d["youtube_id"] = youtube_id(d.get("url"))
     d["thumbnail_url"] = _thumb(d.get("url"), d.get("thumbnail_url"))
+    d["media"] = {"status": d.get("media_status"), "bytes": d.get("media_bytes"),
+                  "quality": d.get("media_quality")}
     return d
 
 
@@ -122,6 +127,7 @@ def list_videos():
     rows = c.execute(
         """SELECT v.id, v.url, v.title, v.channel, v.channel_url, v.thumbnail_url,
                   v.duration, v.subs_kind, v.subs_lang, v.fetched_at,
+                  v.media_status, v.media_bytes, v.media_quality,
                   (SELECT count(*) FROM subtitle_lines s WHERE s.video_id=v.id) AS lines,
                   (SELECT count(*) FROM candidates k WHERE k.video_id=v.id) AS candidates,
                   (SELECT count(*) FROM candidates k WHERE k.video_id=v.id
@@ -135,6 +141,12 @@ def list_videos():
 def delete_video(video_id):
     """Remove the video, its transcript and its candidates. Keeps resolved_words
     (your decisions stand) and keeps any Anki cards already created."""
+    v = get_video(video_id)
+    if v and v.get("media_path"):
+        try:
+            os.remove(v["media_path"])
+        except OSError:
+            pass
     c = connect()
     c.execute("DELETE FROM candidates WHERE video_id=?", (video_id,))
     c.execute("DELETE FROM subtitle_lines WHERE video_id=?", (video_id,))
@@ -152,6 +164,16 @@ def videos_missing_meta():
     ).fetchall()
     c.close()
     return [dict(r) for r in rows]
+
+
+def set_media(video_id, **kw):
+    if not kw:
+        return
+    cols = ", ".join(f"{k}=?" for k in kw)
+    c = connect()
+    c.execute(f"UPDATE videos SET {cols} WHERE id=?", (*kw.values(), video_id))
+    c.commit()
+    c.close()
 
 
 def set_video_meta(video_id, channel, channel_url, thumbnail_url, duration):

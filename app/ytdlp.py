@@ -82,6 +82,48 @@ def fetch_subs(url):
             **_meta_fields(info)}
 
 
+MEDIA_DIR = os.environ.get(
+    "RU_MEDIA_DIR",
+    os.path.expanduser("~/Library/Application Support/ru-anki/media"))
+
+
+def download_media(url, video_id, height=360, progress=None):
+    """Download a Safari-compatible MP4 (H.264 video + AAC audio) for offline
+    watching. -> (path, bytes). Raises RuntimeError on failure.
+
+    `progress(pct_float)` is called with yt-dlp's download percentage.
+    """
+    os.makedirs(MEDIA_DIR, exist_ok=True)
+    for old in glob.glob(os.path.join(MEDIA_DIR, f"{video_id}.*")):
+        try:
+            os.remove(old)
+        except OSError:
+            pass
+    fmt = (f"bv*[height<={height}][vcodec^=avc1]+ba[acodec^=mp4a]/"
+           f"b[height<={height}][ext=mp4]/b[ext=mp4]/b[height<={height}]/b")
+    out = os.path.join(MEDIA_DIR, f"{video_id}.%(ext)s")
+    proc = subprocess.Popen(
+        [YTDLP, "-f", fmt, "--merge-output-format", "mp4", "--no-playlist",
+         "--newline", "--no-part", "-o", out, url],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    tail = []
+    for line in proc.stdout:
+        tail.append(line)
+        if progress and "[download]" in line and "%" in line:
+            try:
+                progress(float(line.split("%")[0].split()[-1]))
+            except (ValueError, IndexError):
+                pass
+    if proc.wait() != 0:
+        raise RuntimeError("yt-dlp download failed: " + "".join(tail[-6:])[:500])
+    files = [f for f in glob.glob(os.path.join(MEDIA_DIR, f"{video_id}.*"))
+             if not f.endswith((".part", ".ytdl"))]
+    if not files:
+        raise RuntimeError("download produced no file")
+    path = files[0]
+    return path, os.path.getsize(path)
+
+
 def subtitle_lines(raw_vtt):
     """-> list of (start_time 'HH:MM:SS', text): de-overlapped cues, one short
     fragment of genuinely-new words each. Backs live search + sentence rebuild."""

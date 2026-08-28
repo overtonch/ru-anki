@@ -36,6 +36,7 @@
   .btn.ghost { background:var(--card); color:var(--accent); }
   .btn:disabled { opacity:.5; }
   .btn.sm { padding:.45rem .7rem; font-size:.85rem; }
+  .btn .ic { width:1em; height:1em; fill:currentColor; vertical-align:-.13em; margin-right:.15em; }
   .backlink { background:none; border:none; color:var(--accent); font-size:.92rem;
               padding:.4rem 0; cursor:pointer; }
   .backlink.danger { color:var(--no); display:block; margin:1.5rem auto .5rem; }
@@ -118,12 +119,12 @@
   .swipeflag { position:absolute; top:.65rem; font-size:.72rem; font-weight:800;
                letter-spacing:.04em; text-transform:uppercase; opacity:0;
                pointer-events:none; transition:opacity .1s; }
-  .swipeflag.left  { left:.9rem;  color:var(--no); }
-  .swipeflag.right { right:.9rem; color:var(--yes); }
+  .swipeflag.left  { left:.9rem;  color:var(--yes); }   /* swipe left = make card */
+  .swipeflag.right { right:.9rem; color:var(--no); }    /* swipe right = discard  */
   .card.sw-yes { box-shadow:inset 0 0 0 2px var(--yes); }
   .card.sw-no  { box-shadow:inset 0 0 0 2px var(--no); }
-  .card.sw-yes .swipeflag.right { opacity:var(--sw,.4); }
-  .card.sw-no  .swipeflag.left  { opacity:var(--sw,.4); }
+  .card.sw-yes .swipeflag.left  { opacity:var(--sw,.4); }
+  .card.sw-no  .swipeflag.right { opacity:var(--sw,.4); }
   /* flash the actioned card to a solid colour, then collapse it away */
   .card.act { color:#fff; border-color:transparent; transform:scale(1.015);
               transition: background-color .12s ease, transform .12s ease, box-shadow .12s ease; }
@@ -208,8 +209,9 @@
   .speeds button.on { border-color:var(--accent); color:var(--accent); }
   .player-wrap { position:relative; width:100%; background:#000; flex:none;
                  aspect-ratio:16/9; }
-  .player-wrap #ytplayer, .player-wrap iframe { position:absolute; inset:0;
-                 width:100%; height:100%; border:0; }
+  .player-wrap #ytplayer, .player-wrap iframe, .player-wrap video { position:absolute;
+                 inset:0; width:100%; height:100%; border:0; background:#000;
+                 object-fit:contain; }
   .tap-layer { position:absolute; inset:0; z-index:2; background:transparent; border:0;
                cursor:pointer; }
   .wctrls { display:flex; gap:.5rem; padding:.5rem .8rem; flex:none; }
@@ -326,6 +328,7 @@
     <div class="vhead" id="vhead"></div>
     <button class="btn watch-cta" id="watchBtn" onclick="openWatch(CURRENT)">▶ Watch with captions</button>
     <div id="offlineRow" class="status"></div>
+    <div id="mediaRow" class="status"></div>
     <div id="progressPanel"></div>
 
     <div class="panel">
@@ -411,7 +414,7 @@ let CURRENT = null;          // video id in detail view
 let DETAIL_V = null;
 let listTimer = null, sse = null, tickTimer = null, searchTimer = null;
 // watch view
-let ytPlayer = null, ytApiP = null, capTimer = null;
+let ytPlayer = null, ytApiP = null, capTimer = null, WP = null, localURL = null;
 let WCUES = [], wActive = -1, wUserScroll = 0, wPausedForModal = false;
 
 function toast(msg, ms=2400) {
@@ -592,9 +595,10 @@ async function openDetail(id) {
   if (!v) { try { v = await api(`/videos/${id}`); } catch { v = await offlineVideoMeta(id); } }
   DETAIL_V = v || {id};
   renderVHead(DETAIL_V);
-  $('#watchBtn').hidden = !navigator.onLine;
+  $('#watchBtn').hidden = !navigator.onLine && !(await opfsHas(id));
   try { $('#reviewPanel').classList.toggle('collapsed', localStorage.getItem('reviewCollapsed') === '1'); } catch {}
   await renderOfflineRow(id);
+  renderMediaRow(id);
   const ex = (v && v.extract) || {state:'idle'};
   if (['queued','running'].includes(ex.state) && navigator.onLine) startProgress(v, ex);
   else renderProgressDone(ex);
@@ -768,8 +772,8 @@ function renderCard(c) {
   const badge = c.duplicate ? ' · <span class="dupbadge">already have a card</span>' : '';
   const fq = c.freq ? ` · <span class="fq ${c.freq.band}">${escapeHtml(c.freq.label)}</span>` : '';
   el.innerHTML = `
-    <div class="swipeflag left">✕ discard</div>
-    <div class="swipeflag right">✓ make card</div>
+    <div class="swipeflag left">✓ make card</div>
+    <div class="swipeflag right">✕ discard</div>
     <div class="sent">${c.front_html}</div>
     <div class="tr">${escapeHtml(c.translation || '')}</div>
     <div class="meta">${c.is_phrase ? 'phrase' : 'word'} · ${escapeHtml(c.span_text)}${fq}${c.bolded ? '' : ' · ⚠ not bolded'}${badge}</div>
@@ -803,8 +807,8 @@ function attachSwipe(el, id) {
     }
     dx = ax;
     el.style.transform = `translateX(${dx}px) rotate(${dx * 0.025}deg)`;
-    el.classList.toggle('sw-yes', dx > 40);
-    el.classList.toggle('sw-no', dx < -40);
+    el.classList.toggle('sw-yes', dx < -40);
+    el.classList.toggle('sw-no', dx > 40);
     const p = Math.min(Math.abs(dx) / 95, 1);
     el.style.setProperty('--sw', p.toFixed(2));
   });
@@ -813,7 +817,7 @@ function attachSwipe(el, id) {
     try { el.releasePointerCapture(e.pointerId); } catch {}
     if (active && Math.abs(dx) > 95 && !committed && !el.dataset.busy) {
       committed = true;
-      swipeCommit(el, id, dx > 0 ? 'yes' : 'no', dx);
+      swipeCommit(el, id, dx < 0 ? 'yes' : 'no', dx);
     } else {
       el.style.transition = 'transform .18s ease';
       el.style.transform = '';
@@ -1082,8 +1086,8 @@ function closeCardModal(resume = true) {
   const wasWatch = MODAL && MODAL.watchCue != null;
   if (MODAL) clearTimeout(MODAL.pvTimer);
   $('#modalWrap').hidden = true; MODAL = null;
-  if (resume && wasWatch && wPausedForModal && ytPlayer) {
-    wPausedForModal = false; try { ytPlayer.playVideo(); } catch {}
+  if (resume && wasWatch && wPausedForModal && WP) {
+    wPausedForModal = false; try { WP.play(); } catch {}
   }
 }
 
@@ -1110,11 +1114,11 @@ async function confirmCard() {
            : (navigator.onLine ? 'card queued' : 'saved — translates when online'));
   flushQueue();
 
-  if (watchCue != null && ytPlayer) {
+  if (watchCue != null && WP) {
     // replay the line you just carded
     wPausedForModal = false;
     markWordCarded(span);
-    try { ytPlayer.seekTo(WCUES[watchCue].s, true); ytPlayer.playVideo(); } catch {}
+    try { WP.seek(WCUES[watchCue].s); WP.play(); } catch {}
   } else {
     $('#q').value = ''; $('#results').innerHTML = '';   // clear the search
   }
@@ -1141,18 +1145,24 @@ function loadYTApi() {
 }
 
 async function openWatch(id) {
-  if (!navigator.onLine) { toast('watch needs a connection'); return; }
   let data;
-  try { data = await api(`/videos/${id}/watch`); }
-  catch (e) { toast('couldn’t load captions: ' + e.message, 3500); return; }
+  try { data = await api(`/videos/${id}/watch`); idbPut('offline', 'w' + id, data).catch(() => {}); }
+  catch { data = await idbGet('offline', 'w' + id); }
+  const haveLocal = await opfsHas(id);
+  if (!data) { toast(haveLocal ? 'captions unavailable' : 'watch needs a connection'); return; }
+  if (!haveLocal && !navigator.onLine) { toast('download this video to watch it offline'); return; }
+
   WCUES = data.cues || [];
-  wActive = -1;
+  wActive = -1; WP = null;
   $('#detailView').hidden = true;
   $('#watchView').hidden = false;
   $('#capOverlay').textContent = 'tap to play';
+  $('#ytplayer').innerHTML = '';
   fsManual = false;
   if (matchMedia('(orientation: landscape)').matches) enterFs(); else exitFs();
   renderTranscript();
+
+  if (haveLocal) return useLocalVideo(id, data.video);
   try { await loadYTApi(); }
   catch { toast('couldn’t load the YouTube player'); closeWatch(); return; }
   if (ytPlayer) { try { ytPlayer.destroy(); } catch {} ytPlayer = null; }
@@ -1161,22 +1171,79 @@ async function openWatch(id) {
     playerVars: { playsinline: 1, rel: 0, modestbranding: 1, controls: 0,
                   disablekb: 1, iv_load_policy: 3, origin: location.origin },
     events: {
-      onReady: e => { try { e.target.playVideo(); } catch {}
-                      clearInterval(capTimer); capTimer = setInterval(tick, 120); },
-      onStateChange: e => {
-        const playing = e.data === 1;
-        $('#watchView').classList.toggle('paused', !playing);
-        if (playing) { const c = $('#capOverlay'); if (c.textContent === 'tap to play') c.textContent = ''; }
-        bumpCtrls();
+      onReady: e => {
+        WP = {
+          time: () => e.target.getCurrentTime() || 0,
+          dur: () => e.target.getDuration() || 0,
+          play: () => e.target.playVideo(), pause: () => e.target.pauseVideo(),
+          paused: () => e.target.getPlayerState() !== 1,
+          seek: t => e.target.seekTo(t, true),
+          rate: r => e.target.setPlaybackRate(r),
+        };
+        try { e.target.playVideo(); } catch {}
+        clearInterval(capTimer); capTimer = setInterval(tick, 120);
+        setupMediaSession(data.video);
       },
+      onStateChange: e => onPlayState(e.data === 1),
       onError: () => { $('#capOverlay').textContent = '⚠ this video can’t be embedded'; },
     },
   });
 }
+
+async function useLocalVideo(id, meta) {
+  try { if (localURL) URL.revokeObjectURL(localURL); } catch {}
+  localURL = await opfsURL(id);
+  const vid = document.createElement('video');
+  vid.src = localURL; vid.playsInline = true; vid.setAttribute('playsinline', '');
+  vid.setAttribute('webkit-playsinline', ''); vid.preload = 'auto';
+  $('#ytplayer').appendChild(vid);
+  WP = {
+    time: () => vid.currentTime || 0, dur: () => vid.duration || 0,
+    play: () => vid.play().catch(() => {}), pause: () => vid.pause(),
+    paused: () => vid.paused, seek: t => { try { vid.currentTime = t; } catch {} },
+    rate: r => { vid.playbackRate = r; }, el: vid,
+  };
+  vid.addEventListener('play', () => onPlayState(true));
+  vid.addEventListener('pause', () => onPlayState(false));
+  vid.addEventListener('ended', () => onPlayState(false));
+  clearInterval(capTimer); capTimer = setInterval(tick, 120);
+  setupMediaSession(meta);
+  vid.play().catch(() => {});
+}
+
+function onPlayState(playing) {
+  $('#watchView').classList.toggle('paused', !playing);
+  if (playing) { const c = $('#capOverlay'); if (c.textContent === 'tap to play') c.textContent = ''; }
+  if ('mediaSession' in navigator) navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+  bumpCtrls();
+}
+
+function setupMediaSession(meta) {
+  if (!('mediaSession' in navigator)) return;
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: meta.title || 'video', artist: meta.channel || 'ru-anki',
+      artwork: meta.thumbnail_url ? [{ src: meta.thumbnail_url, sizes: '480x360', type: 'image/jpeg' }] : [],
+    });
+    const set = (a, fn) => { try { navigator.mediaSession.setActionHandler(a, fn); } catch {} };
+    set('play', () => { WP && WP.play(); });
+    set('pause', () => { WP && WP.pause(); });
+    set('previoustrack', () => seekLine(-1));
+    set('nexttrack', () => seekLine(1));
+    set('seekbackward', () => seekLine(-1));
+    set('seekforward', () => seekLine(1));
+  } catch {}
+}
+
 function closeWatch() {
   clearInterval(capTimer); capTimer = null;
   clearTimeout(ctrlTimer);
+  if (WP) { try { WP.pause(); } catch {} }
   if (ytPlayer) { try { ytPlayer.destroy(); } catch {} ytPlayer = null; }
+  try { if (localURL) URL.revokeObjectURL(localURL); } catch {}
+  localURL = null; WP = null;
+  if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
   wActive = -1;
   exitFs();
   $('#watchView').hidden = true;
@@ -1184,9 +1251,8 @@ function closeWatch() {
   loadCandidates();
 }
 function togglePlay() {
-  if (!ytPlayer || !ytPlayer.getPlayerState) return;
-  if (ytPlayer.getPlayerState() === 1) ytPlayer.pauseVideo();
-  else ytPlayer.playVideo();
+  if (!WP) return;
+  WP.paused() ? WP.play() : WP.pause();
   bumpCtrls();
 }
 
@@ -1218,8 +1284,7 @@ function bumpCtrls() {   // reveal the seek buttons, then fade them while playin
   if (!w.classList.contains('fs')) return;
   w.classList.remove('hidectrls');
   clearTimeout(ctrlTimer);
-  const playing = ytPlayer && ytPlayer.getPlayerState && ytPlayer.getPlayerState() === 1;
-  if (playing) ctrlTimer = setTimeout(() => w.classList.add('hidectrls'), 2800);
+  if (WP && !WP.paused()) ctrlTimer = setTimeout(() => w.classList.add('hidectrls'), 2800);
 }
 function cueIdxAt(t) {
   let lo = 0, hi = WCUES.length - 1, idx = -1;
@@ -1234,15 +1299,15 @@ function cueIdxAt(t) {
   return idx;
 }
 function seekLine(dir) {
-  if (!ytPlayer || !WCUES.length) return;
-  const t = ytPlayer.getCurrentTime();
+  if (!WP || !WCUES.length) return;
+  const t = WP.time();
   let i = cueIdxAt(t);
   if (i < 0) i = 0;
   let target;
   if (dir < 0) target = (t - WCUES[i].s > 1.2) ? i : Math.max(0, i - 1);  // 1st tap: restart line
   else target = Math.min(WCUES.length - 1, i + 1);
-  ytPlayer.seekTo(WCUES[target].s, true);
-  ytPlayer.playVideo();
+  WP.seek(WCUES[target].s);
+  WP.play();
 }
 function renderCaption(idx) {
   const c = $('#capOverlay');
@@ -1257,8 +1322,13 @@ function renderCaption(idx) {
   });
 }
 function tick() {
-  if (!ytPlayer || !ytPlayer.getCurrentTime) return;
-  const idx = cueIdxAt(ytPlayer.getCurrentTime());
+  if (!WP) return;
+  if ('mediaSession' in navigator && WP.dur() > 0) {
+    try { navigator.mediaSession.setPositionState({
+      duration: WP.dur(), position: Math.min(WP.time(), WP.dur()),
+      playbackRate: WP.el ? WP.el.playbackRate : 1 }); } catch {}
+  }
+  const idx = cueIdxAt(WP.time());
   if (idx === wActive) return;
   wActive = idx;
   const c = $('#capOverlay');
@@ -1280,7 +1350,7 @@ function renderTranscript() {
     line.className = 'cue'; line.dataset.i = i;
     const ts = document.createElement('button');
     ts.className = 'cue-ts'; ts.textContent = fmtTime(cue.s);
-    ts.onclick = () => { if (ytPlayer) { ytPlayer.seekTo(cue.s, true); ytPlayer.playVideo(); } };
+    ts.onclick = () => { if (WP) { WP.seek(cue.s); WP.play(); } };
     line.appendChild(ts);
     (cue.words || []).forEach((w, wi) => {
       const sp = document.createElement('span');
@@ -1294,7 +1364,7 @@ function renderTranscript() {
   box.onscroll = () => { wUserScroll = Date.now(); };
 }
 function watchTapWord(ci, wi) {
-  if (ytPlayer && ytPlayer.pauseVideo) { ytPlayer.pauseVideo(); wPausedForModal = true; }
+  if (WP) { WP.pause(); wPausedForModal = true; }
   const around = [WCUES[ci - 1], WCUES[ci], WCUES[ci + 1]].filter(Boolean).map(c => c.text).join(' ');
   openCardModal({ id: null, text: around, start_time: hms(WCUES[ci].s) }, WCUES[ci].words[wi].t);
   if (MODAL) MODAL.watchCue = ci;
@@ -1362,7 +1432,7 @@ async function renderOfflineRow(id) {
     row.innerHTML = `✓ available offline (${off.lines.length} lines, ${when}) ·
       <button class="backlink" onclick="downloadOffline(${id})">refresh</button>`;
   } else if (navigator.onLine) {
-    row.innerHTML = `<button class="btn sm ghost" id="offBtn" onclick="downloadOffline(${id})">⬇ Save for offline</button>`;
+    row.innerHTML = `<button class="btn sm ghost" id="offBtn" onclick="downloadOffline(${id})">${DL_ICON} Save transcript offline</button>`;
   } else {
     row.textContent = 'offline — not saved for offline use';
   }
@@ -1380,6 +1450,95 @@ async function downloadOffline(id) {
 async function offlineVideoMeta(id) {
   const off = await idbGet('offline', id);
   return off ? { ...off.video, lines: off.lines.length } : { id, title: 'video ' + id };
+}
+
+const DL_ICON = '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a1 1 0 0 1 1 1v9.59l2.3-2.3a1 1 0 1 1 1.4 1.42l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 1 1 1.4-1.42L11 13.6V4a1 1 0 0 1 1-1z"/><path d="M5 18a1 1 0 0 1 1 1v1h12v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1z"/></svg>';
+
+/* ---------------- offline VIDEO FILE (OPFS) ---------------- */
+async function opfsDir() {
+  const root = await navigator.storage.getDirectory();
+  return root.getDirectoryHandle('media', { create: true });
+}
+async function opfsHas(id) {
+  try { await (await opfsDir()).getFileHandle(id + '.mp4'); return true; } catch { return false; }
+}
+async function opfsSize(id) {
+  try { return (await (await (await opfsDir()).getFileHandle(id + '.mp4')).getFile()).size; }
+  catch { return 0; }
+}
+async function opfsURL(id) {
+  const f = await (await (await opfsDir()).getFileHandle(id + '.mp4')).getFile();
+  return URL.createObjectURL(f);
+}
+async function opfsDelete(id) {
+  try { await (await opfsDir()).removeEntry(id + '.mp4'); } catch {}
+}
+async function opfsSave(id, onProgress) {
+  const res = await fetch(`/videos/${id}/media`);
+  if (!res.ok) throw new Error('server has no file yet');
+  const total = +res.headers.get('content-length') || 0;
+  const fh = await (await opfsDir()).getFileHandle(id + '.mp4', { create: true });
+  const w = await fh.createWritable();
+  const reader = res.body.getReader();
+  let got = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      await w.write(value);
+      got += value.length;
+      if (onProgress) onProgress(total ? got / total : 0, got);
+    }
+    await w.close();
+  } catch (e) { try { await w.abort(); } catch {} await opfsDelete(id); throw e; }
+  return got;
+}
+
+async function renderMediaRow(id) {
+  const row = $('#mediaRow');
+  const v = VIDEOS.find(x => x.id === id) || DETAIL_V || { id };
+  if (await opfsHas(id)) {
+    const mb = Math.round((await opfsSize(id)) / 1e6);
+    row.innerHTML = `📥 video saved (${mb} MB) — plays offline ·
+      <button class="backlink" onclick="removeMedia(${id})">remove</button>`;
+    return;
+  }
+  if (!navigator.onLine) { row.textContent = ''; return; }
+  if (!('storage' in navigator) || !navigator.storage.getDirectory) { row.textContent = ''; return; }
+  const estMb = v.duration ? Math.round(v.duration / 60 * 3.4) : null;
+  row.innerHTML = `<button class="btn sm ghost" id="dlBtn" onclick="downloadMedia(${id})">
+    ${DL_ICON} Download video${estMb ? ` · ~${estMb} MB` : ' · 360p'}</button>`;
+}
+async function downloadMedia(id) {
+  const btn = $('#dlBtn');
+  setBusy(btn, true, 'preparing on server…');
+  try {
+    let s = await api(`/videos/${id}/download`);
+    if (s.state !== 'done') {
+      await api(`/videos/${id}/download`, { method: 'POST' });
+      for (;;) {
+        await sleep(2500);
+        s = await api(`/videos/${id}/download`);
+        if (s.state === 'error') throw new Error(s.detail || 'server download failed');
+        if (s.state === 'done') break;
+        setBusy(btn, true, `server ${s.pct != null ? Math.round(s.pct) + '%' : '…'}`);
+      }
+    }
+    await opfsSave(id, (p, bytes) =>
+      setBusy(btn, true, p ? Math.round(p * 100) + '%' : `${Math.round(bytes / 1e6)} MB`));
+    toast('video saved — you can watch it offline');
+    loadVideosQuiet();
+  } catch (e) {
+    toast('download failed: ' + e.message, 4000);
+  }
+  setBusy(btn, false);
+  renderMediaRow(id);
+}
+async function removeMedia(id) {
+  await opfsDelete(id);
+  try { await api(`/videos/${id}/media`, { method: 'DELETE' }); } catch {}
+  toast('removed');
+  renderMediaRow(id);
 }
 
 /* ---------------- tiny IndexedDB wrapper ---------------- */

@@ -220,6 +220,78 @@ def delete_video(video_id: int):
     return {"deleted": n}
 
 
+# ------------------------------------------------------------------ offline media
+
+DOWNLOAD_STATUS = {}   # video_id -> {"state","pct","detail"}
+
+
+def _run_download(video_id, url, height):
+    DOWNLOAD_STATUS[video_id] = {"state": "running", "pct": 0.0, "detail": "starting"}
+    store.set_media(video_id, media_status="downloading")
+    try:
+        path, size = ytdlp.download_media(
+            url, video_id, height,
+            progress=lambda p: DOWNLOAD_STATUS.__setitem__(
+                video_id, {"state": "running", "pct": round(p, 1),
+                           "detail": f"{p:.0f}%"}))
+        store.set_media(video_id, media_path=path, media_bytes=size,
+                        media_quality=height, media_status="ready")
+        DOWNLOAD_STATUS[video_id] = {"state": "done", "pct": 100.0,
+                                     "detail": f"{size // 1_000_000} MB"}
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        store.set_media(video_id, media_status="error")
+        DOWNLOAD_STATUS[video_id] = {"state": "error", "pct": 0.0, "detail": str(e)[:200]}
+
+
+@app.post("/videos/{video_id}/download")
+def download(video_id: int, background: BackgroundTasks, q: int = 360):
+    v = store.get_video(video_id)
+    if not v:
+        raise HTTPException(404, "no such video")
+    if DOWNLOAD_STATUS.get(video_id, {}).get("state") == "running":
+        raise HTTPException(409, "already downloading")
+    DOWNLOAD_STATUS[video_id] = {"state": "running", "pct": 0.0, "detail": "queued"}
+    background.add_task(_run_download, video_id, v["url"], q)
+    return {"video_id": video_id, "quality": q, "state": "running"}
+
+
+@app.get("/videos/{video_id}/download")
+def download_status(video_id: int):
+    st = DOWNLOAD_STATUS.get(video_id)
+    if st:
+        return st
+    v = store.get_video(video_id)
+    return {"state": "done" if v and v.get("media_status") == "ready" else "idle",
+            "pct": 100.0 if v and v.get("media_status") == "ready" else 0.0}
+
+
+@app.get("/videos/{video_id}/media")
+def media(video_id: int):
+    v = store.get_video(video_id)
+    if not v or not v.get("media_path") or not os.path.exists(v["media_path"]):
+        raise HTTPException(404, "not downloaded")
+    return FileResponse(v["media_path"], media_type="video/mp4",
+                        headers={"Accept-Ranges": "bytes",
+                                 "Cache-Control": "no-store"})
+
+
+@app.delete("/videos/{video_id}/media")
+def delete_media(video_id: int):
+    v = store.get_video(video_id)
+    if not v:
+        raise HTTPException(404, "no such video")
+    if v.get("media_path"):
+        try:
+            os.remove(v["media_path"])
+        except OSError:
+            pass
+    store.set_media(video_id, media_path=None, media_bytes=None,
+                    media_quality=None, media_status=None)
+    DOWNLOAD_STATUS.pop(video_id, None)
+    return {"ok": True}
+
+
 @app.post("/videos/{video_id}/refresh-meta")
 def refresh_meta(video_id: int):
     v = store.get_video(video_id)
