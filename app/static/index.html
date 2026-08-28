@@ -366,11 +366,13 @@
                         box-shadow:inset 3px 0 0 var(--accent); }
   .transcript .cue-ts { background:none; border:none; color:var(--accent);
                         font-size:.7rem; padding:0 .4rem 0 0; vertical-align:.12em; cursor:pointer; }
-  .transcript .cw { cursor:pointer; padding:.02em .06em; border-radius:.25rem; }
+  .transcript .cw { cursor:pointer; padding:.02em .06em; border-radius:.25rem;
+                    -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
   .transcript .cue.on .cw:active { background:var(--accent); color:#0b1016; }
   .transcript .cw.has-card { color:var(--ok); font-weight:650; }
   .transcript .cw.pending { background:rgba(230,185,60,.18); box-shadow:inset 0 -2px 0 rgba(230,185,60,.8);
                             color:var(--fg); border-radius:3px; }
+  .transcript .cw.sel { background:var(--accent); color:#0b1016; box-shadow:none; }
 
   /* inline approve/deny popover for a suggested card, shown over the watch view */
   #inlineDecide { position:fixed; z-index:40; max-width:min(78vw,300px);
@@ -2771,13 +2773,95 @@ function renderTranscript() {
       const sp = document.createElement('span');
       sp.className = 'cw' + (w.c ? ' has-card' : (w.p ? ' pending' : ''));
       if (w.p) sp.dataset.cand = w.p;
+      sp.dataset.ci = i; sp.dataset.wi = wi;
       sp.textContent = w.t;
-      sp.onclick = () => wordAction(w, sp, i, wi);
+      sp.onclick = () => { if (Date.now() - _phraseDoneAt < 350) return; wordAction(w, sp, i, wi); };
       line.append(sp, document.createTextNode(' '));
     });
     box.appendChild(line);
   });
   box.onscroll = () => { wUserScroll = Date.now(); };
+  attachTranscriptSelect();
+}
+
+/* drag across words in the transcript → highlight the phrase, translate + card it */
+let _phraseSel = null, _phraseDoneAt = 0;
+function attachTranscriptSelect() {
+  const box = $('#transcript');
+  if (!box || box._selWired) return;
+  box._selWired = true;
+  const wordAt = (x, y) => {
+    const el = document.elementFromPoint(x, y);
+    return el && el.closest ? el.closest('.cw') : null;
+  };
+  box.addEventListener('pointerdown', e => {
+    const sp = e.target.closest && e.target.closest('.cw');
+    if (!sp) return;
+    _phraseSel = { a: sp, b: sp, x0: e.clientX, y0: e.clientY, active: false, pid: e.pointerId };
+  });
+  box.addEventListener('pointermove', e => {
+    if (!_phraseSel) return;
+    const dx = e.clientX - _phraseSel.x0, dy = e.clientY - _phraseSel.y0;
+    if (!_phraseSel.active) {
+      if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { _phraseSel = null; return; }  // vertical scroll
+      if (Math.abs(dx) < 12) return;
+      _phraseSel.active = true;
+      try { box.setPointerCapture(e.pointerId); } catch {}
+    }
+    e.preventDefault();
+    const sp = wordAt(e.clientX, e.clientY);
+    if (sp) { _phraseSel.b = sp; paintPhraseSel(); }
+  });
+  const end = e => {
+    if (!_phraseSel) return;
+    const wasActive = _phraseSel.active;
+    try { box.releasePointerCapture(_phraseSel.pid); } catch {}
+    if (wasActive) {
+      const range = phraseSelRange();
+      clearPhraseSel();
+      _phraseSel = null;
+      _phraseDoneAt = Date.now();       // swallow the trailing click
+      if (range && range.words.length >= 2) openPhraseCard(range);
+      return;
+    }
+    _phraseSel = null;
+  };
+  box.addEventListener('pointerup', end);
+  box.addEventListener('pointercancel', () => { clearPhraseSel(); _phraseSel = null; });
+}
+function _spanKey(sp) { return [+sp.dataset.ci, +sp.dataset.wi]; }
+function phraseSelRange() {
+  if (!_phraseSel) return null;
+  let [aci, awi] = _spanKey(_phraseSel.a), [bci, bwi] = _spanKey(_phraseSel.b);
+  if (aci > bci || (aci === bci && awi > bwi)) { [aci, awi, bci, bwi] = [bci, bwi, aci, awi]; }
+  const words = [];
+  for (let ci = aci; ci <= bci; ci++) {
+    const cue = WCUES[ci]; if (!cue) continue;
+    const lo = ci === aci ? awi : 0;
+    const hi = ci === bci ? bwi : (cue.words.length - 1);
+    for (let wi = lo; wi <= hi; wi++) if (cue.words[wi]) words.push({ ci, wi, t: cue.words[wi].t });
+  }
+  return { startCi: aci, startWi: awi, endCi: bci, endWi: bwi, words };
+}
+function paintPhraseSel() {
+  const r = phraseSelRange();
+  const inSet = new Set((r ? r.words : []).map(w => w.ci + ':' + w.wi));
+  $('#transcript').querySelectorAll('.cw').forEach(sp => {
+    sp.classList.toggle('sel', inSet.has(sp.dataset.ci + ':' + sp.dataset.wi));
+  });
+}
+function clearPhraseSel() {
+  $('#transcript').querySelectorAll('.cw.sel').forEach(sp => sp.classList.remove('sel'));
+}
+function openPhraseCard(range) {
+  const phrase = stripPunct(range.words.map(w => w.t).join(' ')).replace(/\s+/g, ' ').trim();
+  if (!phrase || phrase.split(' ').length > 8) { if (phrase) toast('that’s a lot of words — pick a shorter phrase', 2600); return; }
+  if (WP) { WP.pause(); wPausedForModal = true; }
+  const cs = range.startCi, ce = range.endCi;
+  const around = [WCUES[cs - 1], ...WCUES.slice(cs, ce + 1), WCUES[ce + 1]]
+    .filter(Boolean).map(c => c.text).join(' ');
+  openCardModal({ id: null, text: around, start_time: hms(WCUES[cs].s) }, phrase);
+  if (MODAL) MODAL.watchCue = cs;   // openCardModal already seeds the phrase + fires the preview
 }
 function watchTapWord(ci, wi) {
   if (WP) { WP.pause(); wPausedForModal = true; }
