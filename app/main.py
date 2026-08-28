@@ -241,10 +241,17 @@ def delete_video(video_id: int):
         raise HTTPException(404, "no such video")
     EXTRACT_STATUS.pop(video_id, None)
     AUDIO_STATUS.pop(video_id, None)
+    _STREAM_CACHE.pop(video_id, None)
     ap = ytdlp.audio_path(video_id)
     if ap:
         try:
             os.remove(ap)
+        except OSError:
+            pass
+    import glob as _glob
+    for fr in _glob.glob(os.path.join(ytdlp.FRAME_DIR, f"{video_id}-*.jpg")):
+        try:
+            os.remove(fr)
         except OSError:
             pass
     n = store.delete_video(video_id)
@@ -393,6 +400,36 @@ async def stream(video_id: int, request: Request):
             await client.aclose()
 
     return StreamingResponse(relay(), status_code=status, headers=out_h)
+
+
+_FRAME_SEM = asyncio.Semaphore(2)
+
+
+@app.get("/videos/{video_id}/frame")
+async def video_frame(video_id: int, t: float):
+    """A single JPEG of the video at `t` seconds — the thumbnail on a review card.
+    Uses the downloaded file if we have it, else the resolved stream URL."""
+    v = store.get_video(video_id)
+    if not v:
+        raise HTTPException(404, "no such video")
+    out = os.path.join(ytdlp.FRAME_DIR, f"{video_id}-{max(0, int(t))}.jpg")
+    if not os.path.exists(out):
+        headers = None
+        if v.get("media_path") and os.path.exists(v["media_path"]):
+            src = v["media_path"]
+        else:
+            try:
+                src, headers = await _resolve_stream_cached(video_id, v["url"])
+            except Exception as e:  # noqa: BLE001
+                raise HTTPException(404, f"no frame source ({str(e)[:120]})")
+        async with _FRAME_SEM:
+            if not os.path.exists(out):
+                try:
+                    await asyncio.to_thread(ytdlp.extract_frame, src, t, out, headers)
+                except Exception as e:  # noqa: BLE001
+                    raise HTTPException(502, f"frame extract failed ({str(e)[:150]})")
+    return FileResponse(out, media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=604800"})
 
 
 AUDIO_STATUS = {}   # video_id -> {"state","pct","detail"}

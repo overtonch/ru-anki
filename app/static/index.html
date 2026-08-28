@@ -150,6 +150,19 @@
           transition: background-color .3s ease, border-color .3s ease, box-shadow .15s;
           animation: cardIn .32s cubic-bezier(.2,.7,.3,1) both; }
   @keyframes cardIn { from { opacity:0; transform:translateY(8px); } }
+  .card .clip { display:block; position:relative; width:100%; padding:0; border:0;
+                background:var(--card-2); border-radius:var(--r-sm); overflow:hidden;
+                cursor:pointer; margin:0 0 .7rem; aspect-ratio:16/9; }
+  .card .clip img { width:100%; height:100%; object-fit:cover; display:block; transition:transform .2s; }
+  .card .clip:active img { transform:scale(1.02); }
+  .card .clip-t { position:absolute; left:.5rem; bottom:.5rem; font-size:.74rem;
+                  font-weight:650; color:#fff; background:rgba(0,0,0,.62);
+                  border-radius:.35rem; padding:.15em .5em;
+                  -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); }
+  .card .clip.noimg { aspect-ratio:auto; background:none; width:auto; display:inline-block; }
+  .card .clip.noimg img { display:none; }
+  .card .clip.noimg .clip-t { position:static; display:inline-block; color:var(--accent);
+                  background:none; padding:0; -webkit-backdrop-filter:none; backdrop-filter:none; }
   .fq { font-weight:600; }
   .fq.mid { color:#e0913a; }
   .fq.uncommon { color:var(--muted); }
@@ -1136,9 +1149,17 @@ function renderCard(c) {
   el.dataset.id = c.id;
   const badge = c.duplicate ? ' · <span class="dupbadge">already have a card</span>' : '';
   const fq = c.freq ? ` · <span class="fq ${c.freq.band}">${escapeHtml(c.freq.label)}</span>` : '';
+  const secs = c.timestamp_start != null ? hmsToSec(c.timestamp_start) : null;
+  const clip = secs != null ? `
+    <button class="clip" title="watch this moment">
+      <img loading="lazy" src="/videos/${CURRENT}/frame?t=${secs}" alt=""
+           onerror="this.closest('.clip').classList.add('noimg')">
+      <span class="clip-t">▶ ${fmtTime(secs)}</span>
+    </button>` : '';
   el.innerHTML = `
     <div class="swipeflag left">✓ make card</div>
     <div class="swipeflag right">✕ discard</div>
+    ${clip}
     <div class="sent">${c.front_html}</div>
     <div class="tr">${escapeHtml(c.translation || '')}</div>
     <div class="meta">${c.is_phrase ? 'phrase' : 'word'} · ${escapeHtml(c.span_text)}${fq}${c.bolded ? '' : ' · ⚠ not bolded'}${badge}</div>
@@ -1149,6 +1170,8 @@ function renderCard(c) {
   const y = el.querySelector('.y');
   if (y) y.onclick = () => decide(c.id, 'yes', el);
   el.querySelector('.n').onclick = () => decide(c.id, 'no', el);
+  const clipBtn = el.querySelector('.clip');
+  if (clipBtn && secs != null) clipBtn.onclick = () => jumpTo(secs);
   attachSwipe(el, c.id);
   return el;
 }
@@ -1550,7 +1573,7 @@ function loadYTApi() {
   return ytApiP;
 }
 
-async function openWatch(id) {
+async function openWatch(id, seekTo) {
   const haveLocal = await opfsHas(id);
   let data;
   try { data = await api(`/videos/${id}/watch`); idbPut('offline', 'w' + id, data).catch(() => {}); }
@@ -1575,10 +1598,16 @@ async function openWatch(id) {
   if (matchMedia('(orientation: landscape)').matches) enterFs(); else exitFs();
   renderTranscript();
   refreshAudioBtn();
-  const resumeAt = loadPos(id);
+  const resumeAt = seekTo != null ? seekTo : loadPos(id);
   startPlayer(id, resumeAt);
-  if (resumeAt) toast('picked up at ' + fmtTime(resumeAt));
+  if (seekTo == null && resumeAt) toast('picked up at ' + fmtTime(resumeAt));
   prepAudio(id);   // ready an audio source so backgrounding keeps playing
+}
+function jumpTo(sec) { openWatch(CURRENT, Math.max(0, sec - 1.5)); }
+function hmsToSec(hms) {
+  const p = String(hms || '').split(':').map(Number);
+  return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2]
+       : p.length === 2 ? p[0] * 60 + p[1] : (p[0] || 0);
 }
 
 /* ---- resume where you left off (per video, this device) ---- */

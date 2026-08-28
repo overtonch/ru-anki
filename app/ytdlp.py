@@ -97,6 +97,26 @@ def fetch_subs(url):
 MEDIA_DIR = os.environ.get(
     "RU_MEDIA_DIR",
     os.path.expanduser("~/Library/Application Support/ru-anki/media"))
+FRAME_DIR = os.path.join(MEDIA_DIR, "frames")
+
+FFMPEG = os.environ.get("RU_FFMPEG", "/opt/homebrew/bin/ffmpeg")
+if not os.path.exists(FFMPEG):
+    FFMPEG = "ffmpeg"
+
+
+def extract_frame(src, seconds, out_path, headers=None):
+    """Grab a single ~336px-wide JPEG at `seconds` into `src` (a local file or an
+    http(s) URL). `headers` are sent when src is a signed URL. Raises on failure."""
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    args = [FFMPEG, "-nostdin", "-y", "-ss", f"{max(0.0, float(seconds)):.2f}"]
+    if headers:
+        args += ["-headers", "".join(f"{k}: {v}\r\n" for k, v in headers.items())]
+    args += ["-i", src, "-frames:v", "1", "-an",
+             "-vf", "scale=336:-2", "-q:v", "5", "-f", "image2", out_path]
+    r = subprocess.run(args, capture_output=True, text=True, timeout=45)
+    if r.returncode != 0 or not os.path.exists(out_path):
+        raise RuntimeError("ffmpeg frame extract failed: " + (r.stderr or "")[-300:])
+    return out_path
 
 
 def download_media(url, video_id, height=360, progress=None):
