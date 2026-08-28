@@ -1,22 +1,24 @@
-"""Local Whisper re-transcription (mlx-whisper on the Apple GPU, no API cost —
-pure compute). Used to replace sketchy auto-captions or content that has none.
+"""Local Whisper re-transcription (no API cost — pure compute). Replaces sketchy
+auto-captions or fills in content that has none.
 
-Speed work (all best-effort, degrades cleanly if a dep is missing):
-  * the MLX model is loaded once and kept resident (`warm()`);
-  * segment WAV extraction is pipelined — ffmpeg cuts the next chunk while the
-    current one transcribes;
-  * a second worker (faster-whisper, int8 on the CPU) runs in parallel with the
-    GPU worker, so the two share the segment queue and the CPU soaks up chunks
-    the GPU would otherwise do serially;
-  * VAD gating skips chunks that are essentially music/silence.
-`condition_on_previous_text` stays on *within* each ~10-min chunk.
+Default backend: **mlx-whisper** (large-v3-turbo on the Apple GPU) with pipelined
+ffmpeg extraction, VAD gating, and an optional parallel faster-whisper CPU worker
+(RU_WHISPER_CPU_WORKER=1). On a base M1 this measured ~8-9x realtime.
 
-The NEXT big win (not done here) is whisper.cpp with the CoreML/ANE encoder —
-see TODO.md; it pipelines encode(i+1) against decode(i) and is ~2-3x this path.
+Alternate backend: **whisper.cpp + CoreML** (RU_WHISPER_BACKEND=whispercpp). The
+encoder runs through CoreML (meant for the ANE) and one process handles the whole
+file. Built + measured 2026-08-28 (see deploy/WHISPERCPP.md) — it came out ~6x
+realtime, i.e. *slower* than MLX turbo on this M1, so it's opt-in, not the
+default. Kept wired up in case a machine with a bigger ANE / a longer file
+changes the balance.
+
+`condition_on_previous_text` stays on within each window / ~10-min chunk.
 """
+import json
 import math
 import os
 import queue
+import re
 import subprocess
 import threading
 
@@ -24,6 +26,19 @@ import ytdlp
 
 MODEL = os.environ.get("RU_WHISPER_MODEL", "mlx-community/whisper-large-v3-turbo")
 _CHUNK = int(os.environ.get("RU_WHISPER_CHUNK", "600"))        # seconds per pass
+
+# ---- whisper.cpp (CoreML/ANE) backend ----
+_WCPP_DIR = os.environ.get(
+    "RU_WHISPERCPP_DIR",
+    os.path.expanduser("~/Library/Application Support/ru-anki/whispercpp/whisper.cpp"))
+_WCPP_BIN = os.environ.get("RU_WHISPERCPP_BIN",
+                           os.path.join(_WCPP_DIR, "build", "bin", "whisper-cli"))
+_WCPP_MODEL = os.environ.get(
+    "RU_WHISPERCPP_MODEL",
+    os.path.join(_WCPP_DIR, "models", "ggml-large-v3-turbo.bin"))
+_WCPP_THREADS = os.environ.get("RU_WHISPERCPP_THREADS", "6")
+# "mlx" (default) or "whispercpp"
+_BACKEND = os.environ.get("RU_WHISPER_BACKEND", "mlx").lower()
 _CPU_MODEL = os.environ.get("RU_WHISPER_CPU_MODEL", "large-v3")  # faster-whisper worker
 # The parallel CPU worker adds ~25% throughput but pulls a ~1.5 GB model and runs
 # the CPUs hot — opt in with RU_WHISPER_CPU_WORKER=1.
@@ -121,9 +136,59 @@ def _fw_segment(wav):
         return [(s.start, s.end, (s.text or "").strip()) for s in segs]
 
 
+# ---------------------------------------------------------------- whisper.cpp
+
+def _whispercpp_ok():
+    return (_BACKEND == "whispercpp"
+            and os.path.exists(_WCPP_BIN) and os.path.exists(_WCPP_MODEL))
+
+
+def _transcribe_whispercpp(src, progress=None):
+    """One whisper-cli process over the whole file — it does its own 30-s
+    windowing with context carry-over and (with a CoreML build) runs the encoder
+    through CoreML."""
+    wav = f"{src}.wcpp.wav"
+    out = f"{src}.wcpp"
+    _seg_wav(src, 0, 10 ** 7, wav)
+    try:
+        proc = subprocess.Popen(
+            [_WCPP_BIN, "-m", _WCPP_MODEL, "-f", wav, "-l", "ru", "-nt",
+             "-oj", "-of", out, "-pp", "-t", str(_WCPP_THREADS)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        for line in proc.stderr:
+            m = re.search(r"progress\s*=\s*(\d+)%", line)
+            if m and progress:
+                progress(int(m.group(1)) / 100.0)
+        proc.wait()
+        if proc.returncode != 0:
+            raise RuntimeError(f"whisper-cli exited {proc.returncode}")
+        with open(out + ".json", encoding="utf-8") as f:
+            data = json.load(f)
+    finally:
+        for p in (wav, out + ".json"):
+            if os.path.exists(p):
+                os.remove(p)
+    cues = []
+    for s in data.get("transcription", []):
+        t = (s.get("text") or "").strip()
+        o = s.get("offsets") or {}
+        if t and "from" in o:
+            cues.append((round(o["from"] / 1000.0, 2),
+                         round(o["to"] / 1000.0, 2), t))
+    if progress:
+        progress(1.0)
+    return cues
+
+
 def transcribe(src, duration=0, progress=None):
     """`src` = a local audio/video file. -> [(start_sec, end_sec, text)].
-    `progress(frac)` fires as ~10-min passes complete."""
+    `progress(frac)` fires as passes complete."""
+    if _whispercpp_ok():
+        try:
+            return _transcribe_whispercpp(src, progress)
+        except Exception as e:  # noqa: BLE001
+            print(f"[whisper] whisper.cpp failed ({e}); falling back to MLX")
+
     _load_mlx()
     dur = duration or _duration(src)
     n = max(1, math.ceil(dur / _CHUNK)) if dur else 1

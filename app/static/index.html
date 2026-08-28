@@ -396,6 +396,9 @@
   #watchView.fs .wctrls { display:none; }
   #watchView.fs .player-wrap { flex:1; aspect-ratio:auto; height:100%; }
   #watchView.fs .cap-overlay { bottom:4.4rem; }
+  /* while paused the scrubber owns the bottom strip — lift captions clear of it */
+  #watchView.paused .cap-overlay { bottom:3rem; }
+  #watchView.paused.fs .cap-overlay { bottom:6.4rem; }
   #watchView.fs .cap-overlay:not(:empty) { font-size:clamp(1.05rem, 3.6vh, 1.9rem); }
 
   .fs-seek, .fs-exit { display:none; }
@@ -423,24 +426,30 @@
   #watchView.fs.hidectrls .fs-exit { opacity:0; pointer-events:none; }
   #watchView.paused.fs .fs-seek { bottom:calc(3.2rem + env(safe-area-inset-bottom)); }
 
-  /* scrubber — a position bar at the bottom of the player while paused */
+  /* scrubber — a slim position bar pinned to the very bottom of the player while
+     paused. It's inert until you tap it once (so a mis-tap on a caption word
+     above it can't seek); the first tap "arms" it, then it drags. */
   .scrubber { position:absolute; left:0; right:0; bottom:0; z-index:7;
-              padding:.9rem .95rem calc(.55rem + env(safe-area-inset-bottom));
-              background:linear-gradient(transparent, rgba(0,0,0,.6));
+              padding:.5rem .95rem calc(.45rem + env(safe-area-inset-bottom));
+              background:linear-gradient(transparent, rgba(0,0,0,.55));
               opacity:0; pointer-events:none; transition:opacity .2s;
               touch-action:none; }
   #watchView.paused .scrubber { opacity:1; pointer-events:auto; }
-  .scrub-track { position:relative; height:4px; border-radius:99px;
-                 background:rgba(255,255,255,.3); }
+  .scrub-track { position:relative; height:3px; border-radius:99px;
+                 background:rgba(255,255,255,.28); transition:height .12s; }
   .scrub-fill { position:absolute; left:0; top:0; bottom:0; width:0;
-                background:var(--accent); border-radius:99px; transition:width .12s linear; }
+                background:rgba(255,255,255,.5); border-radius:99px; transition:width .12s linear; }
   .scrub-knob { position:absolute; top:50%; left:0; width:13px; height:13px;
-                border-radius:50%; background:#fff; transform:translate(-50%,-50%);
-                box-shadow:0 1px 4px rgba(0,0,0,.55); transition:left .12s linear; }
-  .scrubber.dragging .scrub-fill, .scrubber.dragging .scrub-knob { transition:none; }
-  .scrubber.dragging .scrub-track { height:6px; }
-  .scrub-time { color:#fff; font-size:.72rem; margin-top:.4rem;
+                border-radius:50%; background:#fff; transform:translate(-50%,-50%) scale(0);
+                box-shadow:0 1px 4px rgba(0,0,0,.55); transition:left .12s linear, transform .12s; }
+  .scrub-time { color:#fff; font-size:.72rem; margin-top:.35rem; opacity:0; height:0;
+                overflow:hidden; transition:opacity .12s;
                 font-variant-numeric:tabular-nums; text-shadow:0 1px 3px rgba(0,0,0,.9); }
+  .scrubber.armed .scrub-track { height:6px; }
+  .scrubber.armed .scrub-fill { background:var(--accent); }
+  .scrubber.armed .scrub-knob { transform:translate(-50%,-50%) scale(1); }
+  .scrubber.armed .scrub-time { opacity:1; height:auto; }
+  .scrubber.dragging .scrub-fill, .scrubber.dragging .scrub-knob { transition:none; }
 
   /* landscape on a phone, not fullscreen: give the video the height, transcript the rest */
   @media (orientation:landscape) and (max-height:540px) {
@@ -2038,7 +2047,7 @@ async function ensureAudioFile(id, btn) {
 
 function onPlayState(playing) {
   $('#watchView').classList.toggle('paused', !playing);
-  if (playing) { const c = $('#capOverlay'); if (c.textContent === 'tap to play') c.textContent = ''; }
+  if (playing) { armScrub(false); const c = $('#capOverlay'); if (c.textContent === 'tap to play') c.textContent = ''; }
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
   bumpCtrls();
 }
@@ -2219,7 +2228,14 @@ function renderCaption(idx) {
     c.append(sp, document.createTextNode(' '));
   });
 }
-let scrubDragging = false;
+let scrubDragging = false, scrubArmed = false, scrubArmTimer = null;
+function armScrub(on) {
+  scrubArmed = on;
+  const sc = $('#scrubber');
+  if (sc) sc.classList.toggle('armed', on);
+  clearTimeout(scrubArmTimer);
+  if (on) scrubArmTimer = setTimeout(() => armScrub(false), 4500);
+}
 function updateScrubber() {
   if (scrubDragging || !WP) return;
   const d = WP.dur();
@@ -2244,6 +2260,12 @@ function attachScrubber() {
   };
   sc.addEventListener('pointerdown', e => {
     if (!WP || !WP.dur()) return;
+    if (!scrubArmed) {          // first tap only arms it — no seek
+      armScrub(true);
+      e.preventDefault();
+      return;
+    }
+    armScrub(true);             // refresh the auto-disarm timer
     scrubDragging = true; sc.classList.add('dragging');
     try { sc.setPointerCapture(e.pointerId); } catch {}
     show(fracAt(e));
@@ -2253,6 +2275,7 @@ function attachScrubber() {
     if (!scrubDragging) return;
     scrubDragging = false; sc.classList.remove('dragging');
     if (WP && WP.dur()) { WP.seek(fracAt(e) * WP.dur()); }
+    armScrub(true);             // keep armed briefly for a follow-up nudge
     bumpCtrls();
   };
   sc.addEventListener('pointerup', end);
