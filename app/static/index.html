@@ -417,8 +417,10 @@
   .lib-card .rbar i { display:block; height:100%; background:var(--accent); }
 
   #readView { position:fixed; inset:0; z-index:15; background:var(--bg);
-              display:flex; flex-direction:column;
+              flex-direction:column;
               padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+  #readView[hidden] { display:none; }
+  #readView:not([hidden]) { display:flex; }
   .readbar { display:flex; align-items:center; gap:.5rem; padding:.5rem .9rem;
              border-bottom:1px solid var(--line-soft); flex:none; }
   .readbar .rtitle { flex:1; min-width:0; font-size:.82rem; color:var(--fg-dim);
@@ -504,22 +506,25 @@
   <!-- LIST VIEW -->
   <div id="listView">
     <div class="addbar">
-      <input type="text" id="url" placeholder="YouTube, VK, RuTube… link"
+      <input type="text" id="url" placeholder="Paste a YouTube link to add"
              autocapitalize="off" autocomplete="off" spellcheck="false"
              onkeydown="if(event.key==='Enter')addVideo()">
       <button class="btn" id="addBtn" onclick="addVideo()">Add</button>
     </div>
     <div class="status">
-      <span>model
-        <select id="model" class="minisel">
-          <option value="sonnet">Sonnet 5</option>
-          <option value="haiku">Haiku 4.5</option>
-        </select></span>
+      model
+      <select id="model" class="minisel">
+        <option value="sonnet">Sonnet 5</option>
+        <option value="haiku">Haiku 4.5</option>
+      </select>
+      <span id="addStatus"></span>
+    </div>
+    <!-- reading feature — kept, hidden behind READING_ENABLED -->
+    <div class="status" id="readingControls" hidden>
       <button class="backlink" onclick="$('#fileInput').click()">＋ import a book / text</button>
       <button class="backlink" id="pasteBtn" onclick="openPaste()">paste</button>
       <input type="file" id="fileInput" accept=".epub,.txt,text/plain,application/epub+zip"
              hidden onchange="importFile(this.files[0])">
-      <span id="addStatus"></span>
     </div>
     <div id="videoList"></div>
   </div>
@@ -667,6 +672,7 @@
 
 <script>
 const $ = s => document.querySelector(s);
+const READING_ENABLED = false;   // reading feature is built but off for now
 let VIDEOS = [];
 let TEXTS = [];
 let READ = null;             // { id, meta, ch, carded:Set }
@@ -721,7 +727,7 @@ const SPINNER = '<div class="center-spin"><span class="spin lg"></span></div>';
 let listedOnce = false;
 async function loadVideos() {
   if (!listedOnce) $('#videoList').innerHTML = SPINNER;
-  try { TEXTS = await api('/texts'); } catch {}
+  if (READING_ENABLED) { try { TEXTS = await api('/texts'); } catch {} }
   try {
     VIDEOS = await api('/videos');
     listedOnce = true;
@@ -731,7 +737,7 @@ async function loadVideos() {
     renderList();
     if (VIDEOS.length || TEXTS.length)
       $('#videoList').insertAdjacentHTML('afterbegin',
-        '<div class="empty">offline — showing saved items</div>');
+        `<div class="empty">offline — showing saved ${READING_ENABLED ? 'items' : 'videos'}</div>`);
     return;
   }
   renderList();
@@ -767,7 +773,9 @@ function extractLine(ex) {
 function renderList() {
   const box = $('#videoList');
   if (!VIDEOS.length && !TEXTS.length) {
-    box.innerHTML = '<div class="empty">Nothing yet. Paste a YouTube link, or import a book / text above.</div>';
+    box.innerHTML = READING_ENABLED
+      ? '<div class="empty">Nothing yet. Paste a YouTube link, or import a book / text above.</div>'
+      : '<div class="empty">No videos yet. Paste a link above to start.</div>';
     return;
   }
   box.innerHTML = '';
@@ -2610,6 +2618,7 @@ matchMedia('(orientation: landscape)').addEventListener('change', e => {
   if ($('#watchView').classList.contains('fs')) bumpCtrls();
 });
 attachPlayerSwipe();
+if (READING_ENABLED) $('#readingControls').hidden = false;
 probeHealth();
 refreshQueuePill();
 flushQueue();
