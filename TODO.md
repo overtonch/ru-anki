@@ -2,15 +2,19 @@
 
 ## Set up before relying on it remotely (details: `deploy/RELIABILITY.md`)
 
-- [ ] Create a **private** GitHub repo `ru-anki-data` (empty), then:
-      `cd ~/ru-anki && sh deploy/install.sh git@github.com:overtonch/ru-anki-data.git`
-      → wires the off-machine backup (until then, backups are local only)
-- [ ] `sudo pmset -a autorestart 1 disksleep 0`  (survive a power blip)
+- [x] Tailscale **Serve** — `https://angelicas-imac.tail0916c1.ts.net` → :8000
+      (persists across reboot). **Use this URL on the phone, not the IP.**
+- [x] launchd agent installed (auto-start + auto-restart + caffeinate)
+- [ ] **Create a private GitHub repo `ru-anki-data`** (empty, no README) at
+      https://github.com/new — the `data-git` remote is already pointed at
+      `git@github.com:overtonch/ru-anki-data.git`; the next backup pushes on its
+      own once the repo exists. Then confirm `/health` → `backup.git.last_ok: true`.
+- [ ] `sudo pmset -a autorestart 1 disksleep 0`  (needs your password; currently
+      autorestart=0, disksleep=10)
 - [ ] System Settings → Users & Groups → **auto-login** (unattended reboot recovery)
-- [ ] Enable Tailscale **Serve** (https://login.tailscale.com/f/serve), then
-      `tailscale serve --bg 8000`
+- [ ] Re-add the home-screen app from the **https://** URL (the old icon points at
+      `http://100.x` — offline video / SW / PWA only work on the https origin)
 - [ ] Leave the Mac plugged in, lid open
-- [ ] Confirm `GET /health` → `backup.git.last_ok: true`
 - [ ] Know the recovery path: `python rebuild_db.py ~/ru-anki-data`
 
 ## Decided but not built
