@@ -383,6 +383,35 @@ For EACH excerpt, output ONE line: the single natural sentence that contains tha
 Output exactly one cleaned sentence per input line, in the same order, numbered "1. ", "2. " … and nothing else."""
 
 
+_FAMILY_SYSTEM = """Given ONE Russian word in its dictionary form, list the OTHER Russian words a learner who already knows this word would understand WITHOUT a dictionary — i.e. the SAME core meaning, just a different part of speech or an aspect / transparent-nuance prefix.
+
+INCLUDE:
+- the noun ⇄ verb ⇄ adjective ⇄ adverb of the same idea (работа / работать / рабочий; красивый / красота / красиво; быстрый / быстро)
+- the aspect partner (решить / решать, делать / сделать)
+- a prefixed form only if its meaning is still "obviously the same word" (поработать, попробовать)
+
+EXCLUDE (this is the important part):
+- prefixed forms whose prefix CHANGES the meaning, so the learner would have to look them up: работать → заработать «to earn», обработать «to process», разработать «to develop»; писать → подписать «to sign», списать «to copy off»
+- look-alikes with an unrelated meaning (стать «become» vs статья «article»; мир «peace» vs мириады)
+- rare, archaic, bookish or technical derivatives
+When unsure, EXCLUDE.
+
+Output ONE raw JSON object, no code fence, nothing else:
+{"root": "<root>", "members": ["<dict form>", ...]}
+Dictionary forms, lowercase, ё written as е. Include the input word. Usually 3-8 members. Never invent words."""
+
+
+def word_family(word, model=None):
+    """-> (root, [member lemmas]) for a Russian word. One headless call."""
+    text, _ = run_claude(f"Word: {word}", _FAMILY_SYSTEM,
+                         model=model or TRANSLATE_MODEL, timeout=40)
+    obj = _parse_obj(text)
+    fold = lambda s: (s or "").strip().lower().replace("ё", "е")
+    members = [fold(m) for m in (obj.get("members") or []) if isinstance(m, str) and m.strip()]
+    members = [m for m in members if all("а" <= ch <= "я" or ch == "-" for ch in m)]
+    return fold(obj.get("root")), sorted(set(members) | {fold(word)})
+
+
 def clean_sentences(word, excerpts, model=None):
     """Clean each raw excerpt into one flashcard sentence containing `word`.
     Returns a list aligned to `excerpts` (best-effort; missing -> '')."""

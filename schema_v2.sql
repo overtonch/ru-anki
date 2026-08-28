@@ -29,6 +29,16 @@ CREATE TABLE IF NOT EXISTS dict_ru (
     gloss    TEXT
 );
 
+-- Word-formation families: every lemma that shares a root + core meaning with a
+-- word you've carded counts as "known" for highlighting + extraction, so you
+-- don't get separate cards for работа / работать / рабочий. Populated by an LLM
+-- call the first time a word in the family is carded.
+CREATE TABLE IF NOT EXISTS word_family (
+    lemma TEXT PRIMARY KEY,
+    root  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_word_family_root ON word_family(root);
+
 -- Reading feature: imported long-form text (EPUB / .txt / pasted). Tap-to-card
 -- while reading reuses the same translate + Anki pipeline as the video watcher.
 CREATE TABLE IF NOT EXISTS texts (

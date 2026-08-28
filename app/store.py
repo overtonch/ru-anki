@@ -605,6 +605,53 @@ def card_lemmas():
     return {r["normalized_text"] for r in rows}
 
 
+def known_family_lemmas():
+    """Every lemma that shares a word-formation family with something you've
+    carded — so работа / рабочий / работник all count as 'known' once you have
+    работать. (card_lemmas() is a subset once families are learned.)"""
+    c = connect()
+    try:
+        rows = c.execute(
+            """SELECT wf.lemma FROM word_family wf WHERE wf.root IN (
+                 SELECT w2.root FROM word_family w2
+                 JOIN resolved_words r ON r.normalized_text = w2.lemma
+                                      AND r.reason = 'has_card')"""
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    c.close()
+    return {r["lemma"] for r in rows}
+
+
+def set_word_family(root, lemmas):
+    lemmas = {lemmas} if isinstance(lemmas, str) else set(lemmas)
+    lemmas = {norm(m) for m in lemmas if m}
+    if not lemmas:
+        return
+    c = connect()
+    c.executemany("INSERT OR REPLACE INTO word_family(lemma, root) VALUES(?,?)",
+                  [(m, norm(root) or next(iter(lemmas))) for m in lemmas])
+    c.commit()
+    c.close()
+
+
+def lemmas_without_family():
+    """Carded lemmas that don't yet have a word_family entry — for a one-time
+    backfill."""
+    c = connect()
+    try:
+        rows = c.execute(
+            """SELECT normalized_text FROM resolved_words
+               WHERE reason='has_card'
+                 AND normalized_text NOT IN (SELECT lemma FROM word_family)
+                 AND normalized_text NOT LIKE '% %'"""
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    c.close()
+    return [r["normalized_text"] for r in rows]
+
+
 def recent_discards(limit=50):
     """Surface forms the learner explicitly discarded (rejected as too easy /
     not useful), newest first — a difficulty-calibration signal for extraction."""
@@ -646,10 +693,11 @@ def resolved_words_list():
 
 # ---------------------------------------------------------------- candidates
 
-def add_candidates(video_id, items, source="batch"):
+def add_candidates(video_id, items, source="batch", family=None):
     """items: [{span_text, is_phrase, sentence, timestamp_start, translation}].
-    Applies stoplist + resolved_words filter and in-video dedup. Returns
-    (added, skipped[(span, reason)])."""
+    Applies stoplist + resolved_words + word-family filter and in-video dedup.
+    Returns (added, skipped[(span, reason)])."""
+    family = family or set()
     c = connect()
     added, skipped = [], []
     for it in items:
@@ -660,6 +708,9 @@ def add_candidates(video_id, items, source="batch"):
         why = exclusion_reason(c, n)
         if why:
             skipped.append((span, why))
+            continue
+        if n in family:                       # same word-family as something carded
+            skipped.append((span, "family"))
             continue
         if c.execute(
             "SELECT 1 FROM candidates WHERE video_id=? AND normalized_text=?",

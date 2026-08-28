@@ -101,6 +101,41 @@ def _do_sync():
         print(f"[sync] {err}")
 
 
+def _learn_family(lemma):
+    """After a card is made, learn its word-formation family so работа/рабочий/…
+    count as known too. Fire-and-forget."""
+    lemma = (lemma or "").strip()
+    if not lemma or " " in lemma:
+        return
+    try:
+        root, members = llm.word_family(lemma)
+        if members:
+            store.set_word_family(root or lemma, members)
+            print(f"[family] {lemma} -> {root or lemma}: {len(members)} members")
+    except Exception as e:  # noqa: BLE001
+        print(f"[family] {lemma}: {e}")
+
+
+def _learn_family_async(lemma):
+    threading.Thread(target=_learn_family, args=(lemma,), daemon=True).start()
+
+
+def _backfill_families(delay=0):
+    if delay:
+        time.sleep(delay)                  # let the server settle on startup
+    todo = store.lemmas_without_family()
+    if not todo:
+        return
+    print(f"[family] backfilling {len(todo)} carded words…")
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(_learn_family, todo))
+    print("[family] backfill done")
+
+
+threading.Thread(target=_backfill_families, kwargs={"delay": 20}, daemon=True).start()
+
+
 # ------------------------------------------------------------------ models
 
 class VideoIn(BaseModel):
@@ -612,6 +647,7 @@ def _run_extraction(video_id, model):
         decided = store.resolved_words_list()
         discards = store.recent_discards()
         recurring = store.notable_recurring(video_id)
+        family = store.known_family_lemmas()
         added = {"n": 0}
 
         def on_chunk(items):
@@ -624,7 +660,7 @@ def _run_extraction(video_id, model):
                     s = store.context_for(
                         video_id, it.get("timestamp_start"), it["span_text"])
                 it["sentence"] = s
-            got, _ = store.add_candidates(video_id, items, source="batch")
+            got, _ = store.add_candidates(video_id, items, source="batch", family=family)
             added["n"] += len(got)
 
         def prog(done, total, errors):
@@ -726,7 +762,7 @@ def candidates(video_id: int, status: str = "pending", sort: str = "yield"):
     rows = store.list_candidates(video_id, status=status or None)
     v = store.get_video(video_id)
     title = v["title"] if v else ""
-    have = store.card_lemmas()
+    have = store.card_lemmas() | store.known_family_lemmas()
     counts = store.lemma_counts(video_id)
     sidx = store.stem_line_index(store.transcript_texts(video_id))
     for r in rows:
@@ -783,8 +819,17 @@ def decide(cand_id: int, body: DecisionIn):
     updated = store.resolve_candidate(
         cand_id, body.decision,
         note_id=(anki_result or {}).get("note_id") if body.decision == "yes" else None)
+    if body.decision == "yes":
+        _learn_family_async(cand["normalized_text"])
     backup.snapshot_async("decision")
     return {"candidate": updated, "anki": anki_result}
+
+
+@app.post("/families/backfill")
+def families_backfill(background: BackgroundTasks):
+    todo = store.lemmas_without_family()
+    background.add_task(_backfill_families)
+    return {"pending": len(todo)}
 
 
 @app.post("/candidates/{cand_id}/undo")
@@ -871,7 +916,7 @@ def watch(video_id: int):
     if not v:
         raise HTTPException(404, "no such video")
     cues = subs.caption_cues(v["raw_subs"])
-    have = store.card_lemmas()
+    have = store.card_lemmas() | store.known_family_lemmas()
     pend_rows = store.list_candidates(video_id, status="pending")
     pending = {r["normalized_text"]: r["id"]
                for r in pend_rows if r.get("normalized_text")}
@@ -982,6 +1027,7 @@ def _make_one_card(video_id, subtitle_line_id, span, timestamp=None, sentence=No
     anki_result["sync_error"] = None
     _sync_soon()
     store.resolve_candidate(cid, "yes", note_id=anki_result.get("note_id"))
+    _learn_family_async(store.lemma_key(span_text))
     return {"candidate_id": cid, "span_text": span_text, "is_phrase": ph,
             "translation": translation, "anki": anki_result,
             "bolded": anki_result["bolded"]}
@@ -1084,7 +1130,7 @@ def text_chapter(text_id: int, idx: int):
     ch = store.get_chapter(text_id, idx)
     if not ch:
         raise HTTPException(404, "no such chapter")
-    have = store.card_lemmas()
+    have = store.card_lemmas() | store.known_family_lemmas()
     carded = sorted({
         w for w in {m.group(0) for m in _CYR_W.finditer(ch["body"])}
         if store.lemma_key(w) in have
@@ -1137,6 +1183,7 @@ def text_card(text_id: int, body: TextCardIn):
     except anki.AnkiError as e:
         raise HTTPException(502, f"Anki: {e}")
     store.mark_carded(span_text)
+    _learn_family_async(store.lemma_key(span_text))
     _sync_soon()
     backup.snapshot_async("text-card")
     return {"span_text": span_text, "translation": translation, "is_phrase": ph,
