@@ -715,7 +715,8 @@ def watch(video_id: int):
                 elif lem in pending:
                     w["p"] = pending[lem]
             words.append(w)
-        out.append({"s": cue["s"], "e": cue["e"], "text": cue["text"], "words": words})
+        out.append({"s": cue["s"], "e": cue["e"], "re": cue.get("re", cue["e"]),
+                    "text": cue["text"], "words": words})
     return {
         "video": {k: v.get(k) for k in
                   ("id", "title", "channel", "url", "youtube_id", "duration",
