@@ -2496,17 +2496,32 @@ let mediaCancel = {};  // id -> true to stop it
 
 function renderMediaProgress(id, phase, pct, mb) {
   const row = $('#mediaRow');
-  const pc = Math.max(2, Math.min(100, Math.round(pct || 0)));
+  const pc = Math.max(0.8, Math.min(100, pct || 0));
   const label = phase === 'phone' ? 'saving to phone' : 'downloading on server';
-  row.innerHTML = `<div class="pbar"><div class="pfill" style="width:${pc}%"></div></div>
-    <div class="pmeta"><span class="spin"></span> ${label} · ${pc}%${mb ? ` · ${mb} MB` : ''}
-      · <button class="backlink" onclick="cancelMedia(${id})">cancel</button></div>`;
+  // build the bar once, then only nudge width + label so the CSS transition
+  // animates smoothly between updates instead of the whole node being replaced
+  if (row.dataset.mp !== id + ':' + phase || !row.querySelector('.pfill')) {
+    row.dataset.mp = id + ':' + phase;
+    row.innerHTML = `<div class="pbar"><div class="pfill"></div></div>
+      <div class="pmeta"><span class="spin"></span> <span class="mp-l"></span>
+        · <button class="backlink" onclick="cancelMedia(${id})">cancel</button></div>`;
+    row.querySelector('.pfill').style.width = pc.toFixed(1) + '%';   // no 0→n jump on first paint
+  }
+  const f = row.querySelector('.pfill');
+  // long linear glide while polling the server (~1.5s between updates),
+  // snappier on device where updates are frequent
+  f.style.transition = phase === 'phone'
+    ? 'width .6s cubic-bezier(.3,.7,.3,1)' : 'width 2s linear';
+  requestAnimationFrame(() => { f.style.width = pc.toFixed(1) + '%'; });
+  row.querySelector('.mp-l').textContent =
+    `${label} · ${Math.round(pc)}%${mb ? ` · ${mb} MB` : ''}`;
 }
 function cancelMedia(id) { mediaCancel[id] = true; }
 
 async function renderMediaRow(id) {
   if (mediaDL[id]) return;   // an active download owns this row
   const row = $('#mediaRow');
+  delete row.dataset.mp;     // any progress bar in here is stale now
   const v = VIDEOS.find(x => x.id === id) || DETAIL_V || { id };
   if (await opfsHas(id)) {
     const mb = Math.round((await opfsSize(id)) / 1e6);
