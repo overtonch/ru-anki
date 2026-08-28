@@ -394,12 +394,12 @@
                            border:0; color:var(--accent); font-size:.76rem; cursor:pointer; text-align:left; }
 
   /* immersive / fullscreen watch — video fills the view, caption stays on top */
-  #watchView.fs { padding:0; background:#000; height:100dvh;
-                  overflow:hidden; overscroll-behavior:none; }
+  #watchView.fs { padding:0; background:#000;
+                  overflow:hidden; overscroll-behavior:none;
+                  touch-action:none; -webkit-user-select:none; user-select:none; }
   #watchView.fs .watchbar, #watchView.fs .watchhint, #watchView.fs .transcript,
   #watchView.fs .wctrls { display:none; }
-  #watchView.fs .player-wrap { flex:1; aspect-ratio:auto; height:100%;
-                               touch-action:none; }   /* swipe owns all touch here */
+  #watchView.fs .player-wrap { flex:1; aspect-ratio:auto; height:100%; }
   #watchView.fs .cap-overlay { bottom:4.4rem; }
   /* while paused the scrubber owns the bottom strip — lift captions clear of it */
   #watchView.paused .cap-overlay { bottom:3rem; }
