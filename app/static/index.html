@@ -400,6 +400,14 @@
   #watchView.fs .watchbar, #watchView.fs .watchhint, #watchView.fs .transcript,
   #watchView.fs .wctrls { display:none; }
   #watchView.fs .player-wrap { flex:1; aspect-ratio:auto; height:100%; }
+  /* portrait fullscreen: pin the video to the top, leave one clean black area
+     below for the captions + the seek-swipe (no centred letterbox top & bottom) */
+  @media (orientation:portrait) {
+    #watchView.fs .player-wrap video, #watchView.fs .player-wrap iframe,
+    #watchView.fs .player-wrap #ytplayer {
+      top:calc(env(safe-area-inset-top) + .2rem); bottom:auto; height:auto;
+      aspect-ratio:16/9; object-fit:contain; }
+  }
   #watchView.fs .cap-overlay { bottom:4.4rem; }
   /* while paused the scrubber owns the bottom strip — lift captions clear of it */
   #watchView.paused .cap-overlay { bottom:3rem; }
