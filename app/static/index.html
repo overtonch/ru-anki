@@ -167,6 +167,10 @@
   .fq.mid { color:#e0913a; }
   .fq.uncommon { color:var(--muted); }
   .fq.rare { color:var(--ok); }
+  .rec { color:var(--accent); font-weight:600; }
+  .sortrow { font-size:.74rem; color:var(--muted); margin:.1rem 0 .3rem;
+             display:flex; align-items:center; gap:.4rem; }
+  #reviewPanel.collapsed .sortrow { display:none; }
   .swipeflag { position:absolute; top:.65rem; font-size:.72rem; font-weight:800;
                letter-spacing:.04em; text-transform:uppercase; opacity:0;
                pointer-events:none; transition:opacity .1s; }
@@ -567,6 +571,15 @@
           <button class="backlink" onclick="loadCandidates(true)">reload</button>
           <button class="backlink" onclick="resetAndReExtract()">discard all &amp; re-extract</button>
         </div>
+      </div>
+      <div class="sortrow" id="sortRow">
+        sort
+        <select class="minisel" id="reviewSort" onchange="setReviewSort(this.value)">
+          <option value="yield">most repeated</option>
+          <option value="rare">rarest</option>
+          <option value="common">most common</option>
+          <option value="order">in order</option>
+        </select>
       </div>
       <div id="cards"></div>
     </div>
@@ -1062,16 +1075,24 @@ async function offlineVideoList() {
 
 /* ---------------- review ---------------- */
 let loadingCands = false, loadCandsQueued = false;
+let REVIEW_SORT = (() => { try { return localStorage.getItem('reviewSort') || 'yield'; } catch { return 'yield'; } })();
+function setReviewSort(v) {
+  REVIEW_SORT = v;
+  try { localStorage.setItem('reviewSort', v); } catch {}
+  $('#cards').innerHTML = SPINNER;
+  loadCandidates(true);
+}
 async function loadCandidates(spin) {
   if (!CURRENT) return;
   if (loadingCands) { loadCandsQueued = true; return; }
   loadingCands = true;
   const box = $('#cards');
   const forId = CURRENT;
+  const sel = $('#reviewSort'); if (sel && sel.value !== REVIEW_SORT) sel.value = REVIEW_SORT;
   if (spin && !box.querySelector('.card')) box.innerHTML = SPINNER;
   let rows;
   try {
-    rows = await api(`/videos/${forId}/candidates?status=pending`);
+    rows = await api(`/videos/${forId}/candidates?status=pending&sort=${REVIEW_SORT}`);
   } catch {
     loadingCands = false;
     if (!box.querySelector('.card') && !box.querySelector('.leaving'))
@@ -1149,6 +1170,7 @@ function renderCard(c) {
   el.dataset.id = c.id;
   const badge = c.duplicate ? ' · <span class="dupbadge">already have a card</span>' : '';
   const fq = c.freq ? ` · <span class="fq ${c.freq.band}">${escapeHtml(c.freq.label)}</span>` : '';
+  const rec = c.count > 1 ? ` · <span class="rec">heard ${c.count}×</span>` : '';
   const secs = c.timestamp_start != null ? hmsToSec(c.timestamp_start) : null;
   const clip = secs != null ? `
     <button class="clip" title="watch this moment">
@@ -1162,7 +1184,7 @@ function renderCard(c) {
     ${clip}
     <div class="sent">${c.front_html}</div>
     <div class="tr">${escapeHtml(c.translation || '')}</div>
-    <div class="meta">${c.is_phrase ? 'phrase' : 'word'} · ${escapeHtml(c.span_text)}${fq}${c.bolded ? '' : ' · ⚠ not bolded'}${badge}</div>
+    <div class="meta">${c.is_phrase ? 'phrase' : 'word'} · ${escapeHtml(c.span_text)}${fq}${rec}${c.bolded ? '' : ' · ⚠ not bolded'}${badge}</div>
     <div class="decide">
       ${c.duplicate ? '' : '<button class="y">Make card</button>'}
       <button class="n">Discard</button>

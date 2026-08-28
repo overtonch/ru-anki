@@ -359,6 +359,25 @@ def gloss_for(span):
         c.close()
 
 
+_CYR_TOKEN = _re.compile(r"[А-Яа-яЁё][А-Яа-яЁё-]*")
+
+
+def lemma_counts(video_id):
+    """How many times each lemma is spoken across the whole video transcript —
+    used to rank review candidates by recurrence (a word said 5 times is worth
+    more than one said once)."""
+    c = connect()
+    rows = c.execute("SELECT text FROM subtitle_lines WHERE video_id=?",
+                     (video_id,)).fetchall()
+    c.close()
+    counts = {}
+    for r in rows:
+        for tok in _CYR_TOKEN.findall(r["text"] or ""):
+            k = lemma_key(tok)
+            counts[k] = counts.get(k, 0) + 1
+    return counts
+
+
 def card_lemmas():
     """normalized_text of every word/phrase you have an Anki card for."""
     c = connect()

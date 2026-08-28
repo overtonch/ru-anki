@@ -667,13 +667,14 @@ async def extract_events(video_id: int):
 # ------------------------------------------------------------------ candidates
 
 @app.get("/videos/{video_id}/candidates")
-def candidates(video_id: int, status: str = "pending"):
+def candidates(video_id: int, status: str = "pending", sort: str = "yield"):
     if status == "pending":
         store.discard_unbolded(video_id)  # never surface a broken card to the phone
     rows = store.list_candidates(video_id, status=status or None)
     v = store.get_video(video_id)
     title = v["title"] if v else ""
     have = store.card_lemmas()
+    counts = store.lemma_counts(video_id)
     for r in rows:
         front, bolded = anki.front_html(r["sentence"], r["span_text"], r["is_phrase"])
         r["front_html"] = front
@@ -681,6 +682,16 @@ def candidates(video_id: int, status: str = "pending"):
         r["source_label"] = title
         r["duplicate"] = r["normalized_text"] in have
         r["freq"] = store.freq_hint(r["normalized_text"], r["is_phrase"])
+        r["count"] = 1 if r["is_phrase"] else counts.get(r["normalized_text"], 1)
+
+    if sort == "yield":
+        # most repeated first; among ties, the rarer word (higher rank / no rank)
+        rows.sort(key=lambda r: (-r["count"], -(r["freq"].get("rank") or 10 ** 7)))
+    elif sort == "rare":
+        rows.sort(key=lambda r: -(r["freq"].get("rank") or 10 ** 7))
+    elif sort == "common":
+        rows.sort(key=lambda r: (r["freq"].get("rank") or 10 ** 7))
+    # sort == "order" (or anything else): leave in extraction order
     return rows
 
 
