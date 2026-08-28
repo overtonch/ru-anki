@@ -22,12 +22,14 @@
 ## Decided but not built
 
 - (done 2026-08-28) **In-app SRS** — `app/srs.py`, FSRS via `py-fsrs`,
-  `srs_cards` + `srs_reviews` + `app_settings`. Study view in the PWA (frame
-  thumbnail + jump-to-moment + word-page link, resumable). New cards go here;
-  Anki dual-write is a setting, OFF by default. `.apkg` export at `/srs/export`.
-  KFP (video 6) backfilled fresh. Follow-ups: audio-on-card; FSRS param
-  optimisation once there's review history; a proper settings screen; reconcile
-  if an srs card's candidate sentence is later edited (card keeps the snapshot).
+  `srs_cards` + `srs_reviews` + `app_settings`. Study view in the PWA. Audio
+  clips + audio-first mode, offline review (idb v2 + `/srs/reviews/flush`),
+  stats view. New cards go here; Anki dual-write is a setting, OFF by default.
+  `.apkg` export at `/srs/export`. KFP (video 6) backfilled fresh.
+  Follow-ups: FSRS param optimisation once there's review history; a real
+  settings screen (currently tucked in the study done-screen); audio on Anki
+  dual-write cards; pre-cache clips for offline audio; reconcile if an srs
+  card's candidate sentence is later edited (card keeps the snapshot).
 - **Audio on cards** — yt-dlp bestaudio → ffmpeg slice ±3s → AnkiConnect
   `storeMediaFile` → `[sound:…]`. Turns reading cards into listening cards.
 - **Non-YouTube content sources** — movies / dubbed shows (see notes below).
