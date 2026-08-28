@@ -607,7 +607,8 @@ def watch(video_id: int):
                    "thumbnail_url")},
         "cues": out,
         "card_count": len(have),
-        "cands": {r["id"]: {"span": r["span_text"], "tr": r["translation"]}
+        "cands": {r["id"]: {"span": r["span_text"], "tr": r["translation"],
+                            "freq": store.freq_hint(r["normalized_text"], r["is_phrase"])}
                   for r in pend_rows},
     }
 
@@ -655,7 +656,8 @@ def _translate_preview(video_id, span, subtitle_line_id=None, timestamp=None,
         sent = ctx
     front, bolded = anki.front_html(sent, span_text, is_phrase)
     return {"span_text": span_text, "is_phrase": is_phrase, "translation": translation,
-            "sentence": sent, "front_html": front, "bolded": bolded, "ts": ts}
+            "sentence": sent, "front_html": front, "bolded": bolded, "ts": ts,
+            "freq": store.freq_hint(store.lemma_key(span_text), is_phrase)}
 
 
 def _make_one_card(video_id, subtitle_line_id, span, timestamp=None, sentence=None,

@@ -237,6 +237,20 @@
                margin-top:.8rem; }
   #modalSpan { margin-top:.2rem; }
 
+  .editnote { display:none; }
+  /* compact card modal — opened by tapping a single word in the player */
+  #modalWrap.compact #modalSent { display:none; }
+  #modalWrap.compact .editnote { display:block; }
+  #modalWrap.compact #modalSpan { margin-top:0; text-align:center; font-size:1.25rem;
+                                  font-weight:650; padding:.6rem; }
+  #modalWrap.compact #modalPreview { margin:.55rem 0 0; }
+  #modalWrap.compact #modalPreview .pv { text-align:center; }
+  #modalWrap.compact #modalPreview .pv .sent { display:none; }
+  #modalWrap.compact #modalPreview .pv .tr { font-size:1.15rem; margin:0; }
+  #modalWrap.compact #modalPreview .wait { justify-content:center; }
+  #modalWrap.compact .editnote { font-size:.72rem; color:var(--muted); text-align:center;
+                                 margin:.35rem 0 0; }
+
   /* watch view */
   .watch-cta { width:100%; margin:.4rem 0 .2rem; }
   #watchView { position:fixed; inset:0; background:var(--bg); z-index:15;
@@ -325,8 +339,10 @@
                   background:var(--card); border:1px solid var(--line); border-radius:var(--r-sm);
                   box-shadow:var(--sh); padding:.65rem .7rem; }
   #inlineDecide[hidden] { display:none; }
-  #inlineDecide .id-head { font-size:.92rem; line-height:1.35; margin-bottom:.55rem; }
+  #inlineDecide .id-head { font-size:.92rem; line-height:1.35; margin-bottom:.35rem; }
   #inlineDecide .id-head span { color:var(--muted); }
+  #inlineDecide .id-freq { font-size:.75rem; margin-bottom:.55rem; min-height:1px; }
+  #inlineDecide .id-freq:empty { display:none; }
   #inlineDecide .id-btns { display:flex; gap:.5rem; }
   #inlineDecide button { flex:1; padding:.5rem .55rem; border-radius:var(--r-sm); font-size:.85rem;
                          font-weight:650; border:1px solid; cursor:pointer; }
@@ -494,6 +510,7 @@
     <div id="transcript" class="transcript"></div>
     <div id="inlineDecide" hidden>
       <div class="id-head"><b id="idSpan"></b> <span id="idTr"></span></div>
+      <div class="id-freq" id="idFreq"></div>
       <div class="id-btns">
         <button class="id-no" onclick="inlineCommit('no')">✕ skip</button>
         <button class="id-yes" onclick="inlineCommit('yes')">✓ add card</button>
@@ -511,6 +528,7 @@
     <input type="text" id="modalSpan" placeholder="word or phrase"
            autocapitalize="off" autocomplete="off" spellcheck="false"
            oninput="if(MODAL){MODAL._edited=true;syncModalSpan()}">
+    <p class="editnote">edit above if the word isn’t quite right</p>
     <div id="modalPreview"></div>
     <div class="modalbtns">
       <button class="backlink" onclick="history.back()">Cancel</button>
@@ -529,7 +547,8 @@ let DETAIL_V = null;
 let listTimer = null, sse = null, tickTimer = null, searchTimer = null;
 // watch view
 let ytPlayer = null, ytApiP = null, capTimer = null, WP = null, localURL = null;
-let WDATA = null, bgAudio = null, audioMode = false, audioURL = null;
+let WDATA = null, bgAudio = null, audioMode = false, audioURL = null, audioUserPaused = false;
+let audioSrc = null, audioSrcIsBlob = false, autoSwapped = false;
 let WCUES = [], WCANDS = {}, wActive = -1, wUserScroll = 0, wPausedForModal = false;
 
 function toast(msg, ms=2400) {
@@ -1105,16 +1124,19 @@ function openCardModal(row, forceWord) {
   const wordTok = [];                              // token index of each Nth word
   tokens.forEach((t, i) => { if (t && !/^\s+$/.test(t)) wordTok.push(i); });
   MODAL = { tokens, wordTok, sentence: row.text, lineId: row.id,
-            timestamp: row.start_time || null,
+            timestamp: row.start_time || null, compact: !!forceWord,
             anchor: null, focus: null, scatter: null, _edited: false,
             preview: null, previewFor: null, pvTimer: null, pvSeq: 0, _firstSync: true };
   $('#modalPreview').innerHTML = '';
+  $('#modalSpan').value = '';
+  $('#modalWrap').classList.toggle('compact', MODAL.compact);
 
   // pick the word to pre-select: an exact tapped word, else the searched prefix
   if (forceWord) {
     const fw = rnorm(stripPunct(forceWord));
     const hit = wordTok.findIndex(ti => rnorm(stripPunct(tokens[ti])) === fw);
     if (hit >= 0) { MODAL.anchor = hit; MODAL.focus = hit; }
+    else { MODAL._edited = true; $('#modalSpan').value = stripPunct(forceWord); }
   } else {
     const pfx = rnorm($('#q').value || '');
     const matches = pfx ? wordTok
@@ -1146,6 +1168,7 @@ function selConsecutive() {
 function renderModalSent() {
   const host = $('#modalSent');
   host.innerHTML = '';
+  if (MODAL.compact) return;   // single-word flow — no sentence picker
   const sel = selectedWords();
   const scattered = !!MODAL.scatter;
   let wi = -1;
@@ -1190,6 +1213,13 @@ function syncModalSpan() {
 }
 
 const PVCACHE = new Map();
+function pvHtml(p) {
+  const fq = p.freq;
+  const fqHtml = fq && fq.label
+    ? ` <span class="fq ${fq.band || ''}">${escapeHtml(fq.label)}</span>` : '';
+  return `<div class="pv"><div class="sent">${p.front_html}</div>
+    <div class="tr">${escapeHtml(p.translation || '')}${fqHtml}</div></div>`;
+}
 function updatePreview(span, immediate) {
   clearTimeout(MODAL.pvTimer);
   const box = $('#modalPreview');
@@ -1199,7 +1229,7 @@ function updatePreview(span, immediate) {
   if (PVCACHE.has(ck)) {                            // instant on repeat
     const p = PVCACHE.get(ck);
     MODAL.preview = p; MODAL.previewFor = span;
-    box.innerHTML = `<div class="pv"><div class="sent">${p.front_html}</div><div class="tr">${escapeHtml(p.translation || '')}</div></div>`;
+    box.innerHTML = pvHtml(p);
     return;
   }
   MODAL.preview = null;
@@ -1220,10 +1250,7 @@ function updatePreview(span, immediate) {
       PVCACHE.set(ck, p);
       if (seq !== MODAL.pvSeq) return;              // superseded
       MODAL.preview = p; MODAL.previewFor = span;
-      box.innerHTML = `<div class="pv">
-        <div class="sent">${p.front_html}</div>
-        <div class="tr">${escapeHtml(p.translation || '')}</div>
-      </div>`;
+      box.innerHTML = pvHtml(p);
     } catch (e) {
       if (seq === MODAL.pvSeq)
         box.innerHTML = `<div class="wait">couldn’t preview (${escapeHtml(e.message)}) — card will still translate on save</div>`;
@@ -1234,7 +1261,9 @@ function updatePreview(span, immediate) {
 function closeCardModal(resume = true) {
   const wasWatch = MODAL && MODAL.watchCue != null;
   if (MODAL) clearTimeout(MODAL.pvTimer);
-  $('#modalWrap').hidden = true; MODAL = null;
+  $('#modalWrap').hidden = true;
+  $('#modalWrap').classList.remove('compact');
+  MODAL = null;
   if (resume && wasWatch && wPausedForModal && WP) {
     wPausedForModal = false; try { WP.play(); } catch {}
   }
@@ -1321,6 +1350,7 @@ async function openWatch(id) {
   const resumeAt = loadPos(id);
   startPlayer(id, resumeAt);
   if (resumeAt) toast('picked up at ' + fmtTime(resumeAt));
+  prepAudio(id);   // ready an audio source so backgrounding keeps playing
 }
 
 /* ---- resume where you left off (per video, this device) ---- */
@@ -1426,54 +1456,99 @@ async function toggleAudioMode() {
   const id = WDATA && WDATA.video.id; if (!id) return;
   const at = WP ? WP.time() : 0;
   if (audioMode) {
-    audioMode = false;
-    $('#watchView').classList.remove('audiomode');
-    teardownAudio();
-    await startPlayer(id, at);
-    refreshAudioBtn();
+    await leaveAudioMode(at);
   } else {
     await enterAudioMode(id, at);
   }
 }
+async function leaveAudioMode(at) {
+  const id = WDATA && WDATA.video.id;
+  audioMode = false; autoSwapped = false;
+  $('#watchView').classList.remove('audiomode');
+  teardownAudio();
+  if (id != null) await startPlayer(id, at);
+  refreshAudioBtn();
+}
 async function enterAudioMode(id, at) {
   const btn = $('#audioBtn');
   let src, isBlob = false;
-  if (await opfsHas(id)) { src = await opfsURL(id); isBlob = true; }   // reuse the downloaded mp4
+  if (audioSrc) { src = audioSrc; isBlob = audioSrcIsBlob; }
+  else if (await opfsHas(id)) { src = await opfsURL(id); isBlob = true; }
   else {
     if (!navigator.onLine) { toast('background audio needs a connection, or download the video first'); return; }
     src = await ensureAudioFile(id, btn);
     if (!src) { refreshAudioBtn(); return; }
   }
+  mountAudio(src, at, isBlob);
+}
+
+/* synchronous — safe to call while the page is going to the background */
+function mountAudio(src, at, isBlob) {
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
   const rate = parseFloat((($('#speeds .on') || {}).dataset || {}).r || '1') || 1;
   teardownVideo();
   teardownAudio();
   audioURL = isBlob ? src : null;
-  bgAudio = new Audio();
+  audioUserPaused = false;
+  bgAudio = document.createElement('audio');
   bgAudio.preload = 'auto';
   bgAudio.setAttribute('playsinline', '');
+  bgAudio.setAttribute('x-webkit-airplay', 'allow');
   bgAudio.src = src;
   $('.player-wrap').appendChild(bgAudio);
   WP = {
     time: () => bgAudio.currentTime || 0, dur: () => bgAudio.duration || 0,
-    play: () => bgAudio.play().catch(() => {}), pause: () => bgAudio.pause(),
+    play: () => { audioUserPaused = false; return bgAudio.play().catch(() => {}); },
+    pause: () => { audioUserPaused = true; bgAudio.pause(); },
     paused: () => bgAudio.paused, seek: t => { try { bgAudio.currentTime = t; } catch {} },
     rate: r => { bgAudio.playbackRate = r; }, el: bgAudio, audio: true,
   };
-  bgAudio.addEventListener('play', () => onPlayState(true));
-  bgAudio.addEventListener('pause', () => onPlayState(false));
-  bgAudio.addEventListener('ended', () => { onPlayState(false); clearPos(id); });
-  bgAudio.addEventListener('loadedmetadata', () => { if (at) WP.seek(at); });
-  if (at) bgAudio.currentTime = at;
+  bgAudio.addEventListener('play', () => { audioUserPaused = false; onPlayState(true); });
+  bgAudio.addEventListener('pause', () => {
+    onPlayState(false);
+    // iOS pauses background <audio> on screen-lock / app-switch — if the user
+    // didn't ask for it, resume immediately so it keeps playing in the background
+    if (audioMode && !audioUserPaused && !bgAudio.ended
+        && bgAudio.currentTime < (bgAudio.duration || 1e9) - 0.4)
+      bgAudio.play().catch(() => {});
+  });
+  bgAudio.addEventListener('ended', () => {
+    audioUserPaused = true; onPlayState(false); if (WDATA) clearPos(WDATA.video.id);
+  });
+  bgAudio.addEventListener('loadedmetadata', () => { if (at) { try { bgAudio.currentTime = at; } catch {} } });
+  if (at) { try { bgAudio.currentTime = at; } catch {} }
   bgAudio.playbackRate = rate;
   clearInterval(capTimer); capTimer = setInterval(tick, 120);
   audioMode = true;
   $('#watchView').classList.add('audiomode');
-  const art = (WDATA.video && WDATA.video.thumbnail_url) || '';
+  const art = (WDATA && WDATA.video && WDATA.video.thumbnail_url) || '';
   if (art) $('#audioArt').src = art; else $('#audioArt').removeAttribute('src');
   $('#capOverlay').textContent = '';
-  setupMediaSession(WDATA.video);
-  bgAudio.play().catch(() => { onPlayState(false); toast('tap the screen to start'); });
+  if (WDATA) setupMediaSession(WDATA.video);
+  bgAudio.play().catch(() => { onPlayState(false); });
   refreshAudioBtn();
+}
+
+/* get an audio source ready in the background so we can switch instantly when
+   the app is sent to the background */
+async function prepAudio(id) {
+  audioSrc = null; audioSrcIsBlob = false;
+  try {
+    if (await opfsHas(id)) { audioSrc = await opfsURL(id); audioSrcIsBlob = true; return; }
+  } catch {}
+  if (!navigator.onLine) return;
+  try {
+    let st = await api(`/videos/${id}/audio/status`);
+    if (st.state === 'done') { audioSrc = `/videos/${id}/audio`; return; }
+    api(`/videos/${id}/audio`, { method: 'POST' }).catch(() => {});
+    for (let i = 0; i < 120; i++) {
+      await sleep(2500);
+      if ($('#watchView').hidden || !WDATA || WDATA.video.id !== id) return;
+      st = await api(`/videos/${id}/audio/status`).catch(() => ({}));
+      if (st.state === 'done') { audioSrc = `/videos/${id}/audio`; return; }
+      if (st.state === 'error') return;
+    }
+  } catch {}
 }
 async function ensureAudioFile(id, btn) {
   const label = btn ? btn.textContent : '';
@@ -1534,6 +1609,8 @@ function closeWatch() {
   if (WP) { try { WP.pause(); } catch {} }
   teardownVideo();
   teardownAudio();
+  try { if (audioSrc && audioSrcIsBlob) URL.revokeObjectURL(audioSrc); } catch {}
+  audioSrc = null; audioSrcIsBlob = false; autoSwapped = false;
   WP = null; WDATA = null; audioMode = false;
   $('#watchView').classList.remove('audiomode');
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
@@ -1747,6 +1824,9 @@ function inlineDecide(candId, anchor) {
   const pop = $('#inlineDecide');
   $('#idSpan').textContent = cand.span || '';
   $('#idTr').textContent = cand.tr ? '— ' + cand.tr : '';
+  const fq = cand.freq;
+  $('#idFreq').innerHTML = fq && fq.label
+    ? `<span class="fq ${fq.band || ''}">${escapeHtml(fq.label)}</span>` : '';
   pop.dataset.cand = candId;
   pop.hidden = false;
   const r = anchor.getBoundingClientRect();
@@ -2108,7 +2188,22 @@ addEventListener('popstate', () => { navBack(); try { history.pushState({ ru: 1 
 if ('serviceWorker' in navigator)
   navigator.serviceWorker.register('/sw.js').catch(() => {});
 addEventListener('pagehide', () => savePos());
-document.addEventListener('visibilitychange', () => { if (document.hidden) savePos(); });
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    savePos();
+    // leaving the app / locking the screen: switch to background audio so it
+    // keeps playing (a <video> / YouTube iframe won't survive this on iOS)
+    if (!$('#watchView').hidden && !audioMode && WP && !WP.paused() && audioSrc) {
+      autoSwapped = true;
+      mountAudio(audioSrc, WP.time(), audioSrcIsBlob);
+    }
+  } else {
+    // back in the app: if we auto-switched to audio, go back to the video
+    if (audioMode && autoSwapped && !$('#watchView').hidden) {
+      leaveAudioMode(WP ? WP.time() : 0);
+    }
+  }
+});
 $('#speeds').onclick = e => {
   const b = e.target.closest('button');
   if (!b) return;
