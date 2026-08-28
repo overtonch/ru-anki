@@ -32,14 +32,31 @@ launchctl unload ~/Library/LaunchAgents/com.ru-anki.server.plist   # stop
 
 ### Survive a power blip / reboot (do these by hand)
 
+Run once, in **any** terminal with your admin account (not tied to this session —
+it writes system config that persists across reboots):
+
 ```sh
-sudo pmset -a autorestart 1     # power comes back -> Mac boots
+sudo pmset -a autorestart 1     # power/kernel-panic -> Mac boots back up
 sudo pmset -a disksleep 0
 ```
 
-For an **unattended reboot to fully recover**, the Mac must log in on its own:
-**System Settings → Users & Groups → Automatically log in as → [you]**.
-(Security trade-off: physical access = logged in. On a home Mac usually fine.)
+**After a reboot, what actually comes back depends on FileVault + login:**
+
+| | FileVault ON (current) | FileVault OFF |
+|---|---|---|
+| **before anyone logs in** | disk locked — **no network at all**, no SSH, no Tailscale, no Screen Sharing. Dead until someone types the password at the physical Mac. | boots to the login screen **with** network: SSH, Screen Sharing and Tailscale daemon come up |
+| **auto-login on** | logs itself in → server + Anki start unattended | same |
+| **auto-login off** | — | you Screen-Share to the login window from your phone, type your password, server + Anki start |
+
+So for "get alerted + fix it remotely without auto-login" you need
+**FileVault OFF** + Remote Login + Screen Sharing (see *Remote access* below).
+With FileVault ON and auto-login off, a true reboot needs physical access —
+mitigate by making reboots rare (UPS, `autorestart 1`, stable power) and by the
+heartbeat alert so you at least know.
+
+A **server-only crash** (OS still up, you still logged in) is already handled by
+`KeepAlive`; if that ever wedges, SSH in over Tailscale and
+`launchctl kickstart -k gui/$(id -u)/com.ru-anki.server`.
 
 ### Don't let it sleep
 
@@ -52,11 +69,39 @@ Simplest: **leave it plugged in, lid open.**
 
 ### Remote access
 
-Enable Tailscale **Serve** (one click: <https://login.tailscale.com/f/serve>), then:
+**The app** — Tailscale **Serve** is on:
+`https://angelicas-imac.tail0916c1.ts.net/` from anywhere on your tailnet
+(persists across reboot). Use this URL, not `http://100.x` — it's the only one
+that's a secure context (offline video / service worker / PWA need that).
+
+**The Mac itself** (to recover it remotely). All reachable over Tailscale once
+the machine is unlocked/up:
 ```sh
-/Applications/Tailscale.app/Contents/MacOS/Tailscale serve --bg 8000
+sudo systemsetup -setremotelogin on          # SSH  (System Settings > General > Sharing > Remote Login)
 ```
-→ `https://<your-mac>.<tailnet>.ts.net/` from anywhere on your tailnet.
+Then also turn on **Screen Sharing** (System Settings → General → Sharing →
+Screen Sharing) — this is what lets you log in at the login window from an
+iPad/Mac after a reboot. On iPhone use a VNC client, or Screen Sharing from any Mac.
+Set Tailscale to **Run unattended** (Tailscale menu bar → Preferences) so the
+tunnel is up before you log in.
+
+> None of this helps while **FileVault** has the disk locked after a cold boot —
+> the network isn't up yet. FileVault OFF is the price of remote reboot recovery.
+
+### Get alerted when it goes down (heartbeat / dead-man's switch)
+
+The server pings an external URL every 5 min. If it — or the whole Mac — stops,
+the pings stop and you get emailed / phone-pushed. No inbound access needed.
+
+1. Make a free check at <https://healthchecks.io> (period 5 min, grace 5 min).
+   Add the email + push/Pushover/ntfy integrations you want.
+2. Put its ping URL in `~/Library/LaunchAgents/com.ru-anki.server.plist` →
+   `RU_HEARTBEAT_URL`, then
+   `launchctl unload … && launchctl load …/com.ru-anki.server.plist`.
+3. `GET /health` → `.heartbeat.configured: true`, `.last_ok: true`.
+
+A healthy-but-degraded server (DB unreadable) pings `…/fail` so you can tell
+"box is up but broken" from "box is gone".
 
 ---
 
@@ -106,11 +151,15 @@ upload when you're home / Anki is open again — nothing is lost.
 
 ## Pre-vacation checklist
 
-- [ ] `sh deploy/install.sh <data-repo-url>` run, `/health` returns ok
+- [x] `/health` returns ok; LaunchAgent installed
 - [ ] `sudo pmset -a autorestart 1 disksleep 0`
-- [ ] auto-login enabled
 - [ ] Mac plugged in, lid open
-- [ ] `tailscale serve --bg 8000` running; open the `.ts.net` URL from your phone
-- [ ] `/health` → `backup.git.last_ok: true`
+- [x] Tailscale Serve up — `https://angelicas-imac.tail0916c1.ts.net/`
+- [x] `/health` → `backup.git.last_ok: true`
+- [ ] heartbeat: `RU_HEARTBEAT_URL` set, `/health` → `heartbeat.last_ok: true`
+- [ ] decide FileVault: **ON** (reboot needs physical access) vs **OFF** +
+      Remote Login + Screen Sharing + Tailscale-unattended (reboot recoverable remotely)
+- [ ] if keeping auto-login OFF and FileVault ON: know that a reboot means the
+      app is down until you're back at the Mac
 - [ ] desktop Anki open + synced (so cards flow while you're away, if the Mac stays up)
 - [ ] you know: `python rebuild_db.py` restores everything from the `ru-anki-data` repo

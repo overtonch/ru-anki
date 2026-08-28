@@ -25,6 +25,10 @@
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>RU_BACKUP_GIT_DIR</key>
     <string>/Users/charlie/Library/Application Support/ru-anki/data-git</string>
+    <!-- paste your Healthchecks.io (or similar) ping URL here to get alerted
+         when the server / Mac goes down; leave blank to disable -->
+    <key>RU_HEARTBEAT_URL</key>
+    <string></string>
   </dict>
 </dict>
 </plist>

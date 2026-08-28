@@ -25,6 +25,7 @@ if HERE not in sys.path:
 
 import anki  # noqa: E402
 import backup  # noqa: E402
+import heartbeat  # noqa: E402
 import llm  # noqa: E402
 import store  # noqa: E402
 import subs  # noqa: E402
@@ -66,6 +67,7 @@ def _startup_maintenance():
 
 threading.Thread(target=_startup_maintenance, daemon=True).start()
 threading.Thread(target=llm.prewarm, daemon=True).start()
+heartbeat.start()  # no-op unless RU_HEARTBEAT_URL is set
 
 app = FastAPI(title="ru-anki pipeline")
 app.add_middleware(GZipMiddleware, minimum_size=1000)
@@ -155,6 +157,7 @@ def health():
         "videos": len(store.list_videos()),
         "anki": {"ok": anki_ok, "detail": anki_detail},
         "backup": backup.status(),
+        "heartbeat": heartbeat.status(),
     }
 
 
