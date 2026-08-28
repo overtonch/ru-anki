@@ -53,31 +53,36 @@ def _plain_cues(raw):
 
 
 def caption_cues(raw_vtt: str):
-    """De-overlapped cues with real start/end seconds, for the in-app player.
-    Each cue's text is shown from its own start until the next cue's start."""
+    """De-overlapped cues for the in-app player. `s`..`e` is the display window
+    (each cue shown until the next one starts, so the transcript stays synced);
+    `re` is the cue's *real* end, used to fade the overlay out during a silent
+    gap instead of leaving a line hanging on screen."""
     if "<c>" not in raw_vtt:
-        cues = _plain_cues(raw_vtt)
-        for i in range(len(cues) - 1):          # stretch each to the next start
-            cues[i] = (cues[i][0], cues[i + 1][0], cues[i][2])
-        return [{"s": round(s, 2), "e": round(e, 2), "text": t} for s, e, t in cues]
-    raw = []
-    for block in raw_vtt.split("\n\n"):
-        lines = block.strip("\n").split("\n")
-        if not lines:
-            continue
-        m = _CUE2.match(lines[0])
-        if not m:
-            continue
-        with_timing = [ln for ln in lines[1:] if "<c>" in ln]
-        if not with_timing:
-            continue
-        text = re.sub(r"\s+", " ", html.unescape(_TAG.sub("", with_timing[-1]))).strip()
-        if not text:
-            continue
-        raw.append([_secs(*m.group(1, 2, 3)), _secs(*m.group(4, 5, 6)), text])
-    for i in range(len(raw) - 1):
-        raw[i][1] = raw[i + 1][0]
-    return [{"s": round(a, 2), "e": round(b, 2), "text": t} for a, b, t in raw]
+        raw = [list(c) for c in _plain_cues(raw_vtt)]      # [start, real_end, text]
+    else:
+        raw = []
+        for block in raw_vtt.split("\n\n"):
+            lines = block.strip("\n").split("\n")
+            if not lines:
+                continue
+            m = _CUE2.match(lines[0])
+            if not m:
+                continue
+            with_timing = [ln for ln in lines[1:] if "<c>" in ln]
+            if not with_timing:
+                continue
+            text = re.sub(r"\s+", " ",
+                          html.unescape(_TAG.sub("", with_timing[-1]))).strip()
+            if not text:
+                continue
+            raw.append([_secs(*m.group(1, 2, 3)), _secs(*m.group(4, 5, 6)), text])
+
+    out = []
+    for i, (s, re_, t) in enumerate(raw):
+        disp_end = raw[i + 1][0] if i + 1 < len(raw) else re_
+        out.append({"s": round(s, 2), "e": round(disp_end, 2),
+                    "re": round(re_, 2), "text": t})
+    return out
 
 
 def clean_transcript(raw_vtt: str):

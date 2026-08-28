@@ -683,7 +683,7 @@ let listTimer = null, sse = null, tickTimer = null, searchTimer = null;
 let ytPlayer = null, ytApiP = null, capTimer = null, WP = null, localURL = null;
 let WDATA = null, bgAudio = null, audioMode = false, audioURL = null, audioUserPaused = false;
 let audioSrc = null, audioSrcIsBlob = false, autoSwapped = false;
-let WCUES = [], WCANDS = {}, wActive = -1, wUserScroll = 0, wPausedForModal = false;
+let WCUES = [], WCANDS = {}, wActive = -1, wUserScroll = 0, wPausedForModal = false, capHidden = false;
 
 function toast(msg, ms=2400) {
   const t = $('#toast'); t.textContent = msg; t.classList.add('show');
@@ -2004,9 +2004,21 @@ function tick() {
       playbackRate: WP.el ? WP.el.playbackRate : 1 }); } catch {}
   }
   if (Date.now() - lastPosSave > 4000) { lastPosSave = Date.now(); savePos(); }
+
+  // fade the caption overlay out during a silent gap instead of leaving a line
+  // hanging until the next one: real reading time + 1s grace, capped at 5.5s
+  const cur = wActive >= 0 && WCUES[wActive];
+  if (cur && $('#capOverlay').textContent !== 'tap to play') {
+    const hold = Math.min(5.5, Math.max(2, (cur.re || cur.e) - cur.s + 1));
+    const past = WP.time() > cur.s + hold;
+    if (past && !capHidden) { renderCaption(-1); capHidden = true; }
+    else if (!past && capHidden) { renderCaption(wActive); capHidden = false; }
+  }
+
   const idx = cueIdxAt(WP.time());
   if (idx === wActive) return;
   wActive = idx;
+  capHidden = false;
   const c = $('#capOverlay');
   if (c.textContent !== 'tap to play') renderCaption(idx);
   const box = $('#transcript');
