@@ -261,7 +261,16 @@
                  inset:0; width:100%; height:100%; border:0; background:#000;
                  object-fit:contain; }
   .tap-layer { position:absolute; inset:0; z-index:2; background:transparent; border:0;
-               cursor:pointer; }
+               cursor:pointer; touch-action:pan-y; }
+  #seekFlash { position:absolute; top:50%; left:50%; z-index:5;
+               transform:translate(-50%,-50%) scale(.9);
+               background:rgba(16,17,20,.62); color:#fff; border-radius:2rem;
+               padding:.5rem .95rem; font-size:.85rem; font-weight:650; letter-spacing:.02em;
+               opacity:0; pointer-events:none;
+               -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
+               transition:opacity .15s ease, transform .15s ease; }
+  #seekFlash.on { opacity:1; transform:translate(-50%,-50%) scale(1); }
+  .player-wrap.swiping #capOverlay { opacity:.4; transition:opacity .1s; }
   .wctrls { display:flex; flex-wrap:wrap; gap:.5rem; padding:.55rem .9rem; flex:none; }
   .wctrls button { flex:1; padding:.62rem; border:1px solid var(--line); background:var(--card-2);
                    color:var(--fg-dim); border-radius:var(--r-sm); font-size:.86rem; cursor:pointer;
@@ -460,6 +469,7 @@
       <div id="ytplayer"></div>
       <button class="tap-layer" onclick="tapVideo()" aria-label="play / pause"></button>
       <div id="capOverlay" class="cap-overlay"></div>
+      <div id="seekFlash"></div>
       <div id="audioStage">
         <img id="audioArt" alt="">
         <div class="audiolabel">🎧 background audio<span>lock the screen — it keeps playing</span></div>
@@ -547,7 +557,12 @@ function setBusy(btn, on, label) {
   if (on) {
     if (btn.dataset.label == null) btn.dataset.label = btn.innerHTML;
     btn.disabled = true;
-    btn.innerHTML = '<span class="spin"></span>' + (label ? ' ' + label : '');
+    // build the spinner once; later calls only touch the label text node so the
+    // CSS animation never restarts (that was the "stutter" on fast updates)
+    if (!btn.querySelector('.spin'))
+      btn.innerHTML = '<span class="spin"></span><span class="busy-label"></span>';
+    const l = btn.querySelector('.busy-label');
+    if (l) l.textContent = label ? ' ' + label : '';
   } else {
     btn.disabled = false;
     if (btn.dataset.label != null) { btn.innerHTML = btn.dataset.label; delete btn.dataset.label; }
@@ -1561,10 +1576,57 @@ function toggleFs() {
   fsManual = true;
   $('#watchView').classList.contains('fs') ? exitFs() : enterFs();
 }
+let justSwiped = 0;
 function tapVideo() {   // tap reveals hidden controls first, otherwise play/pause
+  if (Date.now() - justSwiped < 350) return;   // swallow the tap that ends a swipe
   const w = $('#watchView');
   if (w.classList.contains('fs') && w.classList.contains('hidectrls')) { bumpCtrls(); return; }
   togglePlay();
+}
+let seekFlashT = null;
+function flashSeek(dir) {
+  const f = $('#seekFlash');
+  f.textContent = dir < 0 ? '◀ prev line' : 'next line ▶';
+  f.classList.add('on');
+  clearTimeout(seekFlashT);
+  seekFlashT = setTimeout(() => f.classList.remove('on'), 480);
+}
+/* swipe across the video: right = previous caption line, left = next */
+function attachPlayerSwipe() {
+  const pw = $('.player-wrap');
+  if (!pw || pw._swipe) return;
+  pw._swipe = true;
+  let x0 = null, y0 = 0, horiz = false;
+  pw.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    x0 = e.clientX; y0 = e.clientY; horiz = false;
+  });
+  pw.addEventListener('pointermove', e => {
+    if (x0 === null) return;
+    const dx = e.clientX - x0, dy = e.clientY - y0;
+    if (!horiz) {
+      if (Math.abs(dx) < 10) return;
+      if (Math.abs(dx) < Math.abs(dy) * 1.4) { x0 = null; return; }  // vertical — let it be
+      horiz = true;
+      try { pw.setPointerCapture(e.pointerId); } catch {}
+      pw.classList.add('swiping');
+    }
+  });
+  const end = e => {
+    if (x0 === null) { pw.classList.remove('swiping'); return; }
+    try { pw.releasePointerCapture(e.pointerId); } catch {}
+    pw.classList.remove('swiping');
+    const dx = e.clientX - x0;
+    x0 = null;
+    if (horiz && Math.abs(dx) > 45) {
+      justSwiped = Date.now();
+      const dir = dx > 0 ? -1 : 1;   // drag right → back a line, drag left → forward
+      if (WCUES.length) { seekLine(dir); flashSeek(dir); bumpCtrls(); }
+    }
+    horiz = false;
+  };
+  pw.addEventListener('pointerup', end);
+  pw.addEventListener('pointercancel', end);
 }
 function bumpCtrls() {   // reveal seek + exit buttons, then fade them while playing
   const w = $('#watchView');
@@ -1892,8 +1954,13 @@ async function downloadMedia(id) {
         setBusy(btn, true, `server ${s.pct != null ? Math.round(s.pct) + '%' : '…'}`);
       }
     }
-    await opfsSave(id, (p, bytes) =>
-      setBusy(btn, true, p ? Math.round(p * 100) + '%' : `${Math.round(bytes / 1e6)} MB`));
+    let lastShown = -1;
+    await opfsSave(id, (p, bytes) => {
+      const pct = p ? Math.round(p * 100) : Math.round(bytes / 1e6);
+      if (pct === lastShown) return;                 // only repaint on a real change
+      lastShown = pct;
+      setBusy(btn, true, p ? `saving to phone ${pct}%` : `saving to phone ${pct} MB`);
+    });
     // cache everything else the watch view needs offline: captions, transcript, thumbnail
     setBusy(btn, true, 'saving captions…');
     try { await idbPut('offline', 'w' + id, await api(`/videos/${id}/watch`)); } catch {}
@@ -2057,6 +2124,7 @@ matchMedia('(orientation: landscape)').addEventListener('change', e => {
   else if (!e.matches && !fsManual) exitFs();
   if ($('#watchView').classList.contains('fs')) bumpCtrls();
 });
+attachPlayerSwipe();
 probeHealth();
 refreshQueuePill();
 flushQueue();
