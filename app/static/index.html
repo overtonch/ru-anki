@@ -38,6 +38,7 @@
   .btn.sm { padding:.45rem .7rem; font-size:.85rem; }
   .backlink { background:none; border:none; color:var(--accent); font-size:.92rem;
               padding:.4rem 0; cursor:pointer; }
+  .backlink.danger { color:var(--no); display:block; margin:1.5rem auto .5rem; }
   .status { font-size:.85rem; color:var(--muted); margin:.4rem 0; min-height:1.1em; }
   .status:empty { margin:0; min-height:0; }
   .empty { color:var(--muted); text-align:center; padding:2.5rem 0; font-size:.9rem; }
@@ -330,6 +331,8 @@
       </div>
       <div id="cards"></div>
     </div>
+
+    <button class="backlink danger" onclick="deleteVideo()">Delete this video</button>
   </div>
 
   <!-- WATCH VIEW -->
@@ -721,6 +724,18 @@ async function resetAndReExtract() {
     await api(`/videos/${CURRENT}/extract?model=${m}`, {method:'POST'});
     const v = VIDEOS.find(x => x.id === CURRENT) || await api(`/videos/${CURRENT}`);
     startProgress(v, {state:'queued', added:0, elapsed:0});
+  } catch (e) { toast('error: ' + e.message, 3500); }
+}
+async function deleteVideo() {
+  if (!CURRENT) return;
+  const v = VIDEOS.find(x => x.id === CURRENT) || DETAIL_V || {};
+  if (!confirm(`Delete "${v.title || 'this video'}"?\n\nRemoves the transcript and all suggestions. Cards you already made stay in Anki.`)) return;
+  const id = CURRENT;
+  try {
+    await api(`/videos/${id}`, {method:'DELETE'});
+    try { await idbDel('offline', id); } catch {}
+    toast('video deleted');
+    showList();
   } catch (e) { toast('error: ' + e.message, 3500); }
 }
 function renderCard(c) {

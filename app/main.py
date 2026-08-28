@@ -210,6 +210,16 @@ def videos():
     return out
 
 
+@app.delete("/videos/{video_id}")
+def delete_video(video_id: int):
+    if not store.get_video(video_id):
+        raise HTTPException(404, "no such video")
+    EXTRACT_STATUS.pop(video_id, None)
+    n = store.delete_video(video_id)
+    backup.snapshot_async("delete-video")
+    return {"deleted": n}
+
+
 @app.post("/videos/{video_id}/refresh-meta")
 def refresh_meta(video_id: int):
     v = store.get_video(video_id)

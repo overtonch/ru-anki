@@ -132,6 +132,19 @@ def list_videos():
     return [_enrich(dict(r)) for r in rows]
 
 
+def delete_video(video_id):
+    """Remove the video, its transcript and its candidates. Keeps resolved_words
+    (your decisions stand) and keeps any Anki cards already created."""
+    c = connect()
+    c.execute("DELETE FROM candidates WHERE video_id=?", (video_id,))
+    c.execute("DELETE FROM subtitle_lines WHERE video_id=?", (video_id,))
+    c.execute("UPDATE resolved_words SET video_id=NULL WHERE video_id=?", (video_id,))
+    n = c.execute("DELETE FROM videos WHERE id=?", (video_id,)).rowcount
+    c.commit()
+    c.close()
+    return n
+
+
 def videos_missing_meta():
     c = connect()
     rows = c.execute(
