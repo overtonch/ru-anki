@@ -39,6 +39,27 @@ CREATE TABLE IF NOT EXISTS word_family (
 );
 CREATE INDEX IF NOT EXISTS idx_word_family_root ON word_family(root);
 
+-- Stress ("ударение") + ё spelling for a lemma, shown on the card back and the
+-- word page as a reference hint — never in the transcript (reading practice is
+-- meant to happen without accent marks). Filled lazily by an LLM call the first
+-- time a word is carded or its word page is opened.
+CREATE TABLE IF NOT EXISTS word_accent (
+    lemma    TEXT PRIMARY KEY,
+    accented TEXT NOT NULL,
+    made_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Memoised output of the sentence-picker (GET /candidates/{id}/sentences): the
+-- LLM-cleaned + ranked flashcard-sentence options for one candidate. Dropped
+-- when the video's transcript changes or the candidate's sentence is edited.
+CREATE TABLE IF NOT EXISTS candidate_sentences_cache (
+    candidate_id INTEGER PRIMARY KEY,
+    video_id     INTEGER NOT NULL,
+    payload      TEXT NOT NULL,
+    made_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_cand_sent_cache_video ON candidate_sentences_cache(video_id);
+
 -- Reading feature: imported long-form text (EPUB / .txt / pasted). Tap-to-card
 -- while reading reuses the same translate + Anki pipeline as the video watcher.
 CREATE TABLE IF NOT EXISTS texts (

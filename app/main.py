@@ -104,12 +104,49 @@ def _do_sync():
         print(f"[sync] {err}")
 
 
+def _learn_accent(span_text, sentence=""):
+    """Fill the stress/ё hint for a freshly carded word (single words only)."""
+    lemma = store.lemma_key((span_text or "").strip())
+    if not lemma or " " in lemma or store.accent_for(lemma):
+        return
+    try:
+        acc = llm.accent_word(store.yo_form(lemma), sentence)
+        if acc:
+            store.set_accent(lemma, acc)
+            print(f"[accent] {lemma} -> {acc}")
+    except Exception as e:  # noqa: BLE001
+        print(f"[accent] {lemma}: {e}")
+
+
+def _learn_accent_async(span_text, sentence=""):
+    threading.Thread(target=_learn_accent, args=(span_text, sentence),
+                     daemon=True).start()
+
+
+def _accent_sync(span_text, sentence, is_phrase):
+    """Stress/ё hint for a card being made right now (deliberate, latency-OK).
+    Cache hit is instant; a miss is one ~2s warm call. Phrases get nothing."""
+    if is_phrase:
+        return None
+    lem = store.lemma_key(span_text)
+    acc = store.accent_for(lem)
+    if not acc:
+        try:
+            acc = llm.accent_word(store.yo_form(lem), sentence)
+            store.set_accent(lem, acc)
+        except Exception as e:  # noqa: BLE001
+            print(f"[accent] {lem}: {e}")
+    return acc
+
+
 def _learn_family(lemma):
     """After a card is made, learn its word-formation family so работа/рабочий/…
     count as known too. Fire-and-forget."""
     lemma = (lemma or "").strip()
     if not lemma or " " in lemma:
         return
+    if store.in_stoplist(lemma):
+        return                             # never family-group a function word
     try:
         root, members = llm.word_family(lemma)
         if members:
@@ -813,6 +850,7 @@ def decide(cand_id: int, body: DecisionIn):
             anki_result = anki.add_card(
                 sent, cand["span_text"], cand["is_phrase"],
                 cand["translation"], src, tags=["ru-anki", "batch"],
+                accented=store.accent_for(cand["normalized_text"]),
             )
         except anki.AnkiError as e:
             raise HTTPException(502, f"Anki: {e}")
@@ -823,6 +861,7 @@ def decide(cand_id: int, body: DecisionIn):
         note_id=(anki_result or {}).get("note_id") if body.decision == "yes" else None)
     if body.decision == "yes":
         _learn_family_async(cand["normalized_text"])
+        _learn_accent_async(cand["span_text"], sent)
     backup.snapshot_async("decision")
     return {"candidate": updated, "anki": anki_result}
 
@@ -842,6 +881,8 @@ def word_detail(lemma: str):
     translation = (cand or {}).get("translation")
     return {
         "lemma": lem,
+        "yo": store.yo_form(lem),                 # ё-restored spelling (instant)
+        "accented": store.accent_for(lem),        # stressed form or None (LLM, lazy)
         "status": status,
         "translation": translation,
         "gloss": store.gloss_for(lem),
@@ -849,6 +890,39 @@ def word_detail(lemma: str):
         "candidate_id": (cand or {}).get("id") if (cand and cand["status"] == "pending") else None,
         "videos": store.word_occurrences(lem),
     }
+
+
+@app.post("/words/{lemma}/accent")
+def word_accent(lemma: str):
+    """Compute (and cache) the stress + ё spelling for one word. Called by the
+    word page after it renders, so the first open fills the hint in."""
+    lem = store.norm(lemma)
+    acc = store.accent_for(lem)
+    if not acc:
+        occ = store.word_occurrences(lem)
+        ctx = ""
+        if occ and occ[0].get("hits"):
+            ctx = occ[0]["hits"][0].get("text", "")
+        try:
+            acc = llm.accent_word(store.yo_form(lem), ctx)
+            store.set_accent(lem, acc)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(502, f"accent lookup failed: {e}")
+    return {"lemma": lem, "accented": acc}
+
+
+@app.post("/words/{lemma}/discard")
+def word_discard(lemma: str):
+    """'Not a word I'm learning' — stop highlighting it everywhere (breaks any
+    word-family link, records it as known) and delete any pipeline-made Anki
+    cards for it."""
+    res = store.discard_word(store.norm(lemma))
+    for nid in res.get("removed_notes", []):
+        anki.delete_note(nid)
+    if res.get("removed_notes"):
+        _sync_soon()
+    backup.snapshot_async("discard-word")
+    return res
 
 
 @app.post("/families/backfill")
@@ -879,13 +953,20 @@ def undo_decision(cand_id: int):
 
 
 @app.get("/candidates/{cand_id}/sentences")
-def candidate_sentence_options(cand_id: int):
+def candidate_sentence_options(cand_id: int, fresh: int = 0):
     """Ranked flashcard-sentence options for a candidate: every place the word is
     said in the video, each LLM-cleaned into a proper sentence, best first. The
-    candidate's current sentence is included and ranked alongside."""
+    candidate's current sentence is included and ranked alongside.
+
+    The result is memoised (the LLM cleaning is ~3s) and invalidated when the
+    transcript or the candidate's sentence changes; `?fresh=1` forces a rebuild."""
     cand = store.get_candidate(cand_id)
     if not cand:
         raise HTTPException(404, "no such candidate")
+    if not fresh:
+        cached = store.get_sentence_cache(cand_id)
+        if cached is not None:
+            return cached
     span, ph = cand["span_text"], cand["is_phrase"]
 
     windows = store.candidate_windows(cand_id)
@@ -917,7 +998,10 @@ def candidate_sentence_options(cand_id: int):
     opts.sort(key=lambda o: -o["score"])
     for o in opts:
         o["front_html"], _ = anki.front_html(o["sentence"], span, ph)
-    return {"span_text": span, "current": cand["sentence"], "options": opts[:8]}
+    payload = {"span_text": span, "current": cand["sentence"], "options": opts[:8]}
+    if opts:
+        store.set_sentence_cache(cand_id, cand["video_id"], payload)
+    return payload
 
 
 # ------------------------------------------------------------------ live search
@@ -949,8 +1033,11 @@ def watch(video_id: int):
     decided = store.video_decided_lemmas(video_id)   # {lemma: {id,status,note_id}}
     out = []
     for cue in cues:
+        # ё -> е in the displayed transcript: reading practice happens without
+        # accent marks. The real spelling lives on the card + word page.
+        text = cue["text"].replace("ё", "е").replace("Ё", "Е")
         words = []
-        for tok in cue["text"].split():
+        for tok in text.split():
             core = tok.strip(".,!?;:—–()«»\"'…-")
             w = {"t": tok, "c": False}
             if core and _CYR.search(core):
@@ -966,7 +1053,7 @@ def watch(video_id: int):
                     w["dd"] = d["id"]        # skipped — restorable
             words.append(w)
         out.append({"s": cue["s"], "e": cue["e"], "re": cue.get("re", cue["e"]),
-                    "text": cue["text"], "words": words})
+                    "text": text, "words": words})
     return {
         "video": {k: v.get(k) for k in
                   ("id", "title", "channel", "url", "youtube_id", "duration",
@@ -996,7 +1083,9 @@ def video_lines(video_id: int):
     meta["lines"] = len(rows)
     return {
         "video": meta,
-        "lines": [{"id": r["id"], "t": r["start_time"], "text": r["text"]} for r in rows],
+        "lines": [{"id": r["id"], "t": r["start_time"],
+                   "text": (r["text"] or "").replace("ё", "е").replace("Ё", "Е")}
+                  for r in rows],
     }
 
 
@@ -1047,9 +1136,10 @@ def _make_one_card(video_id, subtitle_line_id, span, timestamp=None, sentence=No
 
     cid = store.create_candidate(video_id, span_text, ph, sent, ts,
                                  translation, source="live")
+    accented = _accent_sync(span_text, sent, ph)
     src = anki.source_html(v["title"], v.get("channel"), v["url"], ts)
     anki_result = anki.add_card(sent, span_text, ph, translation,
-                                src, tags=["ru-anki", "live"])
+                                src, tags=["ru-anki", "live"], accented=accented)
     anki_result["sync_error"] = None
     _sync_soon()
     store.resolve_candidate(cid, "yes", note_id=anki_result.get("note_id"))
@@ -1202,10 +1292,11 @@ def text_card(text_id: int, body: TextCardIn):
             raise HTTPException(502, f"translation failed: {e}")
         span_text, translation, ph, sent = (
             p["span_text"], p["translation"], p["is_phrase"], p["sentence"])
+    accented = _accent_sync(span_text, sent, ph)
     src = anki.source_html_text(t["title"], t.get("author"), body.chapter)
     try:
         res = anki.add_card(sent, span_text, ph, translation, src,
-                            tags=["ru-anki", "reading"])
+                            tags=["ru-anki", "reading"], accented=accented)
     except anki.AnkiError as e:
         raise HTTPException(502, f"Anki: {e}")
     store.mark_carded(span_text)

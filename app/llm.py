@@ -337,14 +337,24 @@ class WarmClaude:
                 return text or d.get("result", "")
 
 
-_WARM = None
+_WARM_POOL = {}
+_WARM_POOL_LOCK = threading.Lock()
+
+
+def _warm(system, model):
+    """A shared persistent `claude` process per (system prompt, model). All the
+    small one-shot calls — translate, sentence-clean, word-family, accent — reuse
+    one instead of paying spawn+init (~1s) every time."""
+    key = (system, model)
+    with _WARM_POOL_LOCK:
+        w = _WARM_POOL.get(key)
+        if w is None:
+            w = _WARM_POOL[key] = WarmClaude(system, model)
+        return w
 
 
 def _warm_translator():
-    global _WARM
-    if _WARM is None or _WARM.model != TRANSLATE_MODEL:
-        _WARM = WarmClaude(TRANSLATE_SYSTEM, TRANSLATE_MODEL)
-    return _WARM
+    return _warm(TRANSLATE_SYSTEM, TRANSLATE_MODEL)
 
 
 def prewarm():
@@ -401,10 +411,19 @@ Output ONE raw JSON object, no code fence, nothing else:
 Dictionary forms, lowercase, ё written as е. Include the input word. Usually 3-8 members. Never invent words."""
 
 
+def _warm_or_oneshot(prompt, system, model, timeout):
+    """Warm process first; fall back to a fresh `claude -p` on any warm failure."""
+    try:
+        return _warm(system, model).ask(prompt, timeout=timeout)
+    except LLMError:
+        text, _ = run_claude(prompt, system, model=model, timeout=timeout + 20)
+        return text
+
+
 def word_family(word, model=None):
     """-> (root, [member lemmas]) for a Russian word. One headless call."""
-    text, _ = run_claude(f"Word: {word}", _FAMILY_SYSTEM,
-                         model=model or TRANSLATE_MODEL, timeout=40)
+    text = _warm_or_oneshot(f"Word: {word}", _FAMILY_SYSTEM,
+                            model or TRANSLATE_MODEL, timeout=40)
     obj = _parse_obj(text)
     fold = lambda s: (s or "").strip().lower().replace("ё", "е")
     members = [fold(m) for m in (obj.get("members") or []) if isinstance(m, str) and m.strip()]
@@ -419,11 +438,50 @@ def clean_sentences(word, excerpts, model=None):
         return []
     numbered = "\n".join(f"{i + 1}. {e}" for i, e in enumerate(excerpts))
     prompt = f"Target word: {word}\n\nExcerpts:\n{numbered}"
-    text, _ = run_claude(prompt, _CLEAN_SYSTEM,
-                         model=model or TRANSLATE_MODEL, timeout=45)
+    text = _warm_or_oneshot(prompt, _CLEAN_SYSTEM, model or TRANSLATE_MODEL,
+                            timeout=45)
     by_num = {}
     for ln in text.splitlines():
         m = re.match(r"\s*(\d+)[.)]\s*(.+)", ln.strip())
         if m:
             by_num[int(m.group(1))] = m.group(2).strip().strip('"')
     return [by_num.get(i + 1, "") for i in range(len(excerpts))]
+
+
+# ------------------------------------------------------------------ stress marks
+
+_ACCENT_SYSTEM = """You mark Russian lexical stress for a learner's flashcard hint.
+
+Input: numbered lines, each "WORD — context sentence" (context may be blank).
+For each line output "N. FORM" where FORM is exactly WORD (the token before the
+dash) — SAME lemma, SAME ending, do NOT re-inflect it to match the sentence —
+with only these changes:
+- a combining acute accent (U+0301) right after the stressed vowel (a
+  one-syllable word gets none; ё is never additionally accented)
+- ё written with its dots where it belongs
+
+Use the context ONLY to choose between stress positions of a homograph
+(за́мок «castle» vs замо́к «lock»; бо́льшая vs больша́я). Output only the numbered
+lines, nothing else."""
+
+
+def accent_words(items, model=None):
+    """items: [(word, sentence), …]. -> list of stressed forms aligned to items
+    (best-effort; an entry that can't be parsed comes back as '')."""
+    if not items:
+        return []
+    numbered = "\n".join(
+        f"{i + 1}. {w} — {(s or '').strip()}".rstrip(" —")
+        for i, (w, s) in enumerate(items))
+    text = _warm_or_oneshot(numbered, _ACCENT_SYSTEM, model or TRANSLATE_MODEL,
+                            timeout=40)
+    by_num = {}
+    for ln in text.splitlines():
+        m = re.match(r"\s*(\d+)[.)]\s*(.+)", ln.strip())
+        if m:
+            by_num[int(m.group(1))] = m.group(2).strip().strip('"')
+    return [by_num.get(i + 1, "") for i in range(len(items))]
+
+
+def accent_word(word, sentence="", model=None):
+    return (accent_words([(word, sentence)], model=model) or [""])[0]

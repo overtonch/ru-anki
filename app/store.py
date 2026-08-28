@@ -5,6 +5,7 @@ the pre-server DB, and every read/write the API needs. All reasoning (extraction
 translation) lives elsewhere; this file only moves rows.
 """
 import html as _html
+import json as _json
 import os
 import re as _re
 import sqlite3
@@ -212,7 +213,8 @@ def replace_subtitle_lines(video_id, lines):
         "SELECT count(*) FROM subtitle_lines WHERE video_id=?", (video_id,)
     ).fetchone()[0]
     c.close()
-    _LEMMA_IDX.pop(video_id, None)          # transcript changed — drop the cache
+    _LEMMA_IDX.pop(video_id, None)          # transcript changed — drop the caches
+    drop_sentence_cache(video_id=video_id)
     return n
 
 
@@ -557,6 +559,14 @@ def sentence_for(video_id, timestamp, span):
 
 # ---------------------------------------------------------------- exclusions
 
+def in_stoplist(normalized):
+    c = connect()
+    hit = c.execute("SELECT 1 FROM stoplist WHERE normalized_text=?",
+                    (norm(normalized),)).fetchone()
+    c.close()
+    return bool(hit)
+
+
 def exclusion_reason(c, normalized):
     if c.execute("SELECT 1 FROM stoplist WHERE normalized_text=?", (normalized,)).fetchone():
         return "stoplist"
@@ -658,7 +668,8 @@ def known_family_lemmas():
             """SELECT wf.lemma FROM word_family wf WHERE wf.root IN (
                  SELECT w2.root FROM word_family w2
                  JOIN resolved_words r ON r.normalized_text = w2.lemma
-                                      AND r.reason = 'has_card')"""
+                                      AND r.reason = 'has_card')
+               AND wf.lemma NOT IN (SELECT normalized_text FROM stoplist)"""
         ).fetchall()
     except sqlite3.OperationalError:
         rows = []
@@ -672,8 +683,79 @@ def set_word_family(root, lemmas):
     if not lemmas:
         return
     c = connect()
+    # never pull a stoplist word (что, это, как, сказать, …) into a family — an
+    # over-eager LLM grouping would otherwise light up a function word as "known"
+    # everywhere.
+    stop = {r["normalized_text"] for r in c.execute(
+        "SELECT normalized_text FROM stoplist WHERE normalized_text IN (%s)"
+        % ",".join("?" * len(lemmas)), tuple(lemmas))}
+    lemmas -= stop
+    if not lemmas:
+        c.close()
+        return
     c.executemany("INSERT OR REPLACE INTO word_family(lemma, root) VALUES(?,?)",
                   [(m, norm(root) or next(iter(lemmas))) for m in lemmas])
+    c.commit()
+    c.close()
+
+
+def discard_word(lemma):
+    """'Not a word I'm learning' — stop highlighting it everywhere. Breaks any
+    word-family link, records it as known so extraction won't re-propose it, and
+    (if it had cards made through the pipeline) returns their Anki note ids so
+    the caller can delete them. -> {lemma, was_family, removed_notes}."""
+    lemma = norm(lemma)
+    c = connect()
+    was_family = bool(c.execute(
+        "SELECT 1 FROM word_family WHERE lemma=?", (lemma,)).fetchone())
+    c.execute("DELETE FROM word_family WHERE lemma=?", (lemma,))
+    notes = [r["anki_note_id"] for r in c.execute(
+        "SELECT anki_note_id FROM candidates "
+        "WHERE normalized_text=? AND status='card_created' AND anki_note_id IS NOT NULL",
+        (lemma,))]
+    c.execute("UPDATE candidates SET status='discarded', anki_note_id=NULL "
+              "WHERE normalized_text=? AND status IN ('pending','card_created')",
+              (lemma,))
+    c.execute(
+        """INSERT INTO resolved_words(normalized_text, reason, video_id)
+           VALUES(?, 'known', NULL)
+           ON CONFLICT(normalized_text) DO UPDATE SET
+             reason='known', resolved_at=datetime('now')""",
+        (lemma,))
+    c.commit()
+    c.close()
+    return {"lemma": lemma, "was_family": was_family, "removed_notes": notes}
+
+
+def yo_form(lemma):
+    """Citation spelling with ё restored (полет -> полёт). Instant, no LLM."""
+    lemma = norm(lemma)
+    if " " in lemma or "-" in lemma:
+        return lemma
+    try:
+        return _legacy.yo_lemma(lemma)
+    except Exception:  # noqa: BLE001
+        return lemma
+
+
+def accent_for(lemma):
+    """Cached stressed form, or None."""
+    c = connect()
+    try:
+        r = c.execute("SELECT accented FROM word_accent WHERE lemma=?",
+                      (norm(lemma),)).fetchone()
+    except sqlite3.OperationalError:
+        r = None
+    c.close()
+    return r["accented"] if r else None
+
+
+def set_accent(lemma, accented):
+    if not accented:
+        return
+    c = connect()
+    c.execute("INSERT OR REPLACE INTO word_accent(lemma, accented) VALUES(?,?)",
+              (norm(lemma), accented.strip()))
     c.commit()
     c.close()
 
@@ -916,6 +998,49 @@ def update_candidate_sentence(cand_id, sentence):
     c = connect()
     c.execute("UPDATE candidates SET sentence=? WHERE id=?", (sentence, cand_id))
     c.commit()
+    c.close()
+    drop_sentence_cache(cand_id=cand_id)
+
+
+def get_sentence_cache(cand_id):
+    c = connect()
+    try:
+        r = c.execute(
+            "SELECT payload FROM candidate_sentences_cache WHERE candidate_id=?",
+            (cand_id,)).fetchone()
+    except sqlite3.OperationalError:
+        r = None
+    c.close()
+    if not r:
+        return None
+    try:
+        return _json.loads(r["payload"])
+    except ValueError:
+        return None
+
+
+def set_sentence_cache(cand_id, video_id, payload):
+    c = connect()
+    c.execute(
+        "INSERT OR REPLACE INTO candidate_sentences_cache"
+        "(candidate_id, video_id, payload) VALUES(?,?,?)",
+        (cand_id, video_id, _json.dumps(payload)))
+    c.commit()
+    c.close()
+
+
+def drop_sentence_cache(video_id=None, cand_id=None):
+    c = connect()
+    try:
+        if cand_id is not None:
+            c.execute("DELETE FROM candidate_sentences_cache WHERE candidate_id=?",
+                      (cand_id,))
+        if video_id is not None:
+            c.execute("DELETE FROM candidate_sentences_cache WHERE video_id=?",
+                      (video_id,))
+        c.commit()
+    except sqlite3.OperationalError:
+        pass
     c.close()
 
 

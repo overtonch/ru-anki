@@ -485,6 +485,10 @@
                       margin-top:.5rem; border:1px solid var(--line); color:var(--muted); }
   .wordbody .w-pill.carded { color:var(--ok); border-color:rgba(67,176,114,.4); }
   .wordbody .w-pill.pending { color:#e6b93c; border-color:rgba(230,185,60,.4); }
+  .wordbody .w-discard { display:block; margin-top:.7rem; font-size:.78rem;
+                         background:transparent; border:1px solid var(--line);
+                         color:var(--muted); border-radius:.35rem; padding:.3em .7em; cursor:pointer; }
+  .wordbody .w-discard:active { border-color:var(--no); color:var(--no); }
   .wordbody .w-fam { margin-top:.7rem; font-size:.8rem; color:var(--muted); }
   .wordbody .w-fam b { color:var(--fg-dim); font-weight:600; }
   .wordbody .w-vid { margin-top:1.3rem; }
@@ -1748,10 +1752,12 @@ async function openWord(lemma) {
   catch (e) { $('#wordBody').innerHTML = `<div class="empty">couldn’t load — ${escapeHtml(e.message)}</div>`; return; }
   const pill = { carded: 'have a card', pending: 'suggested', family: 'related to a card', new: 'no card' }[d.status] || d.status;
   const total = d.videos.reduce((s, v) => s + v.count, 0);
+  const canDiscard = d.status === 'carded' || d.status === 'family';
   $('#wordBody').innerHTML = `
-    <div class="w-hd">${escapeHtml(d.lemma)}</div>
+    <div class="w-hd" id="wHd">${escapeHtml(d.accented || d.yo || d.lemma)}</div>
     ${d.translation || d.gloss ? `<div class="w-tr">${escapeHtml(d.translation || d.gloss)}</div>` : ''}
     <span class="w-pill ${d.status}">${pill}</span>
+    ${canDiscard ? `<button class="w-discard" id="wDiscard">stop highlighting this</button>` : ''}
     ${d.family && d.family.length ? `<div class="w-fam"><b>same word family:</b> ${d.family.map(escapeHtml).join(', ')}</div>` : ''}
     <div class="w-fam">${total ? `heard ${total}× across ${d.videos.length} video${d.videos.length > 1 ? 's' : ''}` : 'not found in your videos yet'}</div>
     ${d.videos.map(v => `
@@ -1766,6 +1772,24 @@ async function openWord(lemma) {
     $('#wordView').hidden = true;
     openWatch(vid, Math.max(0, t - 1.5));
   });
+  const wd = $('#wDiscard');
+  if (wd) wd.onclick = async () => {
+    if (d.status === 'carded' &&
+        !confirm('Delete the Anki card for “' + d.lemma + '” and stop highlighting it?')) return;
+    wd.disabled = true; wd.textContent = '…';
+    let r;
+    try { r = await api('/words/' + encodeURIComponent(d.lemma) + '/discard', { method: 'POST' }); }
+    catch (e) { wd.disabled = false; wd.textContent = 'stop highlighting this'; toast('couldn’t — ' + e.message, 3000); return; }
+    if (typeof clearGreen === 'function') clearGreen(d.lemma);
+    toast((r && r.removed_notes && r.removed_notes.length ? 'card removed — ' : '') +
+          'stopped highlighting', 3000);
+    openWord(d.lemma);
+  };
+  if (!d.accented) {
+    api('/words/' + encodeURIComponent(d.lemma) + '/accent', { method: 'POST' })
+      .then(r => { if (r && r.accented && $('#wHd')) $('#wHd').textContent = r.accented; })
+      .catch(() => {});
+  }
 }
 function closeWord() { $('#wordView').hidden = true; }
 function hmsToSec(hms) {
@@ -2312,7 +2336,39 @@ function wordAction(w, sp, ci, wi) {
   if (w.p && !w.c) return inlineDecide(w.p, sp);
   if (w.cc) return inlineUndo(w.cc, sp, 'carded');
   if (w.dd && !w.c) return inlineUndo(w.dd, sp, 'skipped');
+  if (w.c) return inlineGreen(w, sp, ci, wi);   // globally green, no candidate here
   watchTapWord(ci, wi);
+}
+
+/* ---- a word that's green (carded / word-family) with nothing to undo here ---- */
+let _greenCtx = null;
+function inlineGreen(w, sp, ci, wi) {
+  const word = sp.textContent.replace(/^[^А-Яа-яЁёA-Za-z-]+|[^А-Яа-яЁёA-Za-z-]+$/g, '');
+  _greenCtx = { word, ci, wi };
+  _openInlinePop(sp, word, '— you’re learning this', '',
+    `<button class="id-no" onclick="greenDiscard()">not learning</button>
+     <button class="id-yes" onclick="greenCard()">✎ card</button>`);
+}
+function greenCard() {
+  $('#inlineDecide').hidden = true;
+  if (_greenCtx) watchTapWord(_greenCtx.ci, _greenCtx.wi);
+}
+async function greenDiscard() {
+  $('#inlineDecide').hidden = true;
+  const word = _greenCtx && _greenCtx.word;
+  if (!word) return;
+  try { await api('/words/' + encodeURIComponent(word) + '/discard', { method: 'POST' }); }
+  catch (e) { toast('couldn’t update — ' + e.message, 3000); return; }
+  clearGreen(word);
+  toast('stopped highlighting “' + word + '”', 2600);
+  if (wPausedForModal && WP) { wPausedForModal = false; try { WP.play(); } catch {} }
+}
+function clearGreen(word) {
+  const t = rnorm(stripPunct(word));
+  const hit = txt => rnorm(stripPunct(txt)) === t;
+  WCUES.forEach(c => (c.words || []).forEach(x => { if (hit(x.t)) x.c = false; }));
+  document.querySelectorAll('#transcript .cw.has-card, #capOverlay .capw.has-card')
+    .forEach(el => { if (hit(el.textContent)) el.classList.remove('has-card'); });
 }
 function _openInlinePop(anchor, span, sub, freqHtml, btns) {
   if (WP && !WP.paused()) { try { WP.pause(); } catch {} wPausedForModal = true; }

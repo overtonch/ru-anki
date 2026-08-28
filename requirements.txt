@@ -13,5 +13,8 @@ pymorphy3-dicts-ru==2.4.417150.4580142
 # (reading feature: EPUB parsed with stdlib — no new deps)
 
 # Local Whisper re-transcription (Apple Silicon only; optional — the
-# /videos/{id}/transcribe endpoint no-ops without it)
+# /videos/{id}/transcribe endpoint no-ops without it). mlx-whisper is the GPU
+# path; faster-whisper adds the parallel CPU worker + VAD gating (also optional —
+# whisper_rt falls back to GPU-only, no VAD, if it's missing).
 mlx-whisper==0.4.3
+faster-whisper==1.1.0

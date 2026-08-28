@@ -19,6 +19,19 @@
 - [ ] Leave the Mac plugged in, lid open
 - [ ] Know the recovery path: `python rebuild_db.py ~/ru-anki-data`
 
+## Highest priority — next build
+
+- **whisper.cpp + CoreML/ANE encoder for re-transcription.** The current path
+  (`app/whisper_rt.py`) is mlx-whisper large-v3-turbo on the GPU, now pipelined +
+  VAD-gated + with a parallel faster-whisper CPU worker (~5-6x realtime).
+  whisper.cpp offloads the encoder to the Apple Neural Engine via CoreML and
+  pipelines encode(chunk i+1) against decode(chunk i) — community numbers are
+  6-10x realtime for large-v3 on an M1, i.e. ~2-3x faster than today. Work:
+  build whisper.cpp with `WHISPER_COREML=1`, generate the CoreML encoder model
+  (`models/generate-coreml-model.sh`), shell out to `whisper-cli` with
+  `--output-vtt`, parse the VTT (the `_plain_cues` parser already handles it).
+  Keep the current MLX path as the fallback when the binary/model isn't present.
+
 ## Decided but not built
 
 - **In-app SRS** (vs Anki) — use `ts-fsrs`, add `srs_*` cols + a `reviews` table,
@@ -91,5 +104,6 @@ Recommendation: (1) add a local-file import path (ffmpeg extract, no scraping),
 - `resolved_words` can drift from actual Anki state (deleting a deck orphans it).
   A reconcile pass would help.
 - `EXTRACT_STATUS` is in-memory — a restart mid-extraction looks stuck.
-- Stress marks (`stress` column exists, always blank) — Wiktionary lookup.
+- (done) Stress marks + ё — `word_accent` table, LLM-generated at card time /
+  on word-page open, shown on the card back + word page (never the transcript).
 - yt-dlp may need cookies for some videos / from datacenter IPs.

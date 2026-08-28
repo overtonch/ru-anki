@@ -24,6 +24,7 @@ _CSS = (
     ".sent{margin:14px}.tr{font-size:22px}"
     ".src{margin-top:18px;font-size:13px;opacity:.6}.src a{color:inherit}"
     "b{font-weight:700;color:inherit}"
+    ".acc{margin-top:12px;font-size:16px;opacity:.55}"   # stress + ё reference hint
 )
 _FRONT = '<div class="sent">{{Front}}</div>'
 _BACK = ('{{FrontSide}}<hr id="answer"><div class="tr">{{Back}}</div>'
@@ -117,15 +118,26 @@ def delete_note(note_id):
         pass
 
 
-def add_card(sentence, span, is_phrase, translation, source, deck=DECK, tags=None):
-    """Create the note in Anki. Returns dict(note_id, bolded, front)."""
+def add_card(sentence, span, is_phrase, translation, source, deck=DECK, tags=None,
+             accented=None):
+    """Create the note in Anki. Returns dict(note_id, bolded, front).
+
+    `accented` (stressed citation form, ё with dots) is shown as a small muted
+    line on the back — a reference for when you're unsure of the stress. It never
+    goes on the front: reading practice is meant to be without accent marks."""
     ensure_model()
     ensure_deck(deck)
     front, bolded = front_html(sentence, span, is_phrase)
+    back = html.escape(translation or "")
+    acc = (accented or "").strip()
+    bare = acc.replace("́", "").lower().replace("ё", "е")
+    if acc and "\n" not in acc and bare and all(
+            ch == " " or ch == "-" or "а" <= ch <= "я" for ch in bare):
+        back += f'<div class="acc">{html.escape(acc)}</div>'
     note = {
         "deckName": deck,
         "modelName": MODEL_NAME,
-        "fields": {"Front": front, "Back": translation or "", "Source": source or ""},
+        "fields": {"Front": front, "Back": back, "Source": source or ""},
         "tags": tags or ["ru-anki"],
         "options": {"allowDuplicate": False,
                     "duplicateScope": "deck"},

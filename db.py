@@ -50,6 +50,14 @@ def _lemma_one(tok: str) -> str:
     return norm(_morph().parse(tok)[0].normal_form)
 
 
+@functools.lru_cache(maxsize=100_000)
+def yo_lemma(tok: str) -> str:
+    """Citation form WITH ё preserved (pymorphy's dictionary is ё-aware:
+    'полет' -> 'полёт', 'все' -> 'всё'). For the card/word-page spelling hint —
+    everywhere else we ё-fold via norm()."""
+    return _morph().parse(norm(tok).replace("ё", "е"))[0].normal_form
+
+
 def lemma_key(span: str) -> str:
     """Lookup key for stoplist / known_lexicon.
 
