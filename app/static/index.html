@@ -785,6 +785,7 @@
     <div class="studybar">
       <button class="backlink" onclick="history.back()">← done</button>
       <div class="prog" id="studyProg"></div>
+      <button class="sbtn" id="studyDelete" onclick="studyDelete()" title="delete this card" disabled>🗑</button>
       <button class="sbtn" id="studyUndo" onclick="studyUndo()" disabled>↩ undo</button>
     </div>
     <div class="studybody" id="studyBody"></div>
@@ -1927,6 +1928,7 @@ function studyCard() { return STUDY && STUDY.queue[STUDY.i]; }
 function renderStudyCard() {
   const c = studyCard();
   $('#studyUndo').disabled = !STUDY.history.length;
+  $('#studyDelete').disabled = !c;
   if (!c) return renderStudyDone();
   STUDY.revealed = false;
   STUDY.shownAt = Date.now();
@@ -1986,6 +1988,22 @@ async function studyRate(rating) {
   STUDY._busy = false;
   if (!STUDY.queue.length) { await loadStudyQueue(); }   // pick up anything newly due
   else renderStudyCard();
+  refreshStudyBanner();
+}
+
+async function studyDelete() {
+  const c = studyCard();
+  if (!c || STUDY._busy) return;
+  if (!confirm(`Delete this card for “${c.span_text}”?\n\nIt won’t be suggested again (add it later from the word page if you change your mind).`)) return;
+  STUDY._busy = true;
+  try { await api(`/srs/cards/${c.id}`, { method: 'DELETE' }); }
+  catch (e) { toast('couldn’t delete — ' + e.message, 3000); STUDY._busy = false; return; }
+  STUDY._busy = false;
+  STUDY.queue = STUDY.queue.filter(x => x.id !== c.id);
+  STUDY.history = STUDY.history.filter(x => x !== c.id);
+  if (STUDY.i >= STUDY.queue.length) STUDY.i = 0;
+  toast('card deleted', 1800);
+  if (!STUDY.queue.length) loadStudyQueue(); else renderStudyCard();
   refreshStudyBanner();
 }
 

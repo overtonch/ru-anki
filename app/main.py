@@ -1120,15 +1120,28 @@ def srs_suspend(card_id: int, on: bool = True):
 
 
 @app.delete("/srs/cards/{card_id}")
-def srs_delete(card_id: int):
+def srs_delete(card_id: int, requeue: bool = False):
+    """Drop a study card. By default the source word is also marked known so it
+    won't be re-suggested; `?requeue=1` instead puts it back in the review queue
+    (for 'the card is wrong, let me remake it')."""
     card = srs.get_card(card_id)
+    if card and card.get("anki_note_id"):
+        anki.delete_note(card["anki_note_id"])
+        _sync_soon()
     srs.delete_card(card_id)
-    if card and card.get("candidate_id"):
+    cand_id = card.get("candidate_id") if card else None
+    if cand_id:
         try:
-            store.unresolve_candidate(card["candidate_id"])
+            if requeue:
+                store.unresolve_candidate(cand_id)
+            else:
+                store.resolve_candidate(cand_id, "no")
         except KeyError:
             pass
-    return {"ok": True, **srs.stats()}
+    elif card:
+        store.discard_word(store.norm(card["normalized_text"]))
+    backup.snapshot_async("srs-delete")
+    return {"ok": True, "requeued": requeue, **srs.stats()}
 
 
 @app.post("/srs/backfill")
