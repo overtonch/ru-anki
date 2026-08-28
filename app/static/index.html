@@ -333,19 +333,6 @@
   #watchView.fs .cap-overlay { bottom:4.4rem; }
   #watchView.fs .cap-overlay:not(:empty) { font-size:clamp(1.05rem, 3.6vh, 1.9rem); }
 
-  /* "turn your phone" nudge — iOS can't rotate for us */
-  .rotate-hint { display:none; }
-  #watchView.fs.needrotate .rotate-hint {
-      display:flex; flex-direction:column; align-items:center; gap:.6rem;
-      position:absolute; left:50%; top:calc(env(safe-area-inset-top) + .8rem);
-      transform:translateX(-50%); z-index:5; color:#fff;
-      background:rgba(16,17,20,.62); -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
-      border:1px solid rgba(255,255,255,.16); border-radius:.8rem; padding:.7rem 1rem;
-      font-size:.8rem; text-align:center; pointer-events:none; }
-  .rotate-hint svg { width:1.6rem; height:1.6rem; fill:currentColor;
-      animation:rotnudge 1.8s ease-in-out infinite; }
-  @keyframes rotnudge { 0%,60%,100% { transform:rotate(0); } 30% { transform:rotate(90deg); } }
-
   .fs-seek, .fs-exit { display:none; }
   #watchView.fs .fs-seek {
       display:flex; align-items:center; justify-content:center; z-index:6;
@@ -473,10 +460,6 @@
       <div id="ytplayer"></div>
       <button class="tap-layer" onclick="tapVideo()" aria-label="play / pause"></button>
       <div id="capOverlay" class="cap-overlay"></div>
-      <div class="rotate-hint">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 21.5C4 20 1.5 16.5 1.5 12.5H0l3-3 3 3H4.5c0 3.5 2 6.4 5 7.8zM16.5 2.5C20 4 22.5 7.5 22.5 11.5H24l-3 3-3-3h1.5c0-3.5-2-6.4-5-7.8zM12 7.3l4.7 4.7L12 16.7 7.3 12z"/></svg>
-        turn your phone sideways
-      </div>
       <div id="audioStage">
         <img id="audioArt" alt="">
         <div class="audiolabel">🎧 background audio<span>lock the screen — it keeps playing</span></div>
@@ -1524,7 +1507,7 @@ function togglePlay() {
 }
 
 /* ---- fullscreen / immersive ---- */
-let fsManual = false, ctrlTimer = null, orientationLocked = false;
+let fsManual = false, ctrlTimer = null;
 const VP_DEFAULT = 'width=device-width, initial-scale=1, viewport-fit=cover';
 const VP_LOCKED = VP_DEFAULT + ', maximum-scale=1, user-scalable=no';
 function enterFs() {
@@ -1532,25 +1515,15 @@ function enterFs() {
   el.classList.add('fs');
   $('#vp').setAttribute('content', VP_LOCKED);   // no pinch-zoom while immersive
   if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
-  orientationLocked = false;
   try {
     const p = screen.orientation && screen.orientation.lock &&
               screen.orientation.lock('landscape');   // works on Android; not iOS
-    if (p && p.then) p.then(() => { orientationLocked = true; updateRotateHint(); })
-                      .catch(() => {});
+    if (p && p.catch) p.catch(() => {});
   } catch {}
-  updateRotateHint();
   bumpCtrls();
 }
-function updateRotateHint() {
-  // iOS can't rotate for us — nudge the user to turn the phone instead
-  const el = $('#watchView');
-  const portrait = matchMedia('(orientation: portrait)').matches;
-  el.classList.toggle('needrotate',
-    el.classList.contains('fs') && portrait && !orientationLocked && !audioMode);
-}
 function exitFs() {
-  $('#watchView').classList.remove('fs', 'hidectrls', 'needrotate');
+  $('#watchView').classList.remove('fs', 'hidectrls');
   $('#vp').setAttribute('content', VP_DEFAULT);
   clearTimeout(ctrlTimer);
   try { screen.orientation && screen.orientation.unlock && screen.orientation.unlock(); } catch {}
@@ -1570,7 +1543,7 @@ function bumpCtrls() {   // reveal seek + exit buttons, then fade them while pla
   if (!w.classList.contains('fs')) return;
   w.classList.remove('hidectrls');
   clearTimeout(ctrlTimer);
-  if (WP && !WP.paused() && !w.classList.contains('needrotate'))
+  if (WP && !WP.paused())
     ctrlTimer = setTimeout(() => w.classList.add('hidectrls'), 2800);
 }
 function cueIdxAt(t) {
@@ -1675,7 +1648,11 @@ function markWordCarded(span) {
 /* ---- inline approve/deny for a suggested (pending) card, from the watch view ---- */
 function inlineDecide(candId, anchor) {
   const cand = WCANDS[candId];
-  if (!cand) return;
+  if (!cand) {   // no detail for this candidate (stale offline cache) — don't leave it stuck
+    anchor.classList.remove('pending');
+    toast('reopen the video to review this one');
+    return;
+  }
   if (WP && !WP.paused()) { try { WP.pause(); } catch {} wPausedForModal = true; }
   const pop = $('#inlineDecide');
   $('#idSpan').textContent = cand.span || '';
@@ -1699,28 +1676,38 @@ async function inlineCommit(decision) {
   const pop = $('#inlineDecide');
   const id = +pop.dataset.cand;
   pop.hidden = true;
+  const resume = () => { if (wPausedForModal && WP) { wPausedForModal = false; try { WP.play(); } catch {} } };
+  let dupe = false;
   try {
-    await api(`/candidates/${id}/decision`, {
+    const r = await api(`/candidates/${id}/decision`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ decision }),
     });
+    dupe = !!(r && r.anki && r.anki.duplicate);
   } catch (e) {
-    toast('couldn’t save — decide from the review list later', 3000);
-    if (wPausedForModal && WP) { wPausedForModal = false; try { WP.play(); } catch {} }
-    return;
+    const msg = String(e && e.message || e);
+    if (/already (card_created|discarded|known)/i.test(msg)) {
+      // candidate was resolved elsewhere already — just clear the flag below
+    } else {
+      toast(/anki/i.test(msg) ? 'Anki isn’t running — word stays flagged'
+                              : 'couldn’t save — ' + msg, 3500);
+      resume();
+      return;
+    }
   }
+  const carded = decision === 'yes';
   document.querySelectorAll(
     `#transcript [data-cand="${id}"], #capOverlay [data-cand="${id}"]`
   ).forEach(s => {
     s.classList.remove('pending');
-    if (decision === 'yes') s.classList.add('has-card');
+    if (carded) s.classList.add('has-card');
   });
   WCUES.forEach(cue => (cue.words || []).forEach(w => {
-    if (w.p === id) { delete w.p; if (decision === 'yes') w.c = true; }
+    if (+w.p === id) { delete w.p; if (carded) w.c = true; }
   }));
   delete WCANDS[id];
-  toast(decision === 'yes' ? '✓ added to Anki' : 'skipped');
-  if (wPausedForModal && WP) { wPausedForModal = false; try { WP.play(); } catch {} }
+  toast(carded ? (dupe ? 'already in Anki ✓' : '✓ added to Anki') : 'skipped');
+  resume();
 }
 document.addEventListener('pointerdown', e => {
   const pop = $('#inlineDecide');
@@ -2032,7 +2019,6 @@ matchMedia('(orientation: landscape)').addEventListener('change', e => {
   if ($('#watchView').hidden) return;
   if (e.matches && !fsManual) enterFs();
   else if (!e.matches && !fsManual) exitFs();
-  updateRotateHint();
   if ($('#watchView').classList.contains('fs')) bumpCtrls();
 });
 probeHealth();

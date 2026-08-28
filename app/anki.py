@@ -114,7 +114,15 @@ def add_card(sentence, span, is_phrase, translation, source, deck=DECK, tags=Non
         "options": {"allowDuplicate": False,
                     "duplicateScope": "deck"},
     }
-    note_id = invoke("addNote", note=note)
+    try:
+        note_id = invoke("addNote", note=note)
+    except AnkiError as e:
+        if "duplicate" in str(e).lower():
+            # a card with this exact Front already exists — treat as done, not
+            # an error (the user has it; the candidate should stop nagging)
+            return {"note_id": None, "bolded": bolded, "front": front,
+                    "duplicate": True}
+        raise
     # guarantee the card is in the right deck even if addNote fell back to Default
     try:
         cids = invoke("findCards", query=f"nid:{note_id}")
@@ -122,7 +130,8 @@ def add_card(sentence, span, is_phrase, translation, source, deck=DECK, tags=Non
             invoke("changeDeck", cards=cids, deck=deck)
     except AnkiError:
         pass
-    return {"note_id": note_id, "bolded": bolded, "front": front}
+    return {"note_id": note_id, "bolded": bolded, "front": front,
+            "duplicate": False}
 
 
 def sync():
