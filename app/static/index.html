@@ -2809,11 +2809,11 @@ let _greenCtx = null;
 function inlineGreen(w, sp, ci, wi) {
   const word = sp.textContent.replace(/^[^А-Яа-яЁёA-Za-z-]+|[^А-Яа-яЁёA-Za-z-]+$/g, '');
   _greenCtx = { word, ci, wi };
-  _openInlinePop(sp, word, '— you’re learning this', '',
+  const sub = w.tr ? '— ' + w.tr : '— you’re learning this';   // card back, if /watch carried it
+  _openInlinePop(sp, word, sub, '',
     `<button class="id-no" onclick="greenDiscard()">not learning</button>
      <button class="id-yes" onclick="greenCard()">✎ card</button>`);
-  // fill in the meaning (the /watch payload doesn't carry it for green words)
-  api('/words/' + encodeURIComponent(word)).then(d => {
+  if (!w.tr) api('/words/' + encodeURIComponent(word)).then(d => {   // fallback (e.g. family-green words)
     const tr = d && (d.translation || d.gloss);
     if (tr && _greenCtx && _greenCtx.word === word && !$('#inlineDecide').hidden)
       $('#idTr').textContent = '— ' + tr;

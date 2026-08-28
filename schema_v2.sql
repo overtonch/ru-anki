@@ -49,6 +49,15 @@ CREATE TABLE IF NOT EXISTS word_accent (
     made_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Lazily-filled English gloss for a carded word that has no candidate / srs_card
+-- to read a translation from (orphans from the pre-SRS Anki-only era). Shown in
+-- the in-watch popover and the word page.
+CREATE TABLE IF NOT EXISTS word_gloss (
+    lemma   TEXT PRIMARY KEY,
+    gloss   TEXT NOT NULL,
+    made_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Memoised output of the sentence-picker (GET /candidates/{id}/sentences): the
 -- LLM-cleaned + ranked flashcard-sentence options for one candidate. Dropped
 -- when the video's transcript changes or the candidate's sentence is edited.

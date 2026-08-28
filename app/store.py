@@ -695,6 +695,33 @@ def card_lemmas():
     return {r["normalized_text"] for r in rows}
 
 
+def carded_glosses():
+    """{normalized_text: translation} for words you have a card for — the SRS
+    card's back wins, else the candidate's. For the instant popover in /watch."""
+    c = connect()
+    out = {}
+    try:
+        for r in c.execute("SELECT normalized_text, translation FROM candidates "
+                           "WHERE status='card_created' AND translation IS NOT NULL "
+                           "AND translation != ''"):
+            out[r["normalized_text"]] = r["translation"]
+    except sqlite3.OperationalError:
+        pass
+    try:
+        for r in c.execute("SELECT normalized_text, translation FROM srs_cards "
+                           "WHERE translation IS NOT NULL AND translation != ''"):
+            out[r["normalized_text"]] = r["translation"]
+    except sqlite3.OperationalError:
+        pass
+    try:
+        for r in c.execute("SELECT lemma, gloss FROM word_gloss"):
+            out.setdefault(r["lemma"], r["gloss"])
+    except sqlite3.OperationalError:
+        pass
+    c.close()
+    return out
+
+
 def known_family_lemmas():
     """Every lemma that shares a word-formation family with something you've
     carded — so работа / рабочий / работник all count as 'known' once you have
@@ -793,6 +820,27 @@ def set_accent(lemma, accented):
     c = connect()
     c.execute("INSERT OR REPLACE INTO word_accent(lemma, accented) VALUES(?,?)",
               (norm(lemma), accented.strip()))
+    c.commit()
+    c.close()
+
+
+def word_gloss_get(lemma):
+    c = connect()
+    try:
+        r = c.execute("SELECT gloss FROM word_gloss WHERE lemma=?",
+                      (norm(lemma),)).fetchone()
+    except sqlite3.OperationalError:
+        r = None
+    c.close()
+    return r["gloss"] if r else None
+
+
+def word_gloss_set(lemma, gloss):
+    if not gloss:
+        return
+    c = connect()
+    c.execute("INSERT OR REPLACE INTO word_gloss(lemma, gloss) VALUES(?,?)",
+              (norm(lemma), gloss.strip()))
     c.commit()
     c.close()
 

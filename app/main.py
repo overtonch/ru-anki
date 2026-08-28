@@ -927,8 +927,8 @@ def decide(cand_id: int, body: DecisionIn):
 @app.get("/words/{lemma}")
 def word_detail(lemma: str):
     """Everything about one word: card status, family, and every place it's
-    spoken across all your videos."""
-    lem = store.norm(lemma)
+    spoken across all your videos. `lemma` may be an inflected form."""
+    lem = store.lemma_key(lemma)
     have = store.card_lemmas()
     fam_lemmas = store.known_family_lemmas()
     cand, members = store.word_status(lem)
@@ -937,16 +937,30 @@ def word_detail(lemma: str):
               else "pending" if (cand and cand["status"] == "pending")
               else "new")
     translation = (cand or {}).get("translation")
+    occ = store.word_occurrences(lem)
+    gloss = translation or store.word_gloss_get(lem) or store.gloss_for(lem)
+    # orphaned carded word (pre-SRS Anki era) with no meaning anywhere → fill it
+    if not gloss and status in ("carded", "family"):
+        ctx = ""
+        if occ and occ[0].get("hits"):
+            ctx = occ[0]["hits"][0].get("text", "")
+        try:
+            g = llm.translate_span(ctx or lem, lem)
+            gloss = (g.get("translation") or "").strip()
+            if gloss:
+                store.word_gloss_set(lem, gloss)
+        except Exception as e:  # noqa: BLE001
+            print(f"[gloss] {lem}: {e}")
     return {
         "lemma": lem,
         "yo": store.yo_form(lem),                 # ё-restored spelling (instant)
         "accented": store.accent_for(lem),        # stressed form or None (LLM, lazy)
         "status": status,
         "translation": translation,
-        "gloss": store.gloss_for(lem),
+        "gloss": gloss,
         "family": [m for m in members if m != lem],
         "candidate_id": (cand or {}).get("id") if (cand and cand["status"] == "pending") else None,
-        "videos": store.word_occurrences(lem),
+        "videos": occ,
     }
 
 
@@ -954,7 +968,7 @@ def word_detail(lemma: str):
 def word_accent(lemma: str):
     """Compute (and cache) the stress + ё spelling for one word. Called by the
     word page after it renders, so the first open fills the hint in."""
-    lem = store.norm(lemma)
+    lem = store.lemma_key(lemma)
     acc = store.accent_for(lem)
     if not acc:
         occ = store.word_occurrences(lem)
@@ -974,7 +988,7 @@ def word_discard(lemma: str):
     """'Not a word I'm learning' — stop highlighting it everywhere (breaks any
     word-family link, records it as known) and delete any pipeline-made Anki
     cards for it."""
-    res = store.discard_word(store.norm(lemma))
+    res = store.discard_word(store.lemma_key(lemma))
     for nid in res.get("removed_notes", []):
         anki.delete_note(nid)
     if res.get("removed_notes"):
@@ -1269,6 +1283,7 @@ def watch(video_id: int):
         raise HTTPException(404, "no such video")
     cues = subs.caption_cues(v["raw_subs"])
     have = store.card_lemmas() | store.known_family_lemmas()
+    glosses = store.carded_glosses()                 # {lemma: translation}
     pend_rows = store.list_candidates(video_id, status="pending")
     pending = {r["normalized_text"]: r["id"]
                for r in pend_rows if r.get("normalized_text")}
@@ -1286,6 +1301,8 @@ def watch(video_id: int):
                 lem = store.lemma_key(core)
                 if lem in have:
                     w["c"] = True
+                    if lem in glosses:
+                        w["tr"] = glosses[lem]
                 elif lem in pending:
                     w["p"] = pending[lem]
                 d = decided.get(lem)
