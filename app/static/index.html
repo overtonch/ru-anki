@@ -1835,6 +1835,9 @@ function loadYTApi() {
 }
 
 async function openWatch(id, seekTo) {
+  // jumping to a specific moment (from a review card / word page) is a peek —
+  // it must not overwrite "where I was watching"
+  watchEphemeral = seekTo != null;
   const haveLocal = await opfsHas(id);
   let data;
   try { data = await api(`/videos/${id}/watch`); idbPut('offline', 'w' + id, data).catch(() => {}); }
@@ -2214,13 +2217,13 @@ function renderStats(d) {
 }
 
 /* ---- resume where you left off (per video, this device) ---- */
-let lastPosSave = 0;
+let lastPosSave = 0, watchEphemeral = false;
 function loadPos(id) {
   try { const v = parseInt(localStorage.getItem('wp:' + id) || '0', 10);
         return v > 10 ? v : 0; } catch { return 0; }
 }
 function savePos() {
-  if (!WDATA || !WP) return;
+  if (watchEphemeral || !WDATA || !WP) return;   // peeked in from a card — don't move the bookmark
   const t = WP.time(), d = WP.dur();
   if (d && t > 5 && t < d - 8) {
     try { localStorage.setItem('wp:' + WDATA.video.id, String(Math.floor(t))); } catch {}
