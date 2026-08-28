@@ -511,22 +511,30 @@ def watch(video_id: int):
         raise HTTPException(404, "no such video")
     cues = subs.caption_cues(v["raw_subs"])
     have = store.card_lemmas()
+    pend_rows = store.list_candidates(video_id, status="pending")
+    pending = {r["normalized_text"]: r["id"]
+               for r in pend_rows if r.get("normalized_text")}
     out = []
     for cue in cues:
         words = []
         for tok in cue["text"].split():
             core = tok.strip(".,!?;:—–()«»\"'…-")
+            w = {"t": tok, "c": False}
             if core and _CYR.search(core):
                 lem = store.lemma_key(core)
-                words.append({"t": tok, "c": lem in have})
-            else:
-                words.append({"t": tok, "c": False})
+                if lem in have:
+                    w["c"] = True
+                elif lem in pending:
+                    w["p"] = pending[lem]
+            words.append(w)
         out.append({"s": cue["s"], "e": cue["e"], "text": cue["text"], "words": words})
     return {
         "video": {k: v.get(k) for k in
                   ("id", "title", "channel", "url", "youtube_id", "duration")},
         "cues": out,
         "card_count": len(have),
+        "cands": {r["id"]: {"span": r["span_text"], "tr": r["translation"]}
+                  for r in pend_rows},
     }
 
 

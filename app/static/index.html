@@ -25,7 +25,7 @@
   ::selection { background:var(--accent-soft); }
   body { margin:0; font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
          background:var(--bg); color:var(--fg); overflow-x:hidden;
-         -webkit-font-smoothing:antialiased;
+         -webkit-font-smoothing:antialiased; touch-action:manipulation;  /* kill double-tap zoom everywhere */
          padding: env(safe-area-inset-top) 0 3rem; }
   a { color:var(--accent); text-decoration:none; }
   a:active { opacity:.7; }
@@ -33,7 +33,17 @@
   header { padding:1.1rem 1.1rem .5rem; display:flex; align-items:baseline; gap:.55rem; }
   h1 { font-size:1.02rem; margin:0; font-weight:750; letter-spacing:-.01em; }
   header .sub { font-size:.78rem; color:var(--muted); }
+  .hdr-right { margin-left:auto; align-self:center; display:flex; align-items:center; gap:.5rem; }
+  .hdr-right .pill { margin-left:0; }
+  .iconbtn { background:none; border:0; color:var(--muted); padding:.15rem; cursor:pointer;
+             display:inline-flex; align-items:center; border-radius:var(--r-sm);
+             transition:color .15s, transform .3s; }
+  .iconbtn svg { width:1.2rem; height:1.2rem; fill:currentColor; display:block; }
+  .iconbtn:active { color:var(--fg); }
+  .iconbtn.spinning { color:var(--accent); animation:spin360 .7s linear infinite; }
+  @keyframes spin360 { to { transform:rotate(360deg); } }
   main { padding:0 1.1rem; max-width:660px; margin:0 auto; }
+  main.edging { transition:transform .2s ease; }
 
   input[type=text], input[type=search], select {
     width:100%; padding:.72rem .8rem; border:1px solid var(--line); border-radius:var(--r-sm);
@@ -198,7 +208,9 @@
   #connBanner[hidden] { display:none; }
   #connBanner.bad  { background:var(--no); }
   #connBanner.warn { background:#c07d2a; }
-  #connBanner.offline { background:#555; }
+  #connBanner.offline { background:#3a3f47; font-size:.68rem; line-height:1; letter-spacing:.08em;
+                        text-transform:uppercase; padding:.2rem 1rem;
+                        padding-top:calc(.2rem + env(safe-area-inset-top)); box-shadow:none; }
 
   #modalWrap { position:fixed; inset:0; background:rgba(6,8,11,.6); z-index:20;
                align-items:center; justify-content:center; padding:1rem;
@@ -262,11 +274,14 @@
   .cap-overlay:not(:empty) { font-size:clamp(.95rem,4.2vw,1.35rem); line-height:1.4; }
   .cap-overlay .capw { pointer-events:auto; cursor:pointer; padding:.03em .12em; border-radius:.25rem; }
   .cap-overlay .capw.has-card { color:#8fe6b3; }
+  .cap-overlay .capw.pending { background:rgba(230,185,60,.30); box-shadow:inset 0 -2px 0 #e6b93c;
+                               border-radius:3px; }
   .cap-overlay .capw:active { background:var(--accent); color:#0b1016; }
   .watchhint { flex:none; text-align:center; font-size:.7rem; color:var(--muted);
                padding:.4rem 0 .3rem; }
   .watchhint .dot { display:inline-block; width:.65em; height:.65em; border-radius:50%;
                     background:var(--ok); vertical-align:-.03em; margin:0 .15em; }
+  .watchhint .dot.y { background:#e6b93c; }
   .transcript { flex:1; overflow-y:auto; padding:.4rem .9rem 2.5rem;
                 -webkit-overflow-scrolling:touch; }
   .transcript::-webkit-scrollbar { width:0; }
@@ -280,9 +295,31 @@
   .transcript .cw { cursor:pointer; padding:.02em .06em; border-radius:.25rem; }
   .transcript .cue.on .cw:active { background:var(--accent); color:#0b1016; }
   .transcript .cw.has-card { color:var(--ok); font-weight:650; }
+  .transcript .cw.pending { background:rgba(230,185,60,.18); box-shadow:inset 0 -2px 0 rgba(230,185,60,.8);
+                            color:var(--fg); border-radius:3px; }
+
+  /* inline approve/deny popover for a suggested card, shown over the watch view */
+  #inlineDecide { position:fixed; z-index:40; max-width:min(78vw,300px);
+                  background:var(--card); border:1px solid var(--line); border-radius:var(--r-sm);
+                  box-shadow:var(--sh); padding:.65rem .7rem; }
+  #inlineDecide[hidden] { display:none; }
+  #inlineDecide .id-head { font-size:.92rem; line-height:1.35; margin-bottom:.55rem; }
+  #inlineDecide .id-head span { color:var(--muted); }
+  #inlineDecide .id-btns { display:flex; gap:.5rem; }
+  #inlineDecide button { flex:1; padding:.5rem .55rem; border-radius:var(--r-sm); font-size:.85rem;
+                         font-weight:650; border:1px solid; cursor:pointer; }
+  #inlineDecide .id-yes { background:var(--yes); border-color:var(--yes); color:#08160d; }
+  #inlineDecide .id-no  { background:transparent; border-color:var(--line); color:var(--fg-dim); }
+  #inlineDecide .id-no:active { border-color:var(--no); color:var(--no); }
 
   /* immersive / fullscreen watch — video fills the view, caption stays on top */
   #watchView.fs { padding:0; background:#000; }
+  /* devices that won't honour screen.orientation.lock (iOS): rotate the view by hand */
+  @media (orientation: portrait) {
+    #watchView.fs.rotate { inset:auto; width:100vh; height:100vw;
+      top:calc((100vh - 100vw) / 2); left:calc((100vw - 100vh) / 2);
+      transform:rotate(90deg); transform-origin:center center; }
+  }
   #watchView.fs .watchbar, #watchView.fs .watchhint, #watchView.fs .transcript,
   #watchView.fs .wctrls { display:none; }
   #watchView.fs .player-wrap { flex:1; aspect-ratio:auto; height:100%; }
@@ -339,7 +376,12 @@
 <header>
   <h1>ru-anki</h1>
   <span class="sub" id="netpill"><span class="netdot"></span><span id="netword">…</span></span>
-  <button class="pill" id="queuePill" hidden onclick="flushQueue(true)"></button>
+  <span class="hdr-right">
+    <button class="pill" id="queuePill" hidden onclick="flushQueue(true)"></button>
+    <button class="iconbtn" id="refreshBtn" aria-label="reload the app" onclick="hardRefresh()">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/></svg>
+    </button>
+  </span>
 </header>
 <div id="connBanner" hidden onclick="probeHealth()"></div>
 
@@ -365,7 +407,7 @@
 
   <!-- DETAIL VIEW -->
   <div id="detailView" hidden>
-    <button class="backlink" onclick="showList()">← all videos</button>
+    <button class="backlink" onclick="history.back()">← all videos</button>
     <div class="vhead" id="vhead"></div>
     <button class="btn watch-cta" id="watchBtn" onclick="openWatch(CURRENT)">▶ Watch with captions</button>
     <div id="offlineRow" class="status"></div>
@@ -398,7 +440,7 @@
   <!-- WATCH VIEW -->
   <div id="watchView" hidden>
     <div class="watchbar">
-      <button class="backlink" onclick="closeWatch()">← back</button>
+      <button class="backlink" onclick="history.back()">← back</button>
       <div class="speeds" id="speeds">
         <button data-r="0.75">0.75×</button>
         <button data-r="1" class="on">1×</button>
@@ -424,13 +466,20 @@
       <button onclick="seekLine(1)">next line <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 6a1 1 0 0 0-2 0v4.6L6.5 5.7A1 1 0 0 0 5 6.5v11a1 1 0 0 0 1.5.8l7.5-4.9V18a1 1 0 0 0 2 0z"/></svg></button>
       <button id="fsBtn" onclick="toggleFs()" title="full screen">⛶ full screen</button>
     </div>
-    <div class="watchhint">tap a word to card it · <span class="dot"></span> already carded · tap video to pause</div>
+    <div class="watchhint">tap a word to card it · <span class="dot"></span> carded · <span class="dot y"></span> suggested · tap video to pause</div>
     <div id="transcript" class="transcript"></div>
+    <div id="inlineDecide" hidden>
+      <div class="id-head"><b id="idSpan"></b> <span id="idTr"></span></div>
+      <div class="id-btns">
+        <button class="id-no" onclick="inlineCommit('no')">✕ skip</button>
+        <button class="id-yes" onclick="inlineCommit('yes')">✓ add card</button>
+      </div>
+    </div>
   </div>
 </main>
 
 <!-- CARD MODAL -->
-<div id="modalWrap" hidden onclick="if(event.target===this)closeCardModal()">
+<div id="modalWrap" hidden onclick="if(event.target===this)history.back()">
   <div class="modal">
     <h3>Make a card</h3>
     <div id="modalSent" class="modalsent"></div>
@@ -440,7 +489,7 @@
            oninput="if(MODAL){MODAL._edited=true;syncModalSpan()}">
     <div id="modalPreview"></div>
     <div class="modalbtns">
-      <button class="backlink" onclick="closeCardModal()">Cancel</button>
+      <button class="backlink" onclick="history.back()">Cancel</button>
       <button class="btn sm" id="modalOk" onclick="confirmCard()">Make card</button>
     </div>
   </div>
@@ -456,7 +505,7 @@ let DETAIL_V = null;
 let listTimer = null, sse = null, tickTimer = null, searchTimer = null;
 // watch view
 let ytPlayer = null, ytApiP = null, capTimer = null, WP = null, localURL = null;
-let WCUES = [], wActive = -1, wUserScroll = 0, wPausedForModal = false;
+let WCUES = [], WCANDS = {}, wActive = -1, wUserScroll = 0, wPausedForModal = false;
 
 function toast(msg, ms=2400) {
   const t = $('#toast'); t.textContent = msg; t.classList.add('show');
@@ -1200,6 +1249,7 @@ async function openWatch(id) {
   if (!haveLocal && !navigator.onLine) { toast('download this video to watch it offline'); return; }
 
   WCUES = data.cues || [];
+  WCANDS = data.cands || {};
   wActive = -1; WP = null;
   $('#detailView').hidden = true;
   $('#watchView').hidden = false;
@@ -1312,14 +1362,24 @@ function enterFs() {
   el.classList.add('fs');
   $('#vp').setAttribute('content', VP_LOCKED);   // no pinch-zoom while immersive
   if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
-  try { screen.orientation && screen.orientation.lock &&
-        screen.orientation.lock('landscape').catch(() => {}); } catch {}
+  let locked = false;
+  try {
+    const p = screen.orientation && screen.orientation.lock &&
+              screen.orientation.lock('landscape');
+    if (p && p.then) { locked = true; p.catch(() => applyRotateFallback()); }
+  } catch {}
+  if (!locked) applyRotateFallback();   // iOS etc. — can't lock, rotate with CSS
   bumpCtrls();
 }
+function applyRotateFallback() {
+  $('#watchView').classList.toggle('rotate',
+    matchMedia('(orientation: portrait)').matches);
+}
 function exitFs() {
-  $('#watchView').classList.remove('fs', 'hidectrls');
+  $('#watchView').classList.remove('fs', 'hidectrls', 'rotate');
   $('#vp').setAttribute('content', VP_DEFAULT);
   clearTimeout(ctrlTimer);
+  try { screen.orientation && screen.orientation.unlock && screen.orientation.unlock(); } catch {}
   if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
 }
 function toggleFs() {
@@ -1362,9 +1422,13 @@ function renderCaption(idx) {
   if (idx < 0 || !WCUES[idx]) return;
   (WCUES[idx].words || [{ t: WCUES[idx].text }]).forEach((w, wi) => {
     const sp = document.createElement('span');
-    sp.className = 'capw' + (w.c ? ' has-card' : '');
+    sp.className = 'capw' + (w.c ? ' has-card' : (w.p ? ' pending' : ''));
+    if (w.p) sp.dataset.cand = w.p;
     sp.textContent = w.t;
-    if (w.t) sp.onclick = ev => { ev.stopPropagation(); watchTapWord(idx, wi); };
+    if (w.t) sp.onclick = ev => {
+      ev.stopPropagation();
+      (w.p && !w.c) ? inlineDecide(w.p, sp) : watchTapWord(idx, wi);
+    };
     c.append(sp, document.createTextNode(' '));
   });
 }
@@ -1401,9 +1465,10 @@ function renderTranscript() {
     line.appendChild(ts);
     (cue.words || []).forEach((w, wi) => {
       const sp = document.createElement('span');
-      sp.className = 'cw' + (w.c ? ' has-card' : '');
+      sp.className = 'cw' + (w.c ? ' has-card' : (w.p ? ' pending' : ''));
+      if (w.p) sp.dataset.cand = w.p;
       sp.textContent = w.t;
-      sp.onclick = () => watchTapWord(i, wi);
+      sp.onclick = () => (w.p && !w.c) ? inlineDecide(w.p, sp) : watchTapWord(i, wi);
       line.append(sp, document.createTextNode(' '));
     });
     box.appendChild(line);
@@ -1425,6 +1490,62 @@ function markWordCarded(span) {
   });
   WCUES.forEach(c => (c.words || []).forEach(w => { if (hit(w.t)) w.c = true; }));
 }
+
+/* ---- inline approve/deny for a suggested (pending) card, from the watch view ---- */
+function inlineDecide(candId, anchor) {
+  const cand = WCANDS[candId];
+  if (!cand) return;
+  if (WP && !WP.paused()) { try { WP.pause(); } catch {} wPausedForModal = true; }
+  const pop = $('#inlineDecide');
+  $('#idSpan').textContent = cand.span || '';
+  $('#idTr').textContent = cand.tr ? '— ' + cand.tr : '';
+  pop.dataset.cand = candId;
+  pop.hidden = false;
+  const r = anchor.getBoundingClientRect();
+  const pw = pop.offsetWidth, ph = pop.offsetHeight;
+  let left = r.left + r.width / 2 - pw / 2;
+  left = Math.max(8, Math.min(left, innerWidth - pw - 8));
+  let top = r.top - ph - 10;
+  if (top < 8) top = Math.min(r.bottom + 10, innerHeight - ph - 8);
+  pop.style.left = left + 'px';
+  pop.style.top = top + 'px';
+}
+function closeInline(resume) {
+  $('#inlineDecide').hidden = true;
+  if (resume && wPausedForModal && WP) { wPausedForModal = false; try { WP.play(); } catch {} }
+}
+async function inlineCommit(decision) {
+  const pop = $('#inlineDecide');
+  const id = +pop.dataset.cand;
+  pop.hidden = true;
+  try {
+    await api(`/candidates/${id}/decision`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ decision }),
+    });
+  } catch (e) {
+    toast('couldn’t save — decide from the review list later', 3000);
+    if (wPausedForModal && WP) { wPausedForModal = false; try { WP.play(); } catch {} }
+    return;
+  }
+  document.querySelectorAll(
+    `#transcript [data-cand="${id}"], #capOverlay [data-cand="${id}"]`
+  ).forEach(s => {
+    s.classList.remove('pending');
+    if (decision === 'yes') s.classList.add('has-card');
+  });
+  WCUES.forEach(cue => (cue.words || []).forEach(w => {
+    if (w.p === id) { delete w.p; if (decision === 'yes') w.c = true; }
+  }));
+  delete WCANDS[id];
+  toast(decision === 'yes' ? '✓ added to Anki' : 'skipped');
+  if (wPausedForModal && WP) { wPausedForModal = false; try { WP.play(); } catch {} }
+}
+document.addEventListener('pointerdown', e => {
+  const pop = $('#inlineDecide');
+  if (pop.hidden || pop.contains(e.target)) return;
+  if (!e.target.closest('[data-cand]')) closeInline(true);
+}, true);
 
 /* ---------------- offline queue + flush ---------------- */
 async function refreshQueuePill() {
@@ -1639,7 +1760,7 @@ function setNet(state) {
   const B = {
     anki: ['warn', '⚠ Connected to the Mac, but <b>Anki isn’t running</b> (or AnkiConnect isn’t installed). New cards will queue and upload once Anki is open. Tap to re-check.'],
     noserver: ['bad', '⚠ <b>Can’t reach the Mac.</b> Check: Tailscale VPN is <b>on</b> on this phone, the Mac is awake and on Tailscale, and the ru-anki server is running. Tap to re-check.'],
-    offline: ['offline', 'Offline — saved videos and the card queue still work; cards upload when you reconnect.'],
+    offline: ['offline', 'offline'],
   }[state];
   if (B) { banner.hidden = false; banner.className = B[0]; banner.innerHTML = B[1]; }
   else banner.hidden = true;
@@ -1656,6 +1777,59 @@ window.addEventListener('offline', () => setNet('offline'));
 document.addEventListener('visibilitychange', () => { if (!document.hidden) probeHealth(); });
 window.addEventListener('focus', probeHealth);
 
+/* ---------------- reload + back navigation ---------------- */
+async function hardRefresh() {
+  $('#refreshBtn').classList.add('spinning');
+  try {
+    if (window.caches) {
+      const ks = await caches.keys();
+      await Promise.all(ks.filter(k => k.startsWith('ru-anki-shell')).map(k => caches.delete(k)));
+    }
+    const r = navigator.serviceWorker && await navigator.serviceWorker.getRegistration();
+    if (r) { try { await r.update(); } catch {} }
+  } catch {}
+  location.reload();
+}
+
+// step back one level through the app's views; returns true if it did something
+function navBack() {
+  if (!$('#inlineDecide').hidden) { closeInline(true); return true; }
+  if (!$('#modalWrap').hidden) { closeCardModal(); return true; }
+  if (!$('#watchView').hidden) { closeWatch(); return true; }
+  if (!$('#detailView').hidden) { showList(); return true; }
+  return false;
+}
+// trap the OS / browser back gesture so it walks back through views instead of leaving
+try { history.pushState({ ru: 1 }, ''); } catch {}
+addEventListener('popstate', () => { navBack(); try { history.pushState({ ru: 1 }, ''); } catch {} });
+
+// swipe in from the very left edge of the screen = back
+(() => {
+  const mainEl = document.querySelector('main');
+  let x0 = null, y0 = 0, live = false;
+  addEventListener('touchstart', e => {
+    if (e.touches.length !== 1 || e.touches[0].clientX > 24) { x0 = null; return; }
+    x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; live = false;
+  }, { passive: true });
+  addEventListener('touchmove', e => {
+    if (x0 === null) return;
+    const t = e.touches[0], dx = t.clientX - x0, dy = t.clientY - y0;
+    if (!live && dx > 12 && Math.abs(dx) > Math.abs(dy) + 4) live = true;
+    if (live && $('#watchView').hidden) {
+      mainEl.classList.remove('edging');
+      mainEl.style.transform = `translateX(${Math.min(dx, 90)}px)`;
+    }
+  }, { passive: true });
+  addEventListener('touchend', e => {
+    if (live) {
+      mainEl.classList.add('edging');
+      mainEl.style.transform = '';
+      if (e.changedTouches[0].clientX - x0 > 70) history.back();
+    }
+    x0 = null; live = false;
+  });
+})();
+
 /* ---------------- boot ---------------- */
 if ('serviceWorker' in navigator)
   navigator.serviceWorker.register('/sw.js').catch(() => {});
@@ -1670,7 +1844,9 @@ setInterval(() => { if (!document.hidden) probeHealth(); }, 20000);
 // landscape → immersive video; portrait → back to the split view (unless toggled)
 matchMedia('(orientation: landscape)').addEventListener('change', e => {
   if ($('#watchView').hidden) return;
-  if (e.matches) enterFs(); else if (!fsManual) exitFs();
+  if (e.matches && !fsManual) enterFs();
+  else if (!e.matches && !fsManual) exitFs();
+  if ($('#watchView').classList.contains('fs')) applyRotateFallback();
 });
 probeHealth();
 refreshQueuePill();
