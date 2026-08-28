@@ -563,9 +563,8 @@ async function loadVideos() {
     VIDEOS = await api('/videos');
     listedOnce = true;
   } catch (e) {
-    const off = await idbAll('offline');
-    if (off.length) {
-      VIDEOS = off.map(o => ({ ...o.video, lines: o.lines.length, _offline: true }));
+    VIDEOS = await offlineVideoList();
+    if (VIDEOS.length) {
       $('#videoList').innerHTML = '';
       renderList();
       $('#videoList').insertAdjacentHTML('afterbegin',
@@ -649,8 +648,9 @@ function videoCard(v, feat) {
   } else if (ex.state === 'error') {
     statusHtml = `<div class="pmeta" style="color:var(--no)">${escapeHtml(extractLine(ex))}</div>`;
   } else {
-    const rev = v.pending ? `${v.pending} to review` : 'nothing to review';
-    statusHtml = `<div class="doneline">✓ ${rev} · ${v.lines} lines</div>`;
+    const rev = v.pending ? `${v.pending} to review`
+              : (v._offline ? 'saved offline' : 'nothing to review');
+    statusHtml = `<div class="doneline">✓ ${rev}${v.lines ? ` · ${v.lines} lines` : ''}</div>`;
   }
   el.innerHTML = `
     ${thumb}
@@ -790,7 +790,30 @@ async function retryExtract() {
   } catch (e) { toast('error: ' + e.message, 3500); }
 }
 async function loadVideosQuiet() {
-  try { VIDEOS = await api('/videos'); } catch {}
+  try { VIDEOS = await api('/videos'); } catch { VIDEOS = await offlineVideoList(); }
+}
+
+/* videos usable with no connection: anything with cached captions, a saved
+   transcript, or a downloaded file — merged by id across the idb entry shapes */
+async function offlineVideoList() {
+  const byId = new Map();
+  for (const o of await idbAll('offline')) {
+    const vv = o && o.video;
+    if (!vv || vv.id == null) continue;
+    const cur = byId.get(vv.id) || {};
+    Object.assign(cur, vv);   // merge meta from whichever entry has more
+    if (Array.isArray(o.lines)) cur.lines = o.lines.length;
+    cur._offline = true;
+    byId.set(vv.id, cur);
+  }
+  try {   // downloaded files with no cached meta still get a card
+    for await (const name of (await opfsDir()).keys()) {
+      const m = /^(\d+)\.mp4$/.exec(name);
+      if (m && !byId.has(+m[1]))
+        byId.set(+m[1], { id: +m[1], title: 'video ' + m[1], _offline: true });
+    }
+  } catch {}
+  return [...byId.values()];
 }
 
 /* ---------------- review ---------------- */
@@ -1256,12 +1279,17 @@ function loadYTApi() {
 }
 
 async function openWatch(id) {
+  const haveLocal = await opfsHas(id);
   let data;
   try { data = await api(`/videos/${id}/watch`); idbPut('offline', 'w' + id, data).catch(() => {}); }
   catch { data = await idbGet('offline', 'w' + id); }
-  const haveLocal = await opfsHas(id);
-  if (!data) { toast(haveLocal ? 'captions unavailable' : 'watch needs a connection'); return; }
   if (!haveLocal && !navigator.onLine) { toast('download this video to watch it offline'); return; }
+  if (!haveLocal && !data) { toast('couldn’t load this video'); return; }
+  if (!data) {
+    // downloaded, but captions were never cached — play the video without them
+    data = { video: (await offlineVideoMeta(id)), cues: [], cands: {} };
+    toast('captions not saved for offline — playing video only', 2600);
+  }
 
   WCUES = data.cues || [];
   WCANDS = data.cands || {};
@@ -1866,7 +1894,15 @@ async function downloadMedia(id) {
     }
     await opfsSave(id, (p, bytes) =>
       setBusy(btn, true, p ? Math.round(p * 100) + '%' : `${Math.round(bytes / 1e6)} MB`));
-    toast('video saved — you can watch it offline');
+    // cache everything else the watch view needs offline: captions, transcript, thumbnail
+    setBusy(btn, true, 'saving captions…');
+    try { await idbPut('offline', 'w' + id, await api(`/videos/${id}/watch`)); } catch {}
+    try {
+      const ld = await api(`/videos/${id}/lines`);
+      await idbPut('offline', id, { video: ld.video, lines: ld.lines, savedAt: Date.now() });
+      if (ld.video && ld.video.thumbnail_url) { try { await fetch(ld.video.thumbnail_url, { mode: 'no-cors' }); } catch {} }
+    } catch {}
+    toast('video saved — captions and all, works fully offline');
     loadVideosQuiet();
   } catch (e) {
     toast('download failed: ' + e.message, 4000);
