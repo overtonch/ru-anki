@@ -115,7 +115,10 @@ def download_media(url, video_id, height=360, progress=None):
            f"b[height<={height}][ext=mp4]/b[ext=mp4]/b[height<={height}]/b")
     out = os.path.join(MEDIA_DIR, f"{video_id}.%(ext)s")
     proc = subprocess.Popen(
-        [YTDLP, "-f", fmt, "--merge-output-format", "mp4", "--no-playlist",
+        # -S keeps the pick near `height` even when a source (VK/HLS) doesn't
+        # expose a format that satisfies the [height<=] filters
+        [YTDLP, "-f", fmt, "-S", f"res:{height},codec:h264,+size,+br",
+         "--merge-output-format", "mp4", "--no-playlist",
          "--newline", "--no-part", "-o", out, url],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
     tail = []
