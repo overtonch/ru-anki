@@ -504,7 +504,7 @@
   <!-- LIST VIEW -->
   <div id="listView">
     <div class="addbar">
-      <input type="text" id="url" placeholder="Paste a YouTube link"
+      <input type="text" id="url" placeholder="YouTube, VK, RuTube… link"
              autocapitalize="off" autocomplete="off" spellcheck="false"
              onkeydown="if(event.key==='Enter')addVideo()">
       <button class="btn" id="addBtn" onclick="addVideo()">Add</button>
@@ -889,7 +889,10 @@ async function openDetail(id) {
   if (!v) { try { v = await api(`/videos/${id}`); } catch { v = await offlineVideoMeta(id); } }
   DETAIL_V = v || {id};
   renderVHead(DETAIL_V);
-  $('#watchBtn').hidden = !navigator.onLine && !(await opfsHas(id));
+  const localOK = await opfsHas(id);
+  $('#watchBtn').hidden = !navigator.onLine && !localOK;
+  $('#watchBtn').textContent = (DETAIL_V.youtube_id || localOK)
+    ? '▶ Watch with captions' : '⬇ Download to watch (can’t stream this source)';
   try { $('#reviewPanel').classList.toggle('collapsed', localStorage.getItem('reviewCollapsed') === '1'); } catch {}
   await renderOfflineRow(id);
   renderMediaRow(id);
@@ -1509,6 +1512,11 @@ async function openWatch(id) {
   catch { data = await idbGet('offline', 'w' + id); }
   if (!haveLocal && !navigator.onLine) { toast('download this video to watch it offline'); return; }
   if (!haveLocal && !data) { toast('couldn’t load this video'); return; }
+  if (!haveLocal && data && !data.video.youtube_id) {
+    toast('this source can’t be streamed — download it first', 3200);
+    downloadMedia(id);
+    return;
+  }
   if (!data) {
     // downloaded, but captions were never cached — play the video without them
     data = { video: (await offlineVideoMeta(id)), cues: [], cands: {} };

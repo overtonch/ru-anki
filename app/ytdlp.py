@@ -14,7 +14,20 @@ if ROOT not in sys.path:
 from subs import extraction_text, new_text_cues  # noqa: E402
 
 YTDLP = os.path.join(ROOT, ".venv", "bin", "yt-dlp")
-_LANGS = ("ru", "ru-RU", "ru-orig")
+_LANGS = ("ru", "ru-RU", "ru-orig", "rus")
+
+
+def _pick_lang(d):
+    """A Russian subtitle track key from a yt-dlp {lang: [...]} dict — exact
+    match first, then anything starting 'ru' (ru-RU, ru_RU, ru-x-…, russian)."""
+    for want in _LANGS:
+        if want in d:
+            return want
+    for k in d:
+        kl = k.lower().replace("_", "-")
+        if kl == "ru" or kl.startswith("ru-") or kl.startswith("rus"):
+            return k
+    return None
 
 
 def _run(args):
@@ -53,13 +66,11 @@ def fetch_subs(url):
     manual = info.get("subtitles") or {}
     autos = info.get("automatic_captions") or {}
 
-    def pick(d):
-        return next((l for l in _LANGS if l in d), None)
-
-    if pick(manual):
-        kind, lang = "manual", pick(manual)
-    elif pick(autos):
-        kind, lang = "auto", pick(autos)
+    mlang, alang = _pick_lang(manual), _pick_lang(autos)
+    if mlang:
+        kind, lang = "manual", mlang
+    elif alang:
+        kind, lang = "auto", alang
     else:
         raise RuntimeError(
             f"no Russian subtitles for {title!r} "
@@ -68,7 +79,8 @@ def fetch_subs(url):
 
     with tempfile.TemporaryDirectory() as td:
         args = ["--write-subs" if kind == "manual" else "--write-auto-subs",
-                "--skip-download", "--sub-langs", lang, "--sub-format", "vtt",
+                "--skip-download", "--sub-langs", lang,
+                "--sub-format", "vtt/srt/best", "--convert-subs", "vtt",
                 "-o", os.path.join(td, "%(id)s.%(ext)s"), url]
         dl = _run(args)
         vtts = glob.glob(os.path.join(td, "*.vtt"))
