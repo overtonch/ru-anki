@@ -561,7 +561,9 @@
                 border-top:1px solid var(--line-soft); background:var(--bg); }
   .study-show { width:100%; padding:.95rem; border-radius:var(--r-sm); border:1px solid var(--accent);
                 background:var(--accent-soft); color:var(--accent); font-size:1rem; font-weight:650; cursor:pointer; }
-  .study-rate { display:grid; grid-template-columns:repeat(4,1fr); gap:.5rem; }
+  .study-tap { cursor:pointer; -webkit-tap-highlight-color:transparent; }
+  .study-tap:active { background:var(--card-2); }
+  .study-rate { display:grid; grid-template-columns:repeat(3,1fr); gap:.5rem; }
   .study-rate button { padding:.7rem .3rem; border-radius:var(--r-sm); border:1px solid var(--line);
                        background:var(--card-2); color:var(--fg); cursor:pointer; display:flex;
                        flex-direction:column; align-items:center; gap:.15rem; }
@@ -2021,12 +2023,12 @@ function renderStudyCard() {
   const q = audioFirst
     ? `<div class="study-listen">
          <audio id="studyAudio" src="${cu}" preload="auto"></audio>
-         <button class="listen-btn" onclick="playStudyAudio()">🔊 listen</button>
-         <div class="listen-hint">what word don’t you know?</div>
+         <button class="listen-btn" onclick="event.stopPropagation();playStudyAudio()">🔊 listen</button>
+         <div class="listen-hint">tap anywhere to reveal</div>
        </div>`
     : `<div class="study-q">${c.front_html}</div>`;
   $('#studyBody').innerHTML = `
-    <div class="study-scroll">${q}</div>
+    <div class="study-scroll study-tap" onclick="studyReveal()">${q}</div>
     <div class="study-foot"><button class="study-show" onclick="studyReveal()">Show answer</button></div>`;
   if (audioFirst) playStudyAudio();
   prefetchStudyNext();
@@ -2058,7 +2060,6 @@ function studyReveal() {
     </div>
     <div class="study-foot"><div class="study-rate">
       <button class="again" onclick="studyRate(1)"><span class="rl">Again</span><span class="ri">${p[1] || ''}</span></button>
-      <button onclick="studyRate(2)"><span class="rl">Hard</span><span class="ri">${p[2] || ''}</span></button>
       <button class="good" onclick="studyRate(3)"><span class="rl">Good</span><span class="ri">${p[3] || ''}</span></button>
       <button onclick="studyRate(4)"><span class="rl">Easy</span><span class="ri">${p[4] || ''}</span></button>
     </div></div>`;
