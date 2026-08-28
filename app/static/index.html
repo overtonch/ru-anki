@@ -2559,21 +2559,25 @@ async function downloadMedia(id) {
   if (mediaDL[id]) return;
   mediaDL[id] = true;
   mediaCancel[id] = false;
-  renderMediaProgress(id, 'server', 0);
   let q = 240; try { q = +(localStorage.getItem('dlq') || 240); } catch {}
   try {
     let s = await api(`/videos/${id}/download`).catch(() => ({ state: 'idle' }));
-    if (s.state === 'idle' || s.state === 'error')
-      s = await api(`/videos/${id}/download?q=${q}`, { method: 'POST' });   // idempotent server-side
-    for (;;) {
-      if (mediaCancel[id]) throw new Error('cancelled');
-      s = await api(`/videos/${id}/download`);
-      if (s.state === 'error') throw new Error(s.detail || 'server download failed');
-      renderMediaProgress(id, 'server', s.pct);
-      if (s.state === 'done') break;
-      await sleep(2000);
+    if (s.state !== 'done') {              // server needs to fetch it first
+      if (s.state === 'idle' || s.state === 'error') {
+        renderMediaProgress(id, 'server', 0);
+        s = await api(`/videos/${id}/download?q=${q}`, { method: 'POST' });
+      }
+      for (;;) {
+        if (mediaCancel[id]) throw new Error('cancelled');
+        s = await api(`/videos/${id}/download`);
+        if (s.state === 'error') throw new Error(s.detail || 'server download failed');
+        if (s.state === 'done') break;
+        renderMediaProgress(id, 'server', s.pct);
+        await sleep(2000);
+      }
     }
     let last = -2;
+    renderMediaProgress(id, 'phone', 0);
     await opfsSave(id, (p, bytes) => {
       const pct = p ? Math.round(p * 100) : -1;
       if (pct === last) return;
