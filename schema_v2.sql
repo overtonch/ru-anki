@@ -29,6 +29,25 @@ CREATE TABLE IF NOT EXISTS dict_ru (
     gloss    TEXT
 );
 
+-- Reading feature: imported long-form text (EPUB / .txt / pasted). Tap-to-card
+-- while reading reuses the same translate + Anki pipeline as the video watcher.
+CREATE TABLE IF NOT EXISTS texts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    title      TEXT NOT NULL,
+    author     TEXT,
+    kind       TEXT,                     -- 'epub' | 'txt' | 'paste'
+    char_count INTEGER NOT NULL DEFAULT 0,
+    added_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS text_chapters (
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    text_id INTEGER NOT NULL REFERENCES texts(id),
+    idx     INTEGER NOT NULL,
+    title   TEXT,
+    body    TEXT NOT NULL                -- plain text, paragraphs split by blank line
+);
+CREATE INDEX IF NOT EXISTS idx_text_chapters ON text_chapters(text_id, idx);
+
 -- Every word/phrase that has been shown to the user and decided, either way.
 -- Checked (with the static stoplist) before anything is flagged as a candidate
 -- again. reason: 'known' | 'garbage' | 'has_card'.

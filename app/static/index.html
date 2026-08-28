@@ -400,6 +400,83 @@
     #watchView:not(.fs) .transcript { flex:1 1 40%; height:calc(100dvh - 2.6rem); }
   }
 
+  /* ---------------- reading ---------------- */
+  .lib-card { display:flex; gap:.75rem; align-items:center; background:var(--card);
+              border:1px solid var(--line-soft); border-radius:var(--r);
+              padding:.7rem .8rem; margin:.5rem 0; cursor:pointer;
+              transition:transform .1s, background .15s, border-color .15s; }
+  .lib-card:active { transform:scale(.99); background:var(--card-2); }
+  .lib-card .bk { width:34px; height:46px; flex:none; border-radius:.2rem;
+                  background:linear-gradient(135deg,var(--accent),#3f6d94);
+                  display:flex; align-items:center; justify-content:center;
+                  color:#0b1016; font-size:1.1rem; box-shadow:var(--sh); }
+  .lib-card .body { flex:1; min-width:0; }
+  .lib-card .t { font-size:.92rem; font-weight:600; line-height:1.3; }
+  .lib-card .m { font-size:.75rem; color:var(--muted); margin-top:.2rem; }
+  .lib-card .rbar { height:3px; background:var(--line); border-radius:2px; margin-top:.4rem; overflow:hidden; }
+  .lib-card .rbar i { display:block; height:100%; background:var(--accent); }
+
+  #readView { position:fixed; inset:0; z-index:15; background:var(--bg);
+              display:flex; flex-direction:column;
+              padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+  .readbar { display:flex; align-items:center; gap:.5rem; padding:.5rem .9rem;
+             border-bottom:1px solid var(--line-soft); flex:none; }
+  .readbar .rtitle { flex:1; min-width:0; font-size:.82rem; color:var(--fg-dim);
+                     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; text-align:center; }
+  .ricon { background:none; border:0; color:var(--muted); padding:.25rem .35rem; cursor:pointer;
+           display:inline-flex; align-items:baseline; gap:.05rem; }
+  .ricon svg { width:1.15rem; height:1.15rem; fill:none; }
+  #fontBtn span:first-child { font-size:1rem; font-weight:700; }
+  #fontBtn span:last-child { font-size:.7rem; }
+  .rprogress { height:2px; background:var(--line-soft); flex:none; }
+  .rprogress .rfill { height:100%; background:var(--accent); width:0; transition:width .2s; }
+  .readbody { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch;
+              padding:1.4rem 1.15rem 3rem;
+              font-family: Georgia, "Iowan Old Style", "Times New Roman", serif;
+              font-size:var(--rfs,1.12rem); line-height:1.75; color:var(--fg);
+              max-width:38rem; margin:0 auto; width:100%; }
+  #readView[data-fs="s"]  { --rfs:1rem; }
+  #readView[data-fs="m"]  { --rfs:1.12rem; }
+  #readView[data-fs="l"]  { --rfs:1.28rem; }
+  #readView[data-fs="xl"] { --rfs:1.46rem; }
+  .readbody p { margin:0 0 1.05em; }
+  .readbody .rw { cursor:pointer; border-radius:3px; padding:0 .02em;
+                  -webkit-tap-highlight-color:transparent; }
+  .readbody .rw:active { background:var(--accent); color:#0b1016; }
+  .readbody .rw.carded { color:var(--ok); }
+  .readbody .rh { font-weight:700; font-size:1.15em; margin:.2em 0 .8em; display:block;
+                  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  .readnav { display:flex; align-items:center; justify-content:space-between;
+             padding:.5rem 1rem; border-top:1px solid var(--line-soft); flex:none;
+             font-size:.8rem; color:var(--muted); }
+  .readnav .backlink { font-size:.82rem; }
+  .readnav .backlink[disabled] { opacity:.3; pointer-events:none; }
+  #tocPanel { position:absolute; top:0; right:0; bottom:0; width:min(80vw,320px);
+              background:var(--card); border-left:1px solid var(--line); z-index:5;
+              padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+              display:flex; flex-direction:column; box-shadow:-8px 0 30px rgba(0,0,0,.4);
+              animation:tocIn .18s ease; }
+  @keyframes tocIn { from { transform:translateX(100%); } }
+  #tocPanel[hidden] { display:none; }
+  .toc-head { padding:1rem 1.1rem .6rem; font-size:.7rem; text-transform:uppercase;
+              letter-spacing:.07em; color:var(--muted); font-weight:700; }
+  #tocList { overflow-y:auto; flex:1; }
+  #tocList button { display:block; width:100%; text-align:left; background:none; border:0;
+                    color:var(--fg-dim); padding:.7rem 1.1rem; font-size:.88rem;
+                    border-bottom:1px solid var(--line-soft); cursor:pointer; line-height:1.35; }
+  #tocList button.on { color:var(--accent); background:var(--accent-soft); }
+  #tocList button:active { background:var(--card-2); }
+
+  #pasteWrap { position:fixed; inset:0; background:rgba(6,8,11,.6); z-index:20;
+               align-items:center; justify-content:center; padding:1rem;
+               -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px); }
+  #pasteWrap[hidden] { display:none; }
+  #pasteWrap:not([hidden]) { display:flex; }
+  #pasteWrap textarea { width:100%; margin-top:.5rem; padding:.7rem .8rem; font-size:.95rem;
+                        border:1px solid var(--line); border-radius:var(--r-sm);
+                        background:var(--card); color:var(--fg); resize:vertical;
+                        font-family:inherit; -webkit-appearance:none; }
+
   .toast { position:fixed; left:50%; bottom:1.2rem; transform:translateX(-50%);
            background:#2f333c; color:#f1f1f1; padding:.6rem 1rem; border-radius:.5rem; font-size:.9rem;
            opacity:0; transition:opacity .2s; pointer-events:none; max-width:90%; z-index:9; }
@@ -427,17 +504,21 @@
   <!-- LIST VIEW -->
   <div id="listView">
     <div class="addbar">
-      <input type="text" id="url" placeholder="Paste a YouTube link to add"
+      <input type="text" id="url" placeholder="Paste a YouTube link"
              autocapitalize="off" autocomplete="off" spellcheck="false"
              onkeydown="if(event.key==='Enter')addVideo()">
       <button class="btn" id="addBtn" onclick="addVideo()">Add</button>
     </div>
     <div class="status">
-      model
-      <select id="model" class="minisel">
-        <option value="sonnet">Sonnet 5</option>
-        <option value="haiku">Haiku 4.5</option>
-      </select>
+      <span>model
+        <select id="model" class="minisel">
+          <option value="sonnet">Sonnet 5</option>
+          <option value="haiku">Haiku 4.5</option>
+        </select></span>
+      <button class="backlink" onclick="$('#fileInput').click()">＋ import a book / text</button>
+      <button class="backlink" id="pasteBtn" onclick="openPaste()">paste</button>
+      <input type="file" id="fileInput" accept=".epub,.txt,text/plain,application/epub+zip"
+             hidden onchange="importFile(this.files[0])">
       <span id="addStatus"></span>
     </div>
     <div id="videoList"></div>
@@ -521,7 +602,48 @@
       </div>
     </div>
   </div>
+
+  <!-- READ VIEW -->
+  <div id="readView" hidden>
+    <div class="readbar">
+      <button class="backlink" onclick="history.back()">← library</button>
+      <div class="rtitle" id="rTitle"></div>
+      <button class="ricon" id="fontBtn" onclick="cycleReadFont()" aria-label="text size">
+        <span>A</span><span>a</span>
+      </button>
+      <button class="ricon" id="tocBtn" onclick="toggleToc()" aria-label="chapters">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="rprogress"><div class="rfill" id="rFill"></div></div>
+    <div id="readBody" class="readbody"></div>
+    <div class="readnav" id="readNav">
+      <button class="backlink" id="rPrev" onclick="gotoChapter(READ.ch-1)">‹ prev</button>
+      <span id="rChapLabel"></span>
+      <button class="backlink" id="rNext" onclick="gotoChapter(READ.ch+1)">next ›</button>
+    </div>
+    <div id="tocPanel" hidden>
+      <div class="toc-head">Chapters</div>
+      <div id="tocList"></div>
+      <button class="backlink danger" style="margin:.8rem auto" onclick="deleteText()">Remove from library</button>
+    </div>
+  </div>
 </main>
+
+<!-- PASTE TEXT MODAL -->
+<div id="pasteWrap" hidden onclick="if(event.target===this)closePaste()">
+  <div class="modal">
+    <h3>Paste text to read</h3>
+    <input type="text" id="pasteTitle" placeholder="Title (optional)"
+           autocapitalize="words" autocomplete="off">
+    <textarea id="pasteBody" rows="8" placeholder="Paste a chapter, an article, anything in Russian…"
+              autocapitalize="off" autocomplete="off" spellcheck="false"></textarea>
+    <div class="modalbtns">
+      <button class="backlink" onclick="closePaste()">Cancel</button>
+      <button class="btn sm" id="pasteOk" onclick="submitPaste()">Add to library</button>
+    </div>
+  </div>
+</div>
 
 <!-- CARD MODAL -->
 <div id="modalWrap" hidden onclick="if(event.target===this)history.back()">
@@ -546,6 +668,8 @@
 <script>
 const $ = s => document.querySelector(s);
 let VIDEOS = [];
+let TEXTS = [];
+let READ = null;             // { id, meta, ch, carded:Set }
 let CURRENT = null;          // video id in detail view
 let DETAIL_V = null;
 let listTimer = null, sse = null, tickTimer = null, searchTimer = null;
@@ -597,19 +721,17 @@ const SPINNER = '<div class="center-spin"><span class="spin lg"></span></div>';
 let listedOnce = false;
 async function loadVideos() {
   if (!listedOnce) $('#videoList').innerHTML = SPINNER;
+  try { TEXTS = await api('/texts'); } catch {}
   try {
     VIDEOS = await api('/videos');
     listedOnce = true;
   } catch (e) {
     VIDEOS = await offlineVideoList();
-    if (VIDEOS.length) {
-      $('#videoList').innerHTML = '';
-      renderList();
+    $('#videoList').innerHTML = '';
+    renderList();
+    if (VIDEOS.length || TEXTS.length)
       $('#videoList').insertAdjacentHTML('afterbegin',
-        '<div class="empty">offline — showing saved videos</div>');
-    } else {
-      $('#videoList').innerHTML = '<div class="empty">offline — no saved videos</div>';
-    }
+        '<div class="empty">offline — showing saved items</div>');
     return;
   }
   renderList();
@@ -644,25 +766,48 @@ function extractLine(ex) {
 
 function renderList() {
   const box = $('#videoList');
-  if (!VIDEOS.length) {
-    box.innerHTML = '<div class="empty">No videos yet. Paste a link above to start.</div>';
+  if (!VIDEOS.length && !TEXTS.length) {
+    box.innerHTML = '<div class="empty">Nothing yet. Paste a YouTube link, or import a book / text above.</div>';
     return;
   }
   box.innerHTML = '';
-  const newest = VIDEOS[0];
-  const h = document.createElement('div');
-  h.className = 'chan'; h.textContent = 'Most recent';
-  box.appendChild(h);
-  box.appendChild(videoCard(newest, true));
+  const head = t => { const h = document.createElement('div'); h.className = 'chan'; h.textContent = t; box.appendChild(h); };
 
-  const groups = {};
-  for (const v of VIDEOS.slice(1)) (groups[v.channel || 'Unknown channel'] ||= []).push(v);
-  for (const chan of Object.keys(groups).sort((a,b) => a.localeCompare(b))) {
-    const ch = document.createElement('div');
-    ch.className = 'chan'; ch.textContent = chan;
-    box.appendChild(ch);
-    for (const v of groups[chan]) box.appendChild(videoCard(v));
+  if (VIDEOS.length) {
+    head('Most recent');
+    box.appendChild(videoCard(VIDEOS[0], true));
+    const groups = {};
+    for (const v of VIDEOS.slice(1)) (groups[v.channel || 'Unknown channel'] ||= []).push(v);
+    for (const chan of Object.keys(groups).sort((a,b) => a.localeCompare(b))) {
+      head(chan);
+      for (const v of groups[chan]) box.appendChild(videoCard(v));
+    }
   }
+  if (TEXTS.length) {
+    head('Reading');
+    for (const t of TEXTS) box.appendChild(textCard(t));
+  }
+}
+
+function textCard(t) {
+  const el = document.createElement('div');
+  el.className = 'lib-card';
+  let pos = 0;
+  try {
+    const rp = JSON.parse(localStorage.getItem('rp:' + t.id) || 'null');
+    if (rp && t.chapters) pos = Math.min(100, Math.round(((rp.ch + (rp.frac || 0)) / t.chapters) * 100));
+  } catch {}
+  const meta = [t.author, t.chapters > 1 ? `${t.chapters} chapters` : null,
+                `${Math.round((t.char_count || 0) / 1000)}k chars`].filter(Boolean).join(' · ');
+  el.innerHTML = `
+    <div class="bk">📖</div>
+    <div class="body">
+      <div class="t">${escapeHtml(t.title || 'Untitled')}</div>
+      <div class="m">${escapeHtml(meta)}${pos ? ` · ${pos}% read` : ''}</div>
+      ${pos ? `<div class="rbar"><i style="width:${pos}%"></i></div>` : ''}
+    </div>`;
+  el.onclick = () => openText(t.id);
+  return el;
 }
 
 function channelLink(v) {
@@ -1229,7 +1374,7 @@ function updatePreview(span, immediate) {
   const box = $('#modalPreview');
   if (!span) { box.innerHTML = ''; MODAL.preview = MODAL.previewFor = null; return; }
   if (MODAL.previewFor === span) return;            // already showing / fetching this
-  const ck = CURRENT + '|' + span + '|' + (MODAL.sentence || '');
+  const ck = (MODAL.textId ? 't' + MODAL.textId : CURRENT) + '|' + span + '|' + (MODAL.sentence || '');
   if (PVCACHE.has(ck)) {                            // instant on repeat
     const p = PVCACHE.get(ck);
     MODAL.preview = p; MODAL.previewFor = span;
@@ -1253,12 +1398,15 @@ function updatePreview(span, immediate) {
   }).catch(() => {});
   MODAL.pvTimer = setTimeout(async () => {
     try {
-      const p = await api('/translate', {
-        method:'POST', headers:{'content-type':'application/json'},
-        body: JSON.stringify({ video_id: CURRENT, span,
-          subtitle_line_id: MODAL.lineId ?? null,
-          timestamp: MODAL.timestamp, sentence: MODAL.sentence })
-      });
+      const p = MODAL.textId
+        ? await api(`/texts/${MODAL.textId}/translate`, {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ span, sentence: MODAL.sentence }) })
+        : await api('/translate', {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ video_id: CURRENT, span,
+              subtitle_line_id: MODAL.lineId ?? null,
+              timestamp: MODAL.timestamp, sentence: MODAL.sentence }) });
       PVCACHE.set(ck, p);
       if (seq !== MODAL.pvSeq) return;              // superseded
       MODAL.preview = p; MODAL.previewFor = span;
@@ -1285,6 +1433,26 @@ async function confirmCard() {
   const span = $('#modalSpan').value.trim();
   if (!span) { toast('pick a word first'); return; }
   const pv = (MODAL.preview && MODAL.previewFor === span) ? MODAL.preview : null;
+
+  // reading flow — card goes straight to Anki (online only for now)
+  if (MODAL.textId != null) {
+    if (!navigator.onLine) { toast('connect to make cards while reading'); return; }
+    const textId = MODAL.textId, chapter = MODAL.chapterTitle;
+    const sentence = pv ? pv.sentence : MODAL.sentence;
+    closeCardModal(false);
+    try {
+      const r = await api(`/texts/${textId}/card`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ span, sentence, chapter,
+          span_text: pv ? pv.span_text : null,
+          translation: pv ? pv.translation : null,
+          is_phrase: pv ? pv.is_phrase : null }) });
+      markReadCarded(r.span_text || span);
+      toast(`✓ ${r.span_text} — ${r.translation}${r.anki && r.anki.duplicate ? ' (already in Anki)' : ''}`);
+    } catch (e) { toast('couldn’t make card — ' + e.message, 3500); }
+    return;
+  }
+
   const watchCue = MODAL.watchCue;
   const item = {
     client_id: 'c' + Date.now() + Math.random().toString(36).slice(2, 6),
@@ -1897,6 +2065,196 @@ document.addEventListener('pointerdown', e => {
   if (!e.target.closest('[data-cand]')) closeInline(true);
 }, true);
 
+/* ================= reading ================= */
+const RFONTS = ['s', 'm', 'l', 'xl'];
+function applyReadFont() {
+  let f = 'm'; try { f = localStorage.getItem('readFont') || 'm'; } catch {}
+  $('#readView').dataset.fs = RFONTS.includes(f) ? f : 'm';
+}
+function cycleReadFont() {
+  let f = $('#readView').dataset.fs || 'm';
+  f = RFONTS[(RFONTS.indexOf(f) + 1) % RFONTS.length];
+  $('#readView').dataset.fs = f;
+  try { localStorage.setItem('readFont', f); } catch {}
+}
+
+/* --- import --- */
+function openPaste() { $('#pasteBody').value = ''; $('#pasteTitle').value = ''; $('#pasteWrap').hidden = false; $('#pasteBody').focus(); }
+function closePaste() { $('#pasteWrap').hidden = true; }
+async function submitPaste() {
+  const body = $('#pasteBody').value.trim();
+  if (body.length < 20) { toast('paste a bit more text'); return; }
+  setBusy($('#pasteOk'), true, 'adding');
+  try {
+    const r = await api('/texts', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ title: $('#pasteTitle').value.trim() || null, body }) });
+    closePaste();
+    await loadVideos();
+    toast('added — opening'); openText(r.id);
+  } catch (e) { toast('couldn’t add: ' + e.message, 3500); }
+  setBusy($('#pasteOk'), false);
+}
+async function importFile(file) {
+  if (!file) return;
+  if (file.size > 40 * 1024 * 1024) { toast('that file is over 40 MB'); return; }
+  $('#addStatus').textContent = 'importing ' + file.name + '…';
+  try {
+    const fd = new FormData(); fd.append('file', file);
+    const r = await api('/texts/upload', { method: 'POST', body: fd });
+    $('#addStatus').textContent = '';
+    $('#fileInput').value = '';
+    await loadVideos();
+    toast(`added “${r.title}” — opening`); openText(r.id);
+  } catch (e) { $('#addStatus').textContent = 'import failed: ' + e.message; }
+}
+
+/* --- reader --- */
+async function openText(id) {
+  let meta;
+  try { meta = await api('/texts/' + id); }
+  catch (e) { toast('couldn’t open: ' + e.message); return; }
+  let rp = {}; try { rp = JSON.parse(localStorage.getItem('rp:' + id) || '{}'); } catch {}
+  READ = { id, meta, ch: Math.min(rp.ch || 0, meta.chapters.length - 1), carded: new Set(),
+           restore: rp.frac || 0 };
+  $('#listView').hidden = true; $('#detailView').hidden = true;
+  $('#readView').hidden = false;
+  $('#tocPanel').hidden = true;
+  $('#rTitle').textContent = meta.title || 'Reading';
+  applyReadFont();
+  await gotoChapter(READ.ch, true);
+}
+function closeReader() {
+  readSaveProgress();
+  READ = null;
+  $('#readView').hidden = true;
+  $('#tocPanel').hidden = true;
+  $('#listView').hidden = false;
+  loadVideos();
+}
+async function gotoChapter(idx, restore) {
+  if (!READ || idx < 0 || idx >= READ.meta.chapters.length) return;
+  const body = $('#readBody');
+  body.innerHTML = SPINNER;
+  READ.ch = idx;
+  $('#tocPanel').hidden = true;
+  let ch;
+  try { ch = await api(`/texts/${READ.id}/chapters/${idx}`); }
+  catch (e) { body.innerHTML = `<div class="empty">couldn’t load chapter — ${escapeHtml(e.message)}</div>`; return; }
+  READ.carded = new Set((ch.carded || []).map(w => w.toLowerCase().replace(/ё/g, 'е')));
+  renderChapter(ch);
+  const c = READ.meta.chapters[idx];
+  $('#rChapLabel').textContent = `${idx + 1} / ${READ.meta.chapters.length}` +
+    (c && c.title && !/^(chapter|part) /i.test(c.title) ? ` · ${c.title}` : '');
+  $('#rPrev').disabled = idx === 0;
+  $('#rNext').disabled = idx === READ.meta.chapters.length - 1;
+  body.scrollTop = restore && READ.restore ? READ.restore * body.scrollHeight : 0;
+  READ.restore = 0;
+  updateReadProgress();
+  renderToc();
+}
+function renderChapter(ch) {
+  const box = $('#readBody');
+  box.innerHTML = '';
+  const title = (READ.meta.chapters[READ.ch] || {}).title;
+  if (title) {
+    const h = document.createElement('div'); h.className = 'rh'; h.textContent = title;
+    box.appendChild(h);
+  }
+  const paras = ch.body.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+  const seen = new Set();
+  for (const para of paras) {
+    if (title && para.toLowerCase() === title.toLowerCase()) continue;
+    const p = document.createElement('p');
+    // split into sentences so each tapped word carries its own context
+    const sents = para.match(/[^.!?…]+[.!?…]*\s*/g) || [para];
+    for (const sent of sents) {
+      const stext = sent.trim();
+      for (const tok of sent.split(/(\s+)/)) {
+        if (!tok) continue;
+        if (/^\s+$/.test(tok) || !/[А-Яа-яЁёA-Za-z]/.test(tok)) {
+          p.appendChild(document.createTextNode(tok));
+          continue;
+        }
+        const sp = document.createElement('span');
+        const core = tok.replace(/^[^А-Яа-яЁёA-Za-z-]+|[^А-Яа-яЁёA-Za-z-]+$/g, '');
+        sp.className = 'rw';
+        sp.textContent = tok;
+        if (/[А-Яа-яЁё]/.test(core)) {
+          sp.dataset.sent = stext;
+          if (READ.carded.has(core.toLowerCase().replace(/ё/g, 'е'))) sp.classList.add('carded');
+          sp.onclick = () => readTapWord(sp);
+        }
+        p.appendChild(sp);
+      }
+    }
+    box.appendChild(p);
+  }
+}
+function readScrollFrac() {
+  const b = $('#readBody');
+  const max = b.scrollHeight - b.clientHeight;
+  return max > 0 ? Math.min(1, b.scrollTop / max) : 0;
+}
+function updateReadProgress() {
+  if (!READ) return;
+  const n = READ.meta.chapters.length;
+  const frac = (READ.ch + readScrollFrac()) / n;
+  $('#rFill').style.width = (frac * 100).toFixed(1) + '%';
+}
+function readSaveProgress() {
+  if (!READ) return;
+  try {
+    localStorage.setItem('rp:' + READ.id,
+      JSON.stringify({ ch: READ.ch, frac: readScrollFrac() }));
+  } catch {}
+}
+function toggleToc() {
+  const p = $('#tocPanel');
+  p.hidden = !p.hidden;
+  if (!p.hidden) renderToc();
+}
+function renderToc() {
+  if (!READ) return;
+  const list = $('#tocList');
+  list.innerHTML = '';
+  READ.meta.chapters.forEach((c, i) => {
+    const b = document.createElement('button');
+    b.textContent = c.title || `Chapter ${i + 1}`;
+    if (i === READ.ch) b.className = 'on';
+    b.onclick = () => gotoChapter(i);
+    list.appendChild(b);
+  });
+}
+function readTapWord(sp) {
+  const sent = sp.dataset.sent || sp.textContent;
+  const word = sp.textContent.replace(/^[^А-Яа-яЁёA-Za-z-]+|[^А-Яа-яЁёA-Za-z-]+$/g, '');
+  openCardModal({ id: null, text: sent, start_time: null }, word);
+  if (MODAL) { MODAL.textId = READ.id; MODAL.chapterTitle = (READ.meta.chapters[READ.ch] || {}).title || null; }
+}
+function markReadCarded(spanText) {
+  const t = (spanText || '').toLowerCase().replace(/ё/g, 'е');
+  const parts = new Set(t.split(/\s+/));
+  READ && READ.carded.add(t);
+  document.querySelectorAll('#readBody .rw').forEach(sp => {
+    const w = sp.textContent.replace(/^[^А-Яа-яЁёA-Za-z-]+|[^А-Яа-яЁёA-Za-z-]+$/g, '')
+      .toLowerCase().replace(/ё/g, 'е');
+    if (w === t || parts.has(w)) sp.classList.add('carded');
+  });
+}
+async function deleteText() {
+  if (!READ) return;
+  if (!confirm(`Remove “${READ.meta.title}” from your library?\n\nCards you already made stay in Anki.`)) return;
+  const id = READ.id;
+  try { await api('/texts/' + id, { method: 'DELETE' }); } catch (e) { toast('couldn’t remove: ' + e.message); return; }
+  try { localStorage.removeItem('rp:' + id); } catch {}
+  READ = null;
+  $('#tocPanel').hidden = true;
+  $('#readView').hidden = true;
+  $('#listView').hidden = false;
+  loadVideos();
+  toast('removed');
+}
+
 /* ---------------- offline queue + flush ---------------- */
 async function refreshQueuePill() {
   const n = (await idbAll('queue')).length;
@@ -2157,11 +2515,14 @@ async function hardRefresh() {
 // step back one level through the app's views; returns true if it did something
 function navBack() {
   if (!$('#inlineDecide').hidden) { closeInline(true); return true; }
+  if (!$('#pasteWrap').hidden) { closePaste(); return true; }
   if (!$('#modalWrap').hidden) { closeCardModal(); return true; }
+  if (!$('#tocPanel').hidden) { $('#tocPanel').hidden = true; return true; }
   if (!$('#watchView').hidden) {
     if ($('#watchView').classList.contains('fs')) { fsManual = true; exitFs(); return true; }
     closeWatch(); return true;
   }
+  if (!$('#readView').hidden) { closeReader(); return true; }
   if (!$('#detailView').hidden) { showList(); return true; }
   return false;
 }
@@ -2199,10 +2560,19 @@ addEventListener('popstate', () => { navBack(); try { history.pushState({ ru: 1 
 /* ---------------- boot ---------------- */
 if ('serviceWorker' in navigator)
   navigator.serviceWorker.register('/sw.js').catch(() => {});
-addEventListener('pagehide', () => savePos());
+// reader: track scroll for progress + resume
+(() => {
+  const b = $('#readBody');
+  let t = 0;
+  b.addEventListener('scroll', () => {
+    updateReadProgress();
+    if (Date.now() - t > 800) { t = Date.now(); readSaveProgress(); }
+  }, { passive: true });
+})();
+addEventListener('pagehide', () => { savePos(); readSaveProgress(); });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
-    savePos();
+    savePos(); readSaveProgress();
     // leaving the app / locking the screen: switch to background audio so it
     // keeps playing (a <video> / YouTube iframe won't survive this on iOS)
     if (!$('#watchView').hidden && !audioMode && WP && !WP.paused() && audioSrc) {

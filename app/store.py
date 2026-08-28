@@ -508,6 +508,80 @@ def create_candidate(video_id, span_text, is_phrase, sentence, timestamp_start,
     return cid
 
 
+def mark_carded(span_text):
+    """Record that a card now exists for this word/phrase (no candidate row).
+    Used by the reading feature and any other direct card creation."""
+    c = connect()
+    c.execute(
+        """INSERT INTO resolved_words(normalized_text, reason, video_id)
+           VALUES(?, 'has_card', NULL)
+           ON CONFLICT(normalized_text) DO UPDATE SET
+             reason='has_card', resolved_at=datetime('now')""",
+        (lemma_key((span_text or "").strip()),),
+    )
+    c.commit()
+    c.close()
+
+
+# ---------------------------------------------------------------- reading
+
+def add_text(title, author, kind, chapters):
+    """chapters: [{title, body}]. Returns text id."""
+    c = connect()
+    total = sum(len(ch["body"]) for ch in chapters)
+    cur = c.execute(
+        "INSERT INTO texts(title, author, kind, char_count) VALUES(?,?,?,?)",
+        (title, author, kind, total))
+    tid = cur.lastrowid
+    c.executemany(
+        "INSERT INTO text_chapters(text_id, idx, title, body) VALUES(?,?,?,?)",
+        [(tid, i, ch.get("title"), ch["body"]) for i, ch in enumerate(chapters)])
+    c.commit()
+    c.close()
+    return tid
+
+
+def list_texts():
+    c = connect()
+    rows = c.execute(
+        """SELECT t.*, (SELECT count(*) FROM text_chapters ch WHERE ch.text_id=t.id)
+                       AS chapters
+           FROM texts t ORDER BY t.added_at DESC""").fetchall()
+    c.close()
+    return [dict(r) for r in rows]
+
+
+def get_text(text_id):
+    c = connect()
+    t = c.execute("SELECT * FROM texts WHERE id=?", (text_id,)).fetchone()
+    if not t:
+        c.close()
+        return None
+    chs = c.execute(
+        "SELECT idx, title, length(body) AS len FROM text_chapters "
+        "WHERE text_id=? ORDER BY idx", (text_id,)).fetchall()
+    c.close()
+    return {**dict(t), "chapters": [dict(r) for r in chs]}
+
+
+def get_chapter(text_id, idx):
+    c = connect()
+    r = c.execute(
+        "SELECT idx, title, body FROM text_chapters WHERE text_id=? AND idx=?",
+        (text_id, idx)).fetchone()
+    c.close()
+    return dict(r) if r else None
+
+
+def delete_text(text_id):
+    c = connect()
+    c.execute("DELETE FROM text_chapters WHERE text_id=?", (text_id,))
+    n = c.execute("DELETE FROM texts WHERE id=?", (text_id,)).rowcount
+    c.commit()
+    c.close()
+    return n
+
+
 def resolve_candidate(cand_id, decision):
     """decision: 'yes' -> status card_created + resolved_words(has_card);
                  'no'  -> status discarded  + resolved_words(known).

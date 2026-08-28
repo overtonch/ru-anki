@@ -13,7 +13,7 @@ import traceback
 
 import re as _re
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -25,6 +25,7 @@ if HERE not in sys.path:
 
 import anki  # noqa: E402
 import backup  # noqa: E402
+import epub  # noqa: E402
 import heartbeat  # noqa: E402
 import llm  # noqa: E402
 import store  # noqa: E402
@@ -140,6 +141,25 @@ class FlushItem(BaseModel):
 
 class FlushIn(BaseModel):
     items: list[FlushItem]
+
+
+class TextIn(BaseModel):
+    title: str | None = None
+    body: str
+
+
+class TextTranslateIn(BaseModel):
+    span: str
+    sentence: str
+
+
+class TextCardIn(BaseModel):
+    span: str
+    sentence: str
+    chapter: str | None = None
+    span_text: str | None = None
+    translation: str | None = None
+    is_phrase: bool | None = None
 
 
 # ------------------------------------------------------------------ health
@@ -702,6 +722,140 @@ def _make_one_card(video_id, subtitle_line_id, span, timestamp=None, sentence=No
 def gloss(span: str):
     """Instant local-dictionary gloss (no LLM) — shown while /translate runs."""
     return {"span": span, "gloss": store.gloss_for(span)}
+
+
+# ------------------------------------------------------------------ reading
+
+def _translate_ctx(span, ctx):
+    """LLM back-of-card content for a span in a given sentence (no timestamp,
+    no transcript stitching — the caller supplies the context)."""
+    ctx = (ctx or "").strip()
+    g = llm.translate_span(ctx, span)
+    span_text = (g.get("span_text") or span).strip()
+    is_phrase = bool(g.get("is_phrase") or len(span_text.split()) > 1)
+    translation = g.get("translation") or ""
+    sent = (g.get("sentence") or "").strip() or ctx
+    if "\x00" not in store.bold(sent, span_text, is_phrase, "\x00"):
+        sent = ctx
+    front, bolded = anki.front_html(sent, span_text, is_phrase)
+    return {"span_text": span_text, "is_phrase": is_phrase, "translation": translation,
+            "sentence": sent, "front_html": front, "bolded": bolded,
+            "freq": store.freq_hint(store.lemma_key(span_text), is_phrase)}
+
+
+_CYR_W = _re.compile(r"[А-Яа-яЁё][А-Яа-яЁё-]*")
+
+
+@app.get("/texts")
+def texts_list():
+    return store.list_texts()
+
+
+@app.post("/texts")
+def text_create(body: TextIn):
+    if len(body.body.strip()) < 20:
+        raise HTTPException(422, "text is too short")
+    try:
+        parsed = epub.from_plain(body.body, body.title)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    tid = store.add_text(parsed["title"], parsed.get("author"), "paste",
+                         parsed["chapters"])
+    backup.snapshot_async("add-text")
+    return {"id": tid, "title": parsed["title"], "chapters": len(parsed["chapters"])}
+
+
+@app.post("/texts/upload")
+async def text_upload(file: UploadFile = File(...)):
+    data = await file.read()
+    name = (file.filename or "").lower()
+    try:
+        if name.endswith(".epub") or data[:2] == b"PK":
+            parsed = epub.parse(data)
+            kind = "epub"
+        else:
+            parsed = epub.from_plain(data.decode("utf-8", "replace"),
+                                     os.path.splitext(file.filename or "")[0])
+            kind = "txt"
+    except ValueError as e:
+        raise HTTPException(422, f"couldn’t read that file: {e}")
+    tid = store.add_text(parsed["title"], parsed.get("author"), kind,
+                         parsed["chapters"])
+    backup.snapshot_async("add-text")
+    return {"id": tid, "title": parsed["title"], "author": parsed.get("author"),
+            "chapters": len(parsed["chapters"])}
+
+
+@app.get("/texts/{text_id}")
+def text_meta(text_id: int):
+    t = store.get_text(text_id)
+    if not t:
+        raise HTTPException(404, "no such text")
+    return t
+
+
+@app.get("/texts/{text_id}/chapters/{idx}")
+def text_chapter(text_id: int, idx: int):
+    ch = store.get_chapter(text_id, idx)
+    if not ch:
+        raise HTTPException(404, "no such chapter")
+    have = store.card_lemmas()
+    carded = sorted({
+        w for w in {m.group(0) for m in _CYR_W.finditer(ch["body"])}
+        if store.lemma_key(w) in have
+    })
+    return {**ch, "carded": carded}
+
+
+@app.delete("/texts/{text_id}")
+def text_delete(text_id: int):
+    if not store.get_text(text_id):
+        raise HTTPException(404, "no such text")
+    n = store.delete_text(text_id)
+    backup.snapshot_async("delete-text")
+    return {"deleted": n}
+
+
+@app.post("/texts/{text_id}/translate")
+def text_translate(text_id: int, body: TextTranslateIn):
+    if not store.get_text(text_id):
+        raise HTTPException(404, "no such text")
+    try:
+        return _translate_ctx(body.span, body.sentence)
+    except llm.LLMError as e:
+        raise HTTPException(502, f"translation failed: {e}")
+
+
+@app.post("/texts/{text_id}/card")
+def text_card(text_id: int, body: TextCardIn):
+    t = store.get_text(text_id)
+    if not t:
+        raise HTTPException(404, "no such text")
+    if body.span_text and body.translation is not None:
+        span_text = body.span_text.strip()
+        translation = body.translation
+        ph = bool(body.is_phrase) if body.is_phrase is not None else " " in span_text
+        sent = (body.sentence or "").strip()
+        if "\x00" not in store.bold(sent, span_text, ph, "\x00"):
+            sent = body.sentence or ""
+    else:
+        try:
+            p = _translate_ctx(body.span, body.sentence)
+        except llm.LLMError as e:
+            raise HTTPException(502, f"translation failed: {e}")
+        span_text, translation, ph, sent = (
+            p["span_text"], p["translation"], p["is_phrase"], p["sentence"])
+    src = anki.source_html_text(t["title"], t.get("author"), body.chapter)
+    try:
+        res = anki.add_card(sent, span_text, ph, translation, src,
+                            tags=["ru-anki", "reading"])
+    except anki.AnkiError as e:
+        raise HTTPException(502, f"Anki: {e}")
+    store.mark_carded(span_text)
+    _sync_soon()
+    backup.snapshot_async("text-card")
+    return {"span_text": span_text, "translation": translation, "is_phrase": ph,
+            "anki": res, "bolded": res.get("bolded")}
 
 
 @app.post("/translate")

@@ -94,6 +94,12 @@ def source_html(title, channel, url, timestamp):
     return f'<a href="{html.escape(link)}">{inner}</a>' if link else inner
 
 
+def source_html_text(title, author, chapter):
+    """Source field for a card made while reading: 'Author · Title · ch. Name'."""
+    parts = [p for p in (author, title, chapter) if p]
+    return html.escape(" · ".join(parts))
+
+
 def front_html(sentence, span, is_phrase):
     marked = bold(sentence, span, bool(is_phrase), "\x00")
     bolded = "\x00" in marked
