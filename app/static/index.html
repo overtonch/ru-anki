@@ -296,6 +296,7 @@
                padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
                touch-action:manipulation; }   /* no double-tap zoom in the player */
   html.watching, html.watching body { overflow:hidden; overscroll-behavior:none; }
+  html.fs-black, html.fs-black body { background:#000; }
   #watchView button, #watchView .tap-layer, #watchView .cap-overlay,
   #watchView .capw { touch-action:manipulation; }
   #watchView .transcript { touch-action:pan-y; }
@@ -2528,6 +2529,7 @@ const VP_LOCKED = VP_DEFAULT + ', maximum-scale=1, user-scalable=no';
 function enterFs() {
   const el = $('#watchView');
   el.classList.add('fs');
+  document.documentElement.classList.add('fs-black');   // no grey behind any edge gap
   $('#vp').setAttribute('content', VP_LOCKED);   // no pinch-zoom while immersive
   if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
   try {
@@ -2539,6 +2541,7 @@ function enterFs() {
 }
 function exitFs() {
   $('#watchView').classList.remove('fs', 'hidectrls');
+  document.documentElement.classList.remove('fs-black');
   $('#vp').setAttribute('content', VP_DEFAULT);
   clearTimeout(ctrlTimer);
   try { screen.orientation && screen.orientation.unlock && screen.orientation.unlock(); } catch {}
