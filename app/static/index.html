@@ -2882,8 +2882,8 @@ function markWordCarded(span) {
 /* route a tapped word to the right action */
 function wordAction(w, sp, ci, wi) {
   if (w.p && !w.c) return inlineDecide(w.p, sp);
-  if (w.cc) return inlineUndo(w.cc, sp, 'carded');
-  if (w.dd && !w.c) return inlineUndo(w.dd, sp, 'skipped');
+  if (w.cc) return inlineUndo(w.cc, sp, 'carded', w.tr);
+  if (w.dd && !w.c) return inlineUndo(w.dd, sp, 'skipped', w.tr);
   if (w.c) return inlineGreen(w, sp, ci, wi);   // globally green, no candidate here
   watchTapWord(ci, wi);
 }
@@ -2960,13 +2960,18 @@ function inlineDecide(candId, anchor) {
 }
 
 /* ---- undo a card / skip made while watching ---- */
-function inlineUndo(candId, anchor, kind) {
+function inlineUndo(candId, anchor, kind, tr) {
   const word = anchor.textContent.replace(/^[^А-Яа-яЁёA-Za-z-]+|[^А-Яа-яЁёA-Za-z-]+$/g, '');
   $('#inlineDecide').dataset.cand = candId;
-  _openInlinePop(anchor, word,
-    kind === 'carded' ? '— you made a card for this' : '— you skipped this', '',
+  const fallback = kind === 'carded' ? '— you have a card for this' : '— you skipped this';
+  _openInlinePop(anchor, word, tr ? '— ' + tr : fallback, '',
     `<button class="id-no" onclick="closeInline(true)">keep</button>
      <button class="id-yes" onclick="inlineUndoCommit('${kind}')">${kind === 'carded' ? 'remove card' : 'add back to review'}</button>`);
+  if (!tr) api('/words/' + encodeURIComponent(word)).then(d => {
+    const t = d && (d.translation || d.gloss);
+    if (t && !$('#inlineDecide').hidden && $('#inlineDecide').dataset.cand == candId)
+      $('#idTr').textContent = '— ' + t;
+  }).catch(() => {});
 }
 async function inlineUndoCommit(kind) {
   const id = +$('#inlineDecide').dataset.cand;
