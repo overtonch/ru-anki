@@ -262,12 +262,25 @@
                  object-fit:contain; }
   .tap-layer { position:absolute; inset:0; z-index:2; background:transparent; border:0;
                cursor:pointer; }
-  .wctrls { display:flex; gap:.5rem; padding:.55rem .9rem; flex:none; }
+  .wctrls { display:flex; flex-wrap:wrap; gap:.5rem; padding:.55rem .9rem; flex:none; }
   .wctrls button { flex:1; padding:.62rem; border:1px solid var(--line); background:var(--card-2);
                    color:var(--fg-dim); border-radius:var(--r-sm); font-size:.86rem; cursor:pointer;
                    display:inline-flex; align-items:center; justify-content:center; gap:.35rem;
                    transition:border-color .15s, background .15s; }
   .wctrls button:active { background:var(--line-soft); border-color:var(--accent); }
+  #audioBtn { flex-basis:100%; }
+  #audioBtn.on { background:var(--accent-soft); border-color:var(--accent); color:var(--fg); }
+
+  #audioStage { display:none; }
+  #watchView.audiomode #ytplayer { display:none; }
+  #watchView.audiomode #audioStage {
+      display:flex; flex-direction:column; align-items:center; justify-content:center;
+      gap:1.1rem; position:absolute; inset:0; z-index:1; background:#000;
+      padding:1.5rem; text-align:center; }
+  #audioStage img[src=""], #audioStage img:not([src]) { display:none; }
+  #audioStage img { width:min(58%, 240px); border-radius:.6rem; opacity:.92; }
+  #audioStage .audiolabel { color:#fff; font-size:.92rem; display:flex; flex-direction:column; gap:.25rem; }
+  #audioStage .audiolabel span { color:var(--muted); font-size:.78rem; }
   .cap-overlay { position:absolute; left:0; right:0; bottom:.5rem; text-align:center;
                  z-index:3; pointer-events:none; padding:0 .7rem; color:#fff; font-weight:600;
                  text-shadow:0 1px 3px rgba(0,0,0,.9), 0 0 10px rgba(0,0,0,.6); }
@@ -464,6 +477,10 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 21.5C4 20 1.5 16.5 1.5 12.5H0l3-3 3 3H4.5c0 3.5 2 6.4 5 7.8zM16.5 2.5C20 4 22.5 7.5 22.5 11.5H24l-3 3-3-3h1.5c0-3.5-2-6.4-5-7.8zM12 7.3l4.7 4.7L12 16.7 7.3 12z"/></svg>
         turn your phone sideways
       </div>
+      <div id="audioStage">
+        <img id="audioArt" alt="">
+        <div class="audiolabel">🎧 background audio<span>lock the screen — it keeps playing</span></div>
+      </div>
       <button class="fs-seek prev" onclick="seekLine(-1)" aria-label="previous line">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6a1 1 0 0 1 2 0v4.6l7.5-4.9A1 1 0 0 1 19 6.5v11a1 1 0 0 1-1.5.8L10 13.4V18a1 1 0 0 1-2 0z"/></svg>
       </button>
@@ -478,6 +495,7 @@
       <button onclick="seekLine(-1)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6a1 1 0 0 1 2 0v4.6l7.5-4.9A1 1 0 0 1 19 6.5v11a1 1 0 0 1-1.5.8L10 13.4V18a1 1 0 0 1-2 0z"/></svg> prev line</button>
       <button onclick="seekLine(1)">next line <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 6a1 1 0 0 0-2 0v4.6L6.5 5.7A1 1 0 0 0 5 6.5v11a1 1 0 0 0 1.5.8l7.5-4.9V18a1 1 0 0 0 2 0z"/></svg></button>
       <button id="fsBtn" onclick="toggleFs()" title="full screen">⛶ full screen</button>
+      <button id="audioBtn" onclick="toggleAudioMode()">🎧 background audio</button>
     </div>
     <div class="watchhint">tap a word to card it · <span class="dot"></span> carded · <span class="dot y"></span> suggested · tap video to pause</div>
     <div id="transcript" class="transcript"></div>
@@ -518,6 +536,7 @@ let DETAIL_V = null;
 let listTimer = null, sse = null, tickTimer = null, searchTimer = null;
 // watch view
 let ytPlayer = null, ytApiP = null, capTimer = null, WP = null, localURL = null;
+let WDATA = null, bgAudio = null, audioMode = false, audioURL = null;
 let WCUES = [], WCANDS = {}, wActive = -1, wUserScroll = 0, wPausedForModal = false;
 
 function toast(msg, ms=2400) {
@@ -1263,19 +1282,50 @@ async function openWatch(id) {
 
   WCUES = data.cues || [];
   WCANDS = data.cands || {};
-  wActive = -1; WP = null;
+  WDATA = data;
+  wActive = -1; WP = null; audioMode = false;
   $('#detailView').hidden = true;
   $('#watchView').hidden = false;
+  $('#watchView').classList.remove('audiomode');
   $('#capOverlay').textContent = 'tap to play';
-  $('#ytplayer').innerHTML = '';
   fsManual = false;
   if (matchMedia('(orientation: landscape)').matches) enterFs(); else exitFs();
   renderTranscript();
+  refreshAudioBtn();
+  const resumeAt = loadPos(id);
+  startPlayer(id, resumeAt);
+  if (resumeAt) toast('picked up at ' + fmtTime(resumeAt));
+}
 
-  if (haveLocal) return useLocalVideo(id, data.video);
+/* ---- resume where you left off (per video, this device) ---- */
+let lastPosSave = 0;
+function loadPos(id) {
+  try { const v = parseInt(localStorage.getItem('wp:' + id) || '0', 10);
+        return v > 10 ? v : 0; } catch { return 0; }
+}
+function savePos() {
+  if (!WDATA || !WP) return;
+  const t = WP.time(), d = WP.dur();
+  if (d && t > 5 && t < d - 8) {
+    try { localStorage.setItem('wp:' + WDATA.video.id, String(Math.floor(t))); } catch {}
+  }
+}
+function clearPos(id) { try { localStorage.removeItem('wp:' + id); } catch {} }
+
+/* build the visible player (local <video> or YouTube iframe) for WDATA */
+async function startPlayer(id, seekTo = 0) {
+  const data = WDATA; if (!data) return;
+  teardownVideo();
+  if (await opfsHas(id)) {
+    await useLocalVideo(id, data.video);
+    if (seekTo && WP) {
+      WP.seek(seekTo);
+      if (WP.el) WP.el.addEventListener('loadedmetadata', () => WP.seek(seekTo), { once: true });
+    }
+    return;
+  }
   try { await loadYTApi(); }
   catch { toast('couldn’t load the YouTube player'); closeWatch(); return; }
-  if (ytPlayer) { try { ytPlayer.destroy(); } catch {} ytPlayer = null; }
   ytPlayer = new YT.Player('ytplayer', {
     videoId: data.video.youtube_id,
     playerVars: { playsinline: 1, rel: 0, modestbranding: 1, controls: 0,
@@ -1290,11 +1340,12 @@ async function openWatch(id) {
           seek: t => e.target.seekTo(t, true),
           rate: r => e.target.setPlaybackRate(r),
         };
+        if (seekTo) { try { e.target.seekTo(seekTo, true); } catch {} }
         try { e.target.playVideo(); } catch {}
         clearInterval(capTimer); capTimer = setInterval(tick, 120);
         setupMediaSession(data.video);
       },
-      onStateChange: e => onPlayState(e.data === 1),
+      onStateChange: e => { onPlayState(e.data === 1); if (e.data === 0) clearPos(data.video.id); },
       onError: () => { $('#capOverlay').textContent = '⚠ this video can’t be embedded'; },
     },
   });
@@ -1315,10 +1366,114 @@ async function useLocalVideo(id, meta) {
   };
   vid.addEventListener('play', () => onPlayState(true));
   vid.addEventListener('pause', () => onPlayState(false));
-  vid.addEventListener('ended', () => onPlayState(false));
+  vid.addEventListener('ended', () => { onPlayState(false); clearPos(id); });
   clearInterval(capTimer); capTimer = setInterval(tick, 120);
   setupMediaSession(meta);
   vid.play().catch(() => {});
+}
+
+function teardownVideo() {
+  if (ytPlayer) { try { ytPlayer.destroy(); } catch {} ytPlayer = null; }
+  const v = $('#ytplayer').querySelector('video');
+  if (v) { try { v.pause(); v.removeAttribute('src'); v.load(); } catch {} }
+  $('#ytplayer').innerHTML = '';
+  try { if (localURL) URL.revokeObjectURL(localURL); } catch {}
+  localURL = null;
+}
+function teardownAudio() {
+  if (bgAudio) {
+    try { bgAudio.pause(); bgAudio.removeAttribute('src'); bgAudio.load(); bgAudio.remove(); } catch {}
+    bgAudio = null;
+  }
+  try { if (audioURL) URL.revokeObjectURL(audioURL); } catch {}
+  audioURL = null;
+}
+
+/* ---- background audio: an <audio> element keeps playing with the screen off,
+        which a <video> element / YouTube iframe will not do on iOS ---- */
+function refreshAudioBtn() {
+  const b = $('#audioBtn'); if (!b) return;
+  b.classList.toggle('on', audioMode);
+  b.textContent = audioMode ? '🎬 back to video' : '🎧 background audio';
+}
+async function toggleAudioMode() {
+  const id = WDATA && WDATA.video.id; if (!id) return;
+  const at = WP ? WP.time() : 0;
+  if (audioMode) {
+    audioMode = false;
+    $('#watchView').classList.remove('audiomode');
+    teardownAudio();
+    await startPlayer(id, at);
+    refreshAudioBtn();
+  } else {
+    await enterAudioMode(id, at);
+  }
+}
+async function enterAudioMode(id, at) {
+  const btn = $('#audioBtn');
+  let src, isBlob = false;
+  if (await opfsHas(id)) { src = await opfsURL(id); isBlob = true; }   // reuse the downloaded mp4
+  else {
+    if (!navigator.onLine) { toast('background audio needs a connection, or download the video first'); return; }
+    src = await ensureAudioFile(id, btn);
+    if (!src) { refreshAudioBtn(); return; }
+  }
+  const rate = parseFloat((($('#speeds .on') || {}).dataset || {}).r || '1') || 1;
+  teardownVideo();
+  teardownAudio();
+  audioURL = isBlob ? src : null;
+  bgAudio = new Audio();
+  bgAudio.preload = 'auto';
+  bgAudio.setAttribute('playsinline', '');
+  bgAudio.src = src;
+  $('.player-wrap').appendChild(bgAudio);
+  WP = {
+    time: () => bgAudio.currentTime || 0, dur: () => bgAudio.duration || 0,
+    play: () => bgAudio.play().catch(() => {}), pause: () => bgAudio.pause(),
+    paused: () => bgAudio.paused, seek: t => { try { bgAudio.currentTime = t; } catch {} },
+    rate: r => { bgAudio.playbackRate = r; }, el: bgAudio, audio: true,
+  };
+  bgAudio.addEventListener('play', () => onPlayState(true));
+  bgAudio.addEventListener('pause', () => onPlayState(false));
+  bgAudio.addEventListener('ended', () => { onPlayState(false); clearPos(id); });
+  bgAudio.addEventListener('loadedmetadata', () => { if (at) WP.seek(at); });
+  if (at) bgAudio.currentTime = at;
+  bgAudio.playbackRate = rate;
+  clearInterval(capTimer); capTimer = setInterval(tick, 120);
+  audioMode = true;
+  $('#watchView').classList.add('audiomode');
+  const art = (WDATA.video && WDATA.video.thumbnail_url) || '';
+  if (art) $('#audioArt').src = art; else $('#audioArt').removeAttribute('src');
+  $('#capOverlay').textContent = '';
+  setupMediaSession(WDATA.video);
+  bgAudio.play().catch(() => { onPlayState(false); toast('tap the screen to start'); });
+  refreshAudioBtn();
+}
+async function ensureAudioFile(id, btn) {
+  const label = btn ? btn.textContent : '';
+  try {
+    let st = await api(`/videos/${id}/audio/status`);
+    if (st.state !== 'done') {
+      if (btn) btn.textContent = '🎧 fetching audio…';
+      await api(`/videos/${id}/audio`, { method: 'POST' });
+      for (let i = 0; i < 150; i++) {
+        await sleep(1000);
+        st = await api(`/videos/${id}/audio/status`);
+        if (btn && st.pct) btn.textContent = `🎧 fetching audio ${Math.round(st.pct)}%`;
+        if (st.state === 'done') break;
+        if (st.state === 'error') {
+          toast('audio download failed' + (st.detail ? ': ' + st.detail : ''), 4000);
+          if (btn) btn.textContent = label; return null;
+        }
+      }
+    }
+    if (btn) btn.textContent = label;
+    return `/videos/${id}/audio`;
+  } catch (e) {
+    toast('audio unavailable: ' + e.message);
+    if (btn) btn.textContent = label;
+    return null;
+  }
 }
 
 function onPlayState(playing) {
@@ -1347,12 +1502,14 @@ function setupMediaSession(meta) {
 }
 
 function closeWatch() {
+  savePos();
   clearInterval(capTimer); capTimer = null;
   clearTimeout(ctrlTimer);
   if (WP) { try { WP.pause(); } catch {} }
-  if (ytPlayer) { try { ytPlayer.destroy(); } catch {} ytPlayer = null; }
-  try { if (localURL) URL.revokeObjectURL(localURL); } catch {}
-  localURL = null; WP = null;
+  teardownVideo();
+  teardownAudio();
+  WP = null; WDATA = null; audioMode = false;
+  $('#watchView').classList.remove('audiomode');
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
   wActive = -1;
   exitFs();
@@ -1390,7 +1547,7 @@ function updateRotateHint() {
   const el = $('#watchView');
   const portrait = matchMedia('(orientation: portrait)').matches;
   el.classList.toggle('needrotate',
-    el.classList.contains('fs') && portrait && !orientationLocked);
+    el.classList.contains('fs') && portrait && !orientationLocked && !audioMode);
 }
 function exitFs() {
   $('#watchView').classList.remove('fs', 'hidectrls', 'needrotate');
@@ -1462,6 +1619,7 @@ function tick() {
       duration: WP.dur(), position: Math.min(WP.time(), WP.dur()),
       playbackRate: WP.el ? WP.el.playbackRate : 1 }); } catch {}
   }
+  if (Date.now() - lastPosSave > 4000) { lastPosSave = Date.now(); savePos(); }
   const idx = cueIdxAt(WP.time());
   if (idx === wActive) return;
   wActive = idx;
@@ -1859,11 +2017,13 @@ addEventListener('popstate', () => { navBack(); try { history.pushState({ ru: 1 
 /* ---------------- boot ---------------- */
 if ('serviceWorker' in navigator)
   navigator.serviceWorker.register('/sw.js').catch(() => {});
+addEventListener('pagehide', () => savePos());
+document.addEventListener('visibilitychange', () => { if (document.hidden) savePos(); });
 $('#speeds').onclick = e => {
   const b = e.target.closest('button');
-  if (!b || !ytPlayer) return;
+  if (!b) return;
   $('#speeds').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
-  try { ytPlayer.setPlaybackRate(parseFloat(b.dataset.r)); } catch {}
+  try { WP && WP.rate(parseFloat(b.dataset.r)); } catch {}
 };
 // re-check the connection every 20s while the tab is visible
 setInterval(() => { if (!document.hidden) probeHealth(); }, 20000);

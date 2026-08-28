@@ -218,6 +218,13 @@ def delete_video(video_id: int):
     if not store.get_video(video_id):
         raise HTTPException(404, "no such video")
     EXTRACT_STATUS.pop(video_id, None)
+    AUDIO_STATUS.pop(video_id, None)
+    ap = ytdlp.audio_path(video_id)
+    if ap:
+        try:
+            os.remove(ap)
+        except OSError:
+            pass
     n = store.delete_video(video_id)
     backup.snapshot_async("delete-video")
     return {"deleted": n}
@@ -277,6 +284,69 @@ def media(video_id: int):
     return FileResponse(v["media_path"], media_type="video/mp4",
                         headers={"Accept-Ranges": "bytes",
                                  "Cache-Control": "no-store"})
+
+
+AUDIO_STATUS = {}   # video_id -> {"state","pct","detail"}
+
+
+def _run_audio_download(video_id, url):
+    AUDIO_STATUS[video_id] = {"state": "running", "pct": 0.0, "detail": "starting"}
+    try:
+        _, size = ytdlp.download_audio(
+            url, video_id,
+            progress=lambda p: AUDIO_STATUS.__setitem__(
+                video_id, {"state": "running", "pct": round(p, 1),
+                           "detail": f"{p:.0f}%"}))
+        AUDIO_STATUS[video_id] = {"state": "done", "pct": 100.0,
+                                  "detail": f"{size // 1_000_000} MB"}
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        AUDIO_STATUS[video_id] = {"state": "error", "pct": 0.0, "detail": str(e)[:200]}
+
+
+@app.post("/videos/{video_id}/audio")
+def audio_download(video_id: int, background: BackgroundTasks):
+    v = store.get_video(video_id)
+    if not v:
+        raise HTTPException(404, "no such video")
+    if ytdlp.audio_path(video_id):
+        return {"video_id": video_id, "state": "done"}
+    if AUDIO_STATUS.get(video_id, {}).get("state") == "running":
+        return {"video_id": video_id, "state": "running"}
+    AUDIO_STATUS[video_id] = {"state": "running", "pct": 0.0, "detail": "queued"}
+    background.add_task(_run_audio_download, video_id, v["url"])
+    return {"video_id": video_id, "state": "running"}
+
+
+@app.get("/videos/{video_id}/audio/status")
+def audio_status(video_id: int):
+    st = AUDIO_STATUS.get(video_id)
+    if st:
+        return st
+    return {"state": "done" if ytdlp.audio_path(video_id) else "idle",
+            "pct": 100.0 if ytdlp.audio_path(video_id) else 0.0}
+
+
+@app.get("/videos/{video_id}/audio")
+def audio_file(video_id: int):
+    path = ytdlp.audio_path(video_id)
+    if not path or not os.path.exists(path):
+        raise HTTPException(404, "not downloaded")
+    return FileResponse(path, media_type="audio/mp4",
+                        headers={"Accept-Ranges": "bytes",
+                                 "Cache-Control": "no-store"})
+
+
+@app.delete("/videos/{video_id}/audio")
+def delete_audio(video_id: int):
+    path = ytdlp.audio_path(video_id)
+    if path:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    AUDIO_STATUS.pop(video_id, None)
+    return {"ok": True}
 
 
 @app.delete("/videos/{video_id}/media")
@@ -533,7 +603,8 @@ def watch(video_id: int):
         out.append({"s": cue["s"], "e": cue["e"], "text": cue["text"], "words": words})
     return {
         "video": {k: v.get(k) for k in
-                  ("id", "title", "channel", "url", "youtube_id", "duration")},
+                  ("id", "title", "channel", "url", "youtube_id", "duration",
+                   "thumbnail_url")},
         "cues": out,
         "card_count": len(have),
         "cands": {r["id"]: {"span": r["span_text"], "tr": r["translation"]}

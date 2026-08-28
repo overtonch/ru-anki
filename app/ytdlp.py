@@ -124,6 +124,44 @@ def download_media(url, video_id, height=360, progress=None):
     return path, os.path.getsize(path)
 
 
+def audio_path(video_id):
+    """Path to the downloaded audio-only file for this video, or None."""
+    hits = [f for f in glob.glob(os.path.join(MEDIA_DIR, f"{video_id}.audio.*"))
+            if not f.endswith((".part", ".ytdl"))]
+    return hits[0] if hits else None
+
+
+def download_audio(url, video_id, progress=None):
+    """Download an audio-only m4a (AAC) for background / screen-off listening.
+    -> (path, bytes). Much smaller and faster than the video. `progress(pct)`."""
+    os.makedirs(MEDIA_DIR, exist_ok=True)
+    for old in glob.glob(os.path.join(MEDIA_DIR, f"{video_id}.audio.*")):
+        try:
+            os.remove(old)
+        except OSError:
+            pass
+    fmt = "ba[ext=m4a]/ba[acodec^=mp4a]/ba/b"
+    out = os.path.join(MEDIA_DIR, f"{video_id}.audio.%(ext)s")
+    proc = subprocess.Popen(
+        [YTDLP, "-f", fmt, "-x", "--audio-format", "m4a", "--no-playlist",
+         "--newline", "--no-part", "-o", out, url],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    tail = []
+    for line in proc.stdout:
+        tail.append(line)
+        if progress and "[download]" in line and "%" in line:
+            try:
+                progress(float(line.split("%")[0].split()[-1]))
+            except (ValueError, IndexError):
+                pass
+    if proc.wait() != 0:
+        raise RuntimeError("yt-dlp audio download failed: " + "".join(tail[-6:])[:500])
+    path = audio_path(video_id)
+    if not path:
+        raise RuntimeError("audio download produced no file")
+    return path, os.path.getsize(path)
+
+
 def subtitle_lines(raw_vtt):
     """-> list of (start_time 'HH:MM:SS', text): de-overlapped cues, one short
     fragment of genuinely-new words each. Backs live search + sentence rebuild."""
