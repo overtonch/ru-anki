@@ -19,6 +19,7 @@ Subcommands:
       build an Anki deck from this video's confirmed_unknown candidates
       and mark them exported.
 """
+import functools
 import json
 import os
 import re
@@ -44,17 +45,26 @@ def _morph():
     return _MORPH
 
 
+@functools.lru_cache(maxsize=300_000)
+def _lemma_one(tok: str) -> str:
+    return norm(_morph().parse(tok)[0].normal_form)
+
+
 def lemma_key(span: str) -> str:
     """Lookup key for stoplist / known_lexicon.
 
     Single word -> its pymorphy3 lemma (so an inflected candidate matches the
     lemma frequency list and a confirmed 'known' word covers all its forms).
     Multi-word phrase -> the ё-folded lowercased phrase (phrases are never in
-    the lemma stoplist, so they always pass the filter)."""
+    the lemma stoplist, so they always pass the filter).
+
+    Per-token lemmatisation is memoised — the same surface forms recur heavily
+    across a transcript and across requests, and pymorphy parse is the pipeline's
+    single biggest CPU cost."""
     s = norm(span)
     toks = [t for t in re.split(r"[^а-я-]+", s) if t]
     if len(toks) == 1:
-        return norm(_morph().parse(toks[0])[0].normal_form)
+        return _lemma_one(toks[0])
     return s
 
 

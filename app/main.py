@@ -50,8 +50,9 @@ backup.start_scheduler()
 
 
 def _startup_maintenance():
-    """One-off, in the background: fill in channel/thumbnail for old rows, and
-    re-index subtitle_lines to the current de-overlapped form."""
+    """Background: fill in channel/thumbnail for old rows. Re-index
+    subtitle_lines only for videos that have none (the de-overlap format is
+    stable now — no need to rewrite identical rows on every boot)."""
     for v in store.videos_missing_meta():
         try:
             m = ytdlp.fetch_meta(v["url"])
@@ -61,10 +62,12 @@ def _startup_maintenance():
         except Exception as e:  # noqa: BLE001
             print(f"[meta] backfill failed for video {v['id']}: {e}")
     for v in store.list_videos():
+        if v.get("lines"):
+            continue
         try:
             full = store.get_video(v["id"])
-            lines = ytdlp.subtitle_lines(full["raw_subs"])
-            store.replace_subtitle_lines(v["id"], lines)
+            store.replace_subtitle_lines(v["id"], ytdlp.subtitle_lines(full["raw_subs"]))
+            print(f"[reindex] video {v['id']}: indexed")
         except Exception as e:  # noqa: BLE001
             print(f"[reindex] video {v['id']} failed: {e}")
 
@@ -763,8 +766,7 @@ def candidates(video_id: int, status: str = "pending", sort: str = "yield"):
     v = store.get_video(video_id)
     title = v["title"] if v else ""
     have = store.card_lemmas() | store.known_family_lemmas()
-    counts = store.lemma_counts(video_id)
-    sidx = store.stem_line_index(store.transcript_texts(video_id))
+    counts = store.lemma_counts(video_id)     # from the cached inverted index
     for r in rows:
         front, bolded = anki.front_html(r["sentence"], r["span_text"], r["is_phrase"])
         r["front_html"] = front
@@ -773,7 +775,7 @@ def candidates(video_id: int, status: str = "pending", sort: str = "yield"):
         r["duplicate"] = r["normalized_text"] in have
         r["freq"] = store.freq_hint(r["normalized_text"], r["is_phrase"])
         r["count"] = 1 if r["is_phrase"] else counts.get(r["normalized_text"], 1)
-        r["sentence_count"] = 1 if r["is_phrase"] else store.occurrence_count(r["span_text"], sidx)
+        r["sentence_count"] = r["count"]
 
     if sort == "yield":
         # most repeated first; among ties, the rarer word (higher rank / no rank)

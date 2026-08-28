@@ -212,6 +212,7 @@ def replace_subtitle_lines(video_id, lines):
         "SELECT count(*) FROM subtitle_lines WHERE video_id=?", (video_id,)
     ).fetchone()[0]
     c.close()
+    _LEMMA_IDX.pop(video_id, None)          # transcript changed — drop the cache
     return n
 
 
@@ -376,31 +377,30 @@ def _score_sentence(text, span, stems, rank_of):
 
 
 def word_occurrences(lemma, per_video=10):
-    """Every place `lemma` (any inflection) is spoken, grouped by video.
+    """Every place `lemma` (any inflection) is spoken, grouped by video. Reads
+    the cached per-video inverted index — no transcript scan.
     -> [{video_id, title, youtube_id, thumbnail_url, count, hits:[{t,text}]}]."""
-    lemma = norm(lemma)
+    lemma = lemma_key(lemma)
     c = connect()
     vids = c.execute(
         "SELECT id, title, url, thumbnail_url FROM videos ORDER BY id DESC").fetchall()
+    c.close()
     out = []
     for v in vids:
-        rows = c.execute(
-            "SELECT start_time, text FROM subtitle_lines WHERE video_id=? ORDER BY id",
-            (v["id"],)).fetchall()
+        texts, times, idx = _lemma_index(v["id"])
+        lines = sorted(set(idx.get(lemma, ())))
+        if not lines:
+            continue
         hits, last = [], -9
-        for i, r in enumerate(rows):
-            if any(lemma_key(t) == lemma for t in _CYR_TOKEN.findall(r["text"] or "")):
-                if i - last >= 2:
-                    hits.append({"t": (r["start_time"] or "")[:8],
-                                 "text": (r["text"] or "").strip()})
-                last = i
-        if hits:
-            out.append({
-                "video_id": v["id"], "title": v["title"],
-                "youtube_id": youtube_id(v["url"]),
-                "thumbnail_url": _thumb(v["url"], v["thumbnail_url"]),
-                "count": len(hits), "hits": hits[:per_video]})
-    c.close()
+        for i in lines:
+            if i - last >= 2:
+                hits.append({"t": times[i][:8], "text": texts[i].strip()})
+            last = i
+        out.append({
+            "video_id": v["id"], "title": v["title"],
+            "youtube_id": youtube_id(v["url"]),
+            "thumbnail_url": _thumb(v["url"], v["thumbnail_url"]),
+            "count": len(hits), "hits": hits[:per_video]})
     return out
 
 
@@ -420,30 +420,43 @@ def word_status(lemma):
     return dict(cand) if cand else None, members
 
 
-def transcript_texts(video_id):
+_TS_CYR = _re.compile(r"[А-Яа-яЁё][А-Яа-яЁё-]*")
+_LEMMA_IDX = {}          # video_id -> (line_texts, line_times, {lemma: [line idx]})
+
+
+def _lemma_index(video_id):
+    """Cached inverted index for one video's transcript: lemma -> line indices,
+    built with the (memoised) lemmatiser once and reused by every count / search
+    / sentence-picker path. Invalidated whenever the lines are rewritten."""
+    got = _LEMMA_IDX.get(video_id)
+    if got is not None:
+        return got
     c = connect()
-    rows = c.execute("SELECT text FROM subtitle_lines WHERE video_id=? ORDER BY id",
-                     (video_id,)).fetchall()
+    rows = c.execute(
+        "SELECT start_time, text FROM subtitle_lines WHERE video_id=? ORDER BY id",
+        (video_id,)).fetchall()
     c.close()
-    return [r["text"] for r in rows]
-
-
-def stem_line_index(texts):
-    """stem -> set(line indices) — for a cheap 'how many times does this word
-    appear' count without re-scanning the transcript per candidate."""
+    texts = [r["text"] or "" for r in rows]
+    times = [(r["start_time"] or "") for r in rows]
     idx = {}
     for i, t in enumerate(texts):
-        for tok in _re.split(r"[^а-яёa-z-]+", norm(t)):
-            if len(tok) >= 3:
-                idx.setdefault(_legacy._stem(tok), set()).add(i)
-    return idx
+        for tok in _TS_CYR.findall(t):
+            idx.setdefault(lemma_key(tok), []).append(i)
+    got = _LEMMA_IDX[video_id] = (texts, times, idx)
+    return got
 
 
-def occurrence_count(span, idx):
-    lines = set()
-    for st in _stems(span):
-        lines |= idx.get(st, set())
-    return len(lines)
+def _drop_lemma_index(video_id):
+    _LEMMA_IDX.pop(video_id, None)
+
+
+def transcript_texts(video_id):
+    return list(_lemma_index(video_id)[0])
+
+
+def occurrence_count(lemma, video_id):
+    """How many transcript lines contain `lemma` (any inflection)."""
+    return len(set(_lemma_index(video_id)[2].get(lemma_key(lemma), ())))
 
 
 def rank_map(words):
@@ -478,18 +491,12 @@ def candidate_windows(cand_id, limit=6):
     if not cand:
         return []
     span = cand["span_text"]
-    stems = _stems(span)
-    c = connect()
-    rows = c.execute(
-        "SELECT start_time, text FROM subtitle_lines WHERE video_id=? ORDER BY id",
-        (cand["video_id"],)).fetchall()
-    c.close()
-    texts = [r["text"] for r in rows]
-    times = [r["start_time"] or "" for r in rows]
+    texts, times, idx = _lemma_index(cand["video_id"])
+    lines = sorted(set(idx.get(lemma_key(span), ())))
 
     out, last = [], -99
-    for i, t in enumerate(texts):
-        if not _contains(t, span, stems) or i - last < 3:
+    for i in lines:
+        if i - last < 3:
             continue
         raw = _re.sub(r"\s+", " ",
                       " ".join(texts[max(0, i - 2):i + 3])).strip()
@@ -600,23 +607,14 @@ def gloss_for(span):
         c.close()
 
 
-_CYR_TOKEN = _re.compile(r"[А-Яа-яЁё][А-Яа-яЁё-]*")
+_CYR_TOKEN = _TS_CYR
 
 
 def lemma_counts(video_id):
-    """How many times each lemma is spoken across the whole video transcript —
-    used to rank review candidates by recurrence (a word said 5 times is worth
-    more than one said once)."""
-    c = connect()
-    rows = c.execute("SELECT text FROM subtitle_lines WHERE video_id=?",
-                     (video_id,)).fetchall()
-    c.close()
-    counts = {}
-    for r in rows:
-        for tok in _CYR_TOKEN.findall(r["text"] or ""):
-            k = lemma_key(tok)
-            counts[k] = counts.get(k, 0) + 1
-    return counts
+    """lemma -> how many transcript lines it appears in — recurrence signal for
+    ranking review candidates. Reads the cached inverted index."""
+    idx = _lemma_index(video_id)[2]
+    return {lem: len(set(lines)) for lem, lines in idx.items()}
 
 
 def notable_recurring(video_id, min_count=4, limit=20):
