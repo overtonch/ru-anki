@@ -2574,8 +2574,19 @@ addEventListener('popstate', () => { navBack(); try { history.pushState({ ru: 1 
 })();
 
 /* ---------------- boot ---------------- */
-if ('serviceWorker' in navigator)
-  navigator.serviceWorker.register('/sw.js').catch(() => {});
+// belt-and-suspenders: full-screen overlays must never be left showing
+if (!READING_ENABLED) ['#readView', '#pasteWrap', '#tocPanel'].forEach(s => { const e = $(s); if (e) e.hidden = true; });
+
+if ('serviceWorker' in navigator) {
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloading) return; reloading = true; location.reload();   // new version took over
+  });
+  navigator.serviceWorker.register('/sw.js').then(reg => {
+    reg.update().catch(() => {});
+    setInterval(() => reg.update().catch(() => {}), 60 * 60 * 1000);
+  }).catch(() => {});
+}
 // reader: track scroll for progress + resume
 (() => {
   const b = $('#readBody');
