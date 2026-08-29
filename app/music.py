@@ -57,9 +57,88 @@ def _cyrillic_fraction(s):
 def _get(path, params):
     url = f"{LRCLIB}/{path}?" + urllib.parse.urlencode(
         {k: v for k, v in params.items() if v})
+    return _get_json(url)
+
+
+def _get_json(url):
     req = urllib.request.Request(url, headers={"User-Agent": _UA})
     with urllib.request.urlopen(req, timeout=12) as r:
         return json.load(r)
+
+
+# --------------------------------------------------------------- Apple Music
+
+_APPLE_HOST = re.compile(r"music\.apple\.com/", re.I)
+_APPLE_TRACK = re.compile(r"[?&]i=(\d+)")
+_APPLE_SONG = re.compile(r"music\.apple\.com/(?:[a-z]{2}/)?song/[^/?]+/(\d+)", re.I)
+
+
+def is_apple_music(url):
+    return bool(_APPLE_HOST.search(url or ""))
+
+
+def apple_track_id(url):
+    m = _APPLE_TRACK.search(url or "") or _APPLE_SONG.search(url or "")
+    return m.group(1) if m else None
+
+
+def apple_lookup(url):
+    """Resolve an Apple Music *song* link to {title, artist, album, duration,
+    artwork} via the keyless iTunes Lookup API. Album links need a `?i=<trackid>`
+    (the share sheet always includes it). -> None if it can't be resolved."""
+    tid = apple_track_id(url)
+    if not tid:
+        return None
+    try:
+        data = _get_json(f"https://itunes.apple.com/lookup?id={tid}&entity=song")
+    except Exception:  # noqa: BLE001
+        return None
+    hits = [r for r in (data or {}).get("results", [])
+            if r.get("wrapperType") == "track" or r.get("kind") == "song"]
+    if not hits:
+        return None
+    r = hits[0]
+    art = (r.get("artworkUrl100") or "").replace("100x100bb", "600x600bb")
+    ms = r.get("trackTimeMillis") or 0
+    return {
+        "title": r.get("trackName"),
+        "artist": r.get("artistName"),
+        "album": r.get("collectionName"),
+        "duration": round(ms / 1000, 1) if ms else None,
+        "artwork": art or None,
+    }
+
+
+_YT_BAD = ("cover", "remix", "karaoke", "live", "concert", "remake", "reaction",
+           "lesson", "tutorial", "минус", "минусовк", "instrumental", "8d audio",
+           "slowed", "reverb", "nightcore", "mashup", "acapella", "а капелла")
+
+
+def pick_youtube(results, artist, title, duration):
+    """Best audio-source match from ytdlp.search() results for a known song."""
+    if not results:
+        return None
+    a, t = (artist or "").lower(), (title or "").lower()
+
+    def score(e):
+        s = 0.0
+        et, ec = e["title"].lower(), e["channel"].lower()
+        if duration and e["duration"]:
+            s -= abs(e["duration"] - duration)          # 1 pt / second off
+        if a and (a in ec or ec.endswith(("- topic", "- тема")) or "official" in ec):
+            s += 35
+        if a and a in et:
+            s += 8
+        if t and t in et:
+            s += 10
+        s -= 30 * sum(b in et for b in _YT_BAD)
+        return s
+
+    ranked = sorted(results, key=score, reverse=True)
+    best = ranked[0]
+    if duration and best["duration"] and abs(best["duration"] - duration) > 45:
+        return None                                     # nothing close enough
+    return best
 
 
 def fetch_lyrics(artist, title, duration=None):

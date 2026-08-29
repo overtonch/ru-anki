@@ -105,9 +105,13 @@ def youtube_id(url):
 
 
 def _thumb(url, stored):
-    # Derive from the video id: hqdefault.jpg exists for every video and has a
-    # stable 4:3-ish frame. yt-dlp's stored `thumbnail` is often a maxres/webp
-    # URL that 404s for smaller videos.
+    # A stored cover from another source (e.g. Apple Music album art for a song)
+    # is better than the letterboxed YouTube frame — keep it.
+    if stored and "ytimg.com" not in stored and "ggpht.com" not in stored:
+        return stored
+    # Otherwise derive from the video id: hqdefault.jpg exists for every video
+    # and has a stable 4:3-ish frame. yt-dlp's stored `thumbnail` is often a
+    # maxres/webp URL that 404s for smaller videos.
     vid = youtube_id(url)
     if vid:
         return f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"

@@ -41,8 +41,12 @@
   fall back to the video's own RU subs, then Whisper. Stored as `kind='song'`
   video → same extraction / cards / word pages. Player: audio + karaoke lyrics
   (`.song-mode`), tap line to seek, 🔁 repeat, 0.75× speed. "Music" home section.
+  **Apple Music links**: iTunes Lookup API (keyless) resolves title/artist/art,
+  then a yt-dlp `ytsearch` finds the audio on YouTube. `music.apple.com` links
+  auto-route to the song flow.
   Follow-ups: A–B loop for drilling a phrase; move LRCLIB-miss subtitle lookup
-  off the request path; offline (OPFS) for songs; paste-your-own-lyrics.
+  off the request path; offline (OPFS) for songs; paste-your-own-lyrics;
+  Spotify / Yandex Music links (need the same resolve-to-YouTube step).
 - (done) Reading feature — EPUB/txt/paste import, scroll reader, tap-to-card
 - (done) Non-YouTube video via yt-dlp (VK/RuTube/Dzen) + plain VTT/SRT subs
 - (done) Offline video + audio, OPFS + <video>, Media Session — needs device testing

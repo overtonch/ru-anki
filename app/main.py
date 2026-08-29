@@ -331,11 +331,10 @@ def create_video(body: VideoIn):
 
 # ------------------------------------------------------------------ songs
 
-def _song_lyrics(url, title, uploader, duration):
-    """(cues, subs_kind, note). Try LRCLIB synced lyrics, then the video's own
-    Russian subtitles, then plain LRCLIB lyrics spread over the runtime. Returns
-    ([], 'pending', ...) when nothing usable was found — the caller Whispers."""
-    artist, track = music.parse_artist_title(title, uploader)
+def _song_lyrics(artist, track, duration, sub_url=None):
+    """(cues, subs_kind, note). Try LRCLIB synced lyrics, then the source video's
+    own Russian subtitles, then plain LRCLIB lyrics spread over the runtime.
+    Returns ([], 'pending', ...) when nothing usable was found — caller Whispers."""
     try:
         lyr = music.fetch_lyrics(artist, track, duration)
     except Exception as e:  # noqa: BLE001
@@ -345,15 +344,16 @@ def _song_lyrics(url, title, uploader, duration):
         cues = music.lrc_to_cues(lyr["synced"], duration)
         if cues:
             return cues, "lrclib", f"synced lyrics · {lyr.get('matched')}"
-    try:
-        got = ytdlp.fetch_subs(url)
-        if got.get("raw_subs"):
-            cues = [(c["s"], c.get("re") or c["e"], c["text"])
-                    for c in subs.caption_cues(got["raw_subs"]) if c.get("text")]
-            if cues:
-                return cues, got["subs_kind"], f"{got['subs_kind']} captions"
-    except Exception as e:  # noqa: BLE001
-        print(f"[song] no video subs: {e}")
+    if sub_url:
+        try:
+            got = ytdlp.fetch_subs(sub_url)
+            if got.get("raw_subs"):
+                cues = [(c["s"], c.get("re") or c["e"], c["text"])
+                        for c in subs.caption_cues(got["raw_subs"]) if c.get("text")]
+                if cues:
+                    return cues, got["subs_kind"], f"{got['subs_kind']} captions"
+        except Exception as e:  # noqa: BLE001
+            print(f"[song] no video subs: {e}")
     if lyr.get("source") == "lrclib-plain":
         cues = music.plain_to_cues(lyr["plain"], duration)
         if cues:
@@ -376,32 +376,58 @@ def _song_pipeline(video_id, url, need_whisper, model):
     _run_extraction(video_id, model)
 
 
+def _resolve_song_source(url):
+    """(youtube_url, artist, track, duration, artwork, source_note).
+
+    An Apple Music link is resolved to its title/artist via the iTunes API, then
+    matched to a YouTube video for the audio. Anything else is treated as the
+    audio source directly."""
+    if music.is_apple_music(url):
+        info = music.apple_lookup(url)
+        if not info or not info.get("title"):
+            raise HTTPException(422, "couldn’t read that Apple Music link — "
+                                     "paste a link to a specific song")
+        artist, track, dur = info["artist"], info["title"], info.get("duration")
+        try:
+            results = ytdlp.search(f"{artist} {track}")
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(502, f"song search failed: {e}")
+        pick = music.pick_youtube(results, artist, track, dur)
+        if not pick:
+            raise HTTPException(404, f"couldn’t find audio for “{artist} — {track}”")
+        return (pick["url"], artist, track, dur, info.get("artwork"),
+                f"Apple Music · audio from YouTube ({pick['channel'] or 'unknown'})")
+
+    try:
+        meta = ytdlp.fetch_meta(url)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"couldn’t read that link: {e}")
+    artist, track = music.parse_artist_title(meta.get("title"), meta.get("channel"))
+    return (url, artist or meta.get("channel"), track or meta.get("title"),
+            meta.get("duration"), meta.get("thumbnail_url"), None)
+
+
 @app.post("/songs")
 def create_song(body: SongIn, background: BackgroundTasks,
                 model: str = llm.DEFAULT_MODEL):
-    """Add a song: fetch synced lyrics, store as a kind='song' video, then in the
-    background pull the audio and extract vocab (repeated chorus lines rank
-    high). Whisper only if no lyrics source has it."""
-    try:
-        meta = ytdlp.fetch_meta(body.url)
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(502, f"couldn’t read that link: {e}")
-    dur = meta.get("duration")
-    artist, track = music.parse_artist_title(meta.get("title"), meta.get("channel"))
-    cues, subs_kind, note = _song_lyrics(body.url, meta.get("title"),
-                                         meta.get("channel"), dur)
+    """Add a song: resolve the link (Apple Music → iTunes lookup → YouTube audio;
+    otherwise the link is the source), fetch synced lyrics, store as a
+    kind='song' video, then pull audio + extract vocab in the background."""
+    yt_url, artist, track, dur, artwork, src_note = _resolve_song_source(body.url)
+    cues, subs_kind, note = _song_lyrics(artist, track, dur, sub_url=yt_url)
+    if src_note:
+        note = f"{note} · {src_note}" if note else src_note
     need_whisper = not cues
     if need_whisper:                       # placeholder line so the row is valid
         cues = [(0.0, max(dur or 4.0, 4.0), "…")]
-    display = f"{artist} — {track}" if artist and track else (meta.get("title") or track)
-    vid = store.add_song(body.url, display, artist or meta.get("channel"),
-                         cues, subs_kind, dur, meta.get("thumbnail_url"))
+    display = f"{artist} — {track}" if artist and track else (track or "Song")
+    vid = store.add_song(yt_url, display, artist, cues, subs_kind, dur, artwork)
     if need_whisper:
         TRANSCRIBE_STATUS[vid] = {"state": "running", "pct": 0.0, "detail": "queued"}
     _set_status(vid, state="queued", phase="queued", model=model,
                 chunks_done=0, chunks_total=0, added=0, errors=[], elapsed=0.0,
                 detail="getting the song ready")
-    background.add_task(_song_pipeline, vid, body.url, need_whisper, model)
+    background.add_task(_song_pipeline, vid, yt_url, need_whisper, model)
     return {"id": vid, "video_id": vid, "kind": "song", "title": display,
             "artist": artist, "track": track, "lyrics": subs_kind,
             "synced": not need_whisper, "note": note}

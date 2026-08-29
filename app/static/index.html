@@ -810,7 +810,7 @@
   <!-- LIST VIEW -->
   <div id="listView">
     <div class="addbar">
-      <input type="text" id="url" placeholder="Paste a video, song, article or book link"
+      <input type="text" id="url" placeholder="Paste a video, song (YouTube / Apple Music), article or book link"
              autocapitalize="off" autocomplete="off" spellcheck="false"
              onkeydown="if(event.key==='Enter')addVideo()">
       <button class="btn" id="addBtn" onclick="addVideo()">Add</button>
@@ -1322,9 +1322,11 @@ function videoCard(v, feat) {
 }
 
 const VIDEO_HOSTS = /(youtube\.com|youtu\.be|vk(?:video)?\.(?:com|ru)|m\.vkvideo\.ru|rutube\.ru|dzen\.ru|ok\.ru)/i;
+const MUSIC_HOSTS = /music\.apple\.com/i;
 async function addVideo() {
   const url = $('#url').value.trim();
   if (!url) return;
+  if (MUSIC_HOSTS.test(url)) return addSong();
   setBusy($('#addBtn'), true);
   $('#addStatus').textContent = '';
   const isText = /^https?:\/\//.test(url) && !VIDEO_HOSTS.test(url);

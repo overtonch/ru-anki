@@ -54,6 +54,30 @@ def fetch_meta(url):
     return {"title": info.get("title"), **_meta_fields(info)}
 
 
+def search(query, limit=6):
+    """`ytsearch` for `query` -> [{id, title, channel, duration, url}] (flat, no
+    per-video metadata calls). Used to find an audio source for a song the user
+    pasted from Apple Music / another service."""
+    r = _run(["-J", "--skip-download", "--flat-playlist",
+              f"ytsearch{int(limit)}:{query}"])
+    if r.returncode != 0:
+        raise RuntimeError(f"yt-dlp search failed: {r.stderr.strip()[:300]}")
+    info = json.loads(r.stdout)
+    out = []
+    for e in info.get("entries") or []:
+        vid = e.get("id")
+        if not vid:
+            continue
+        out.append({
+            "id": vid,
+            "title": e.get("title") or "",
+            "channel": e.get("channel") or e.get("uploader") or "",
+            "duration": e.get("duration") or 0,
+            "url": f"https://www.youtube.com/watch?v={vid}",
+        })
+    return out
+
+
 def fetch_subs(url):
     """-> dict(title, subs_kind, subs_lang, raw_subs, channel, channel_url,
     thumbnail_url, duration). Raises RuntimeError on failure. Prefers manual
