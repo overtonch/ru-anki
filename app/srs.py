@@ -416,6 +416,56 @@ def delete_cards_for_candidate(candidate_id):
     return len(ids)
 
 
+def _card_ids_for_video(c, video_id):
+    return [r["id"] for r in c.execute(
+        """SELECT id FROM srs_cards
+           WHERE video_id=? OR candidate_id IN
+                 (SELECT id FROM candidates WHERE video_id=?)""",
+        (video_id, video_id))]
+
+
+def anki_note_ids_for_video(video_id):
+    """Anki note ids for the cards sourced from this video (so the caller can
+    delete the notes before the cards go)."""
+    c = store.connect()
+    rows = c.execute(
+        """SELECT anki_note_id FROM srs_cards
+           WHERE anki_note_id IS NOT NULL AND (video_id=? OR candidate_id IN
+                 (SELECT id FROM candidates WHERE video_id=?))""",
+        (video_id, video_id)).fetchall()
+    c.close()
+    return [r["anki_note_id"] for r in rows]
+
+
+def delete_cards_for_video(video_id):
+    c = store.connect()
+    ids = _card_ids_for_video(c, video_id)
+    c.close()
+    for cid in ids:
+        delete_card(cid)
+    return len(ids)
+
+
+def orphan_anki_note_ids():
+    c = store.connect()
+    rows = c.execute("SELECT anki_note_id FROM srs_cards "
+                     "WHERE anki_note_id IS NOT NULL AND video_id IS NULL").fetchall()
+    c.close()
+    return [r["anki_note_id"] for r in rows]
+
+
+def delete_orphan_cards():
+    """Cards whose source video was hard-deleted before this became a soft
+    delete — no jump-to-the-moment, no clip, no context to relink."""
+    c = store.connect()
+    ids = [r["id"] for r in c.execute(
+        "SELECT id FROM srs_cards WHERE video_id IS NULL")]
+    c.close()
+    for cid in ids:
+        delete_card(cid)
+    return len(ids)
+
+
 def delete_cards_for_lemma(normalized_text):
     c = store.connect()
     ids = [r["id"] for r in c.execute(
@@ -458,10 +508,12 @@ def stats():
     nd = c.execute(
         "SELECT MIN(due) d FROM srs_cards WHERE suspended=0 AND last_review IS NOT NULL "
         "AND due > ?", (now,)).fetchone()["d"]
+    orphans = c.execute(
+        "SELECT COUNT(*) n FROM srs_cards WHERE video_id IS NULL").fetchone()["n"]
     c.close()
     return {"due": due, "new": min(new_total, new_left),
             "new_total": new_total, "total": total,
-            "reviewed_today": reviewed_today,
+            "reviewed_today": reviewed_today, "orphans": orphans,
             "next_due": _human_delta(nd) if nd else None}
 
 
@@ -475,6 +527,7 @@ _LIST_FILTERS = {
     "mature":    ("suspended=0 AND stability >= 21", []),
     "due":       ("suspended=0 AND last_review IS NOT NULL AND due <= :n", ["n"]),
     "suspended": ("suspended=1", []),
+    "orphan":    ("video_id IS NULL", []),
 }
 _LIST_SORTS = {
     "added": "created_at DESC, id DESC", "oldest": "created_at ASC, id ASC",
@@ -484,7 +537,7 @@ _LIST_SORTS = {
 }
 
 
-def list_cards(filt="all", sort="added", q="", limit=1000):
+def list_cards(filt="all", sort="added", q="", limit=1000, video=None):
     where, needs = _LIST_FILTERS.get(filt, _LIST_FILTERS["all"])
     params = {}
     if "d" in needs:
@@ -492,6 +545,10 @@ def list_cards(filt="all", sort="added", q="", limit=1000):
     if "n" in needs:
         params["n"] = _iso(_utc())
     clauses = [where]
+    if video is not None:
+        clauses.append("(video_id = :vid OR candidate_id IN "
+                       "(SELECT id FROM candidates WHERE video_id = :vid))")
+        params["vid"] = video
     if q:
         clauses.append("(span_text LIKE :q OR normalized_text LIKE :q OR translation LIKE :q)")
         params["q"] = f"%{q}%"

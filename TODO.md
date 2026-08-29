@@ -36,6 +36,13 @@
   Constraint: the audio and the subtitles must be the SAME translation, not a
   dub script vs. a separately-made caption file.
 - (done) Local RU→EN dict (build_dict.py / WikDict) for instant glosses
+- (done 2026-08-29) **Delete video = choose keep-or-delete cards** — `videos.hidden`
+  soft-delete. `DELETE /videos/{id}?cards=keep` archives (row + transcript stay,
+  media freed, cards keep video_id/timestamp so jump/clip/occurrences work);
+  `?cards=delete` removes video + every SRS card from it. `#vidDelView` shows the
+  affected cards before you pick. Archived section on the home screen (restore /
+  delete forever). `filter=orphan` + `POST /srs/cards/orphans/delete` +
+  `⚠ N with no source` home link for the pre-soft-delete detached cards.
 - (done 2026-08-29) **Music / songs** — `app/music.py`. Paste a song link → 🎵
   button → `POST /songs`. Synced lyrics from LRCLIB (lrclib.net, free/keyless),
   fall back to the video's own RU subs, then Whisper. Stored as `kind='song'`

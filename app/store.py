@@ -57,7 +57,11 @@ def init_db():
                 # 'video' (default) | 'text' — content that lives in the same
                 # pipeline (extraction / cards / word pages) but opens in a
                 # reader instead of a player
-                "kind TEXT NOT NULL DEFAULT 'video'"):
+                "kind TEXT NOT NULL DEFAULT 'video'",
+                # 1 = archived: gone from the home list, media files freed, but
+                # the row + transcript stay so cards made from it keep their
+                # jump-to-the-moment / audio-clip / "all places said" links
+                "hidden INTEGER NOT NULL DEFAULT 0"):
         if not _has_column(c, "videos", col.split()[0]):
             c.execute(f"ALTER TABLE videos ADD COLUMN {col}")
     # Fold any legacy known_lexicon rows into resolved_words.
@@ -133,25 +137,61 @@ def get_video(video_id):
     return _enrich(dict(r)) if r else None
 
 
-def list_videos():
+def list_videos(include_hidden=False):
     c = connect()
     rows = c.execute(
-        """SELECT v.id, v.url, v.title, v.channel, v.channel_url, v.thumbnail_url,
-                  v.duration, v.subs_kind, v.subs_lang, v.fetched_at, v.kind,
+        f"""SELECT v.id, v.url, v.title, v.channel, v.channel_url, v.thumbnail_url,
+                  v.duration, v.subs_kind, v.subs_lang, v.fetched_at, v.kind, v.hidden,
                   v.media_status, v.media_bytes, v.media_quality,
                   (SELECT count(*) FROM subtitle_lines s WHERE s.video_id=v.id) AS lines,
                   (SELECT count(*) FROM candidates k WHERE k.video_id=v.id) AS candidates,
                   (SELECT count(*) FROM candidates k WHERE k.video_id=v.id
                      AND k.status='pending') AS pending
-           FROM videos v ORDER BY v.id DESC"""
+           FROM videos v {'' if include_hidden else 'WHERE v.hidden=0'}
+           ORDER BY v.id DESC"""
     ).fetchall()
     c.close()
     return [_enrich(dict(r)) for r in rows]
 
 
+def hide_video(video_id):
+    """Archive a video: drop it from the home list and free its downloaded
+    media, but keep the row + transcript + candidates so study cards made from
+    it still jump to the moment, play their clip and list every occurrence."""
+    v = get_video(video_id)
+    if not v:
+        return 0
+    _free_media_files(video_id, v)
+    c = connect()
+    c.execute("UPDATE videos SET hidden=1, media_path=NULL, media_bytes=NULL, "
+              "media_quality=NULL, media_status=NULL WHERE id=?", (video_id,))
+    c.commit()
+    c.close()
+    return 1
+
+
+def unhide_video(video_id):
+    c = connect()
+    n = c.execute("UPDATE videos SET hidden=0 WHERE id=?", (video_id,)).rowcount
+    c.commit()
+    c.close()
+    return n
+
+
+def _free_media_files(video_id, v=None):
+    v = v or get_video(video_id)
+    if v and v.get("media_path"):
+        try:
+            os.remove(v["media_path"])
+        except OSError:
+            pass
+
+
 def delete_video(video_id):
-    """Remove the video, its transcript and its candidates. Study cards you
-    already made are kept — just detached (they lose the jump-to-moment / clip).
+    """Hard-delete the video, its transcript and its candidates. Callers that
+    want to keep the study cards use hide_video() instead; callers that want the
+    cards gone delete them (srs.delete_cards_for_video) before calling this.
+    Any card still pointing here is detached so the FK deletes can proceed.
     resolved_words (your decisions) stand."""
     v = get_video(video_id)
     if v and v.get("media_path"):
@@ -160,7 +200,7 @@ def delete_video(video_id):
         except OSError:
             pass
     c = connect()
-    # detach study cards first so the FK deletes below can proceed
+    # detach any surviving study cards first so the FK deletes below can proceed
     c.execute("UPDATE srs_cards SET candidate_id=NULL, video_id=NULL, timestamp=NULL "
               "WHERE video_id=? OR candidate_id IN "
               "(SELECT id FROM candidates WHERE video_id=?)", (video_id, video_id))

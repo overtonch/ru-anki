@@ -445,12 +445,17 @@ def _extract_view(video_id):
 
 
 @app.get("/videos")
-def videos():
-    out = store.list_videos()
+def videos(archived: bool = False):
+    """The home list. `?archived=1` returns only the archived (hidden) videos —
+    the ones whose cards were kept when the video was removed."""
+    out = store.list_videos(include_hidden=True)
+    out = [v for v in out if bool(v.get("hidden")) == archived]
     for v in out:
         ex = _extract_view(v["id"])
         if ex:
             v["extract"] = ex
+        if archived:
+            v["card_count"] = srs.list_cards(video=v["id"], limit=1)["total"]
         if v.get("kind") == "song":
             tr = TRANSCRIBE_STATUS.get(v["id"])
             if tr:
@@ -458,13 +463,7 @@ def videos():
     return out
 
 
-@app.delete("/videos/{video_id}")
-def delete_video(video_id: int):
-    if not store.get_video(video_id):
-        raise HTTPException(404, "no such video")
-    EXTRACT_STATUS.pop(video_id, None)
-    AUDIO_STATUS.pop(video_id, None)
-    _STREAM_CACHE.pop(video_id, None)
+def _wipe_media_files(video_id):
     ap = ytdlp.audio_path(video_id)
     if ap:
         try:
@@ -479,9 +478,54 @@ def delete_video(video_id: int):
                 os.remove(f)
             except OSError:
                 pass
-    n = store.delete_video(video_id)
-    backup.snapshot_async("delete-video")
-    return {"deleted": n}
+
+
+@app.get("/videos/{video_id}/cards")
+def video_cards(video_id: int):
+    """Every study card sourced from this video — shown before you delete it so
+    you can decide whether to keep them (archive the video) or delete them too."""
+    if not store.get_video(video_id):
+        raise HTTPException(404, "no such video")
+    return srs.list_cards(video=video_id, sort="added", limit=2000)
+
+
+@app.delete("/videos/{video_id}")
+def delete_video(video_id: int, cards: str = "keep"):
+    """`cards=keep` (default) archives the video: it leaves the home list and its
+    downloaded media is freed, but the row + transcript stay so the study cards
+    made from it keep their jump-to-the-moment / clip / occurrences links.
+    `cards=delete` removes the video *and* every study card made from it."""
+    if not store.get_video(video_id):
+        raise HTTPException(404, "no such video")
+    EXTRACT_STATUS.pop(video_id, None)
+    AUDIO_STATUS.pop(video_id, None)
+    _STREAM_CACHE.pop(video_id, None)
+
+    if cards == "delete":
+        for nid in srs.anki_note_ids_for_video(video_id):
+            try:
+                anki.delete_note(nid)
+            except anki.AnkiError:
+                pass
+        removed = srs.delete_cards_for_video(video_id)
+        _sync_soon()
+        _wipe_media_files(video_id)
+        store.delete_video(video_id)
+        backup.snapshot_async("delete-video")
+        return {"deleted": 1, "mode": "delete", "cards_deleted": removed}
+
+    _wipe_media_files(video_id)
+    n = store.hide_video(video_id)
+    backup.snapshot_async("hide-video")
+    kept = srs.list_cards(video=video_id, limit=1)["total"]
+    return {"deleted": n, "mode": "keep", "cards_kept": kept, "archived": True}
+
+
+@app.post("/videos/{video_id}/unhide")
+def unhide_video(video_id: int):
+    if not store.get_video(video_id):
+        raise HTTPException(404, "no such video")
+    return {"ok": bool(store.unhide_video(video_id))}
 
 
 # ------------------------------------------------------------------ offline media
@@ -1268,9 +1312,26 @@ def srs_analytics(days: int = 30):
 
 @app.get("/srs/cards")
 def srs_cards_list(filter: str = "all", sort: str = "added", q: str = "",
-                   limit: int = 1000):
-    return {**srs.list_cards(filter, sort, q.strip(), max(1, min(2000, limit))),
+                   limit: int = 1000, video: int | None = None):
+    return {**srs.list_cards(filter, sort, q.strip(), max(1, min(2000, limit)),
+                             video=video),
             "filter": filter}
+
+
+@app.post("/srs/cards/orphans/delete")
+def srs_delete_orphans():
+    """Delete every study card whose source video was hard-deleted before delete
+    became a soft archive — they have no jump target, clip or way to be relinked."""
+    for nid in srs.orphan_anki_note_ids():
+        try:
+            anki.delete_note(nid)
+        except anki.AnkiError:
+            pass
+    n = srs.delete_orphan_cards()
+    if n:
+        _sync_soon()
+        backup.snapshot_async("srs-delete-orphans")
+    return {"deleted": n, **srs.stats()}
 
 
 @app.post("/srs/resnap")

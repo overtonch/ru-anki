@@ -526,6 +526,13 @@
   .lib-card .m { font-size:.75rem; color:var(--muted); margin-top:.2rem; }
   .lib-card .rbar { height:3px; background:var(--line); border-radius:2px; margin-top:.4rem; overflow:hidden; }
   .lib-card .rbar i { display:block; height:100%; background:var(--accent); }
+  .chan.arch-head { opacity:.7; font-size:.72rem; margin-top:1.4rem; }
+  .lib-card.arch { cursor:default; opacity:.85; }
+  .lib-card.arch .bk { background:var(--line); color:var(--muted); }
+  .arch-acts { display:flex; gap:.5rem; margin-top:.45rem; }
+  .arch-acts button { font-size:.74rem; padding:.32rem .6rem; border-radius:.4rem;
+                      border:1px solid var(--line); background:var(--card-2); color:var(--fg-dim); cursor:pointer; }
+  .arch-acts button.danger { color:var(--no); border-color:color-mix(in srgb, var(--no) 45%, var(--line)); }
 
   #readView, #wordView { position:fixed; inset:0; z-index:15; background:var(--bg);
               flex-direction:column;
@@ -587,15 +594,35 @@
   .stat-cell.tap { cursor:pointer; } .stat-cell.tap:active { background:var(--line-soft); }
   .mix-legend span.tap { cursor:pointer; text-decoration:underline; text-decoration-style:dotted; }
 
-  #cardsView { position:fixed; inset:0; z-index:16; background:var(--bg); flex-direction:column;
+  #cardsView, #vidDelView { position:fixed; inset:0; z-index:16; background:var(--bg); flex-direction:column;
                padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
-  #cardsView[hidden] { display:none; }
-  #cardsView:not([hidden]) { display:flex; }
+  #cardsView[hidden], #vidDelView[hidden] { display:none; }
+  #cardsView:not([hidden]), #vidDelView:not([hidden]) { display:flex; }
+  #vidDelView { z-index:17; }
+  .vd-head { padding:.9rem .95rem .3rem; font-size:.95rem; line-height:1.5; color:var(--fg-dim); }
+  .vd-head b { color:var(--fg); }
+  .vd-actions { display:flex; flex-direction:column; gap:.5rem; padding:.5rem .95rem .7rem;
+                border-bottom:1px solid var(--line-soft); }
+  .vd-actions button { padding:.7rem .9rem; border-radius:var(--r-sm); border:1px solid var(--line);
+                background:var(--card-2); color:var(--fg); font-size:.9rem; text-align:left;
+                display:flex; flex-direction:column; gap:.15rem; cursor:pointer; }
+  .vd-actions button .sub { font-size:.76rem; color:var(--muted); }
+  .vd-actions button.keep { border-color:var(--accent); background:var(--accent-soft); }
+  .vd-actions button.danger { border-color:color-mix(in srgb, var(--no) 55%, var(--line)); }
+  .vd-actions button.danger .lbl { color:var(--no); }
+  .vd-actions button:active { filter:brightness(1.15); }
+  #vdBody .cl-count { position:sticky; top:0; background:var(--bg); }
   .cl-tools { display:flex; gap:.5rem; padding:.5rem .9rem; flex:none; border-bottom:1px solid var(--line-soft); }
   .cl-tools input { flex:1; background:var(--card-2); border:1px solid var(--line); color:var(--fg);
                     border-radius:var(--r-sm); padding:.45rem .7rem; font-size:.9rem; }
   .cl-body { flex:1; overflow-y:auto; overflow-x:hidden; -webkit-overflow-scrolling:touch; padding:.3rem 0 3rem; }
   .cl-count { color:var(--muted); font-size:.78rem; padding:.5rem .9rem .2rem; }
+  .cl-orphan-bar { margin:.6rem .9rem; padding:.6rem .7rem; border-radius:var(--r-sm);
+                   background:var(--accent-soft); border:1px solid var(--line);
+                   font-size:.78rem; color:var(--fg-dim); line-height:1.5; }
+  .cl-orphan-bar button { display:block; margin-top:.45rem; padding:.4rem .7rem;
+                   border-radius:.4rem; border:1px solid color-mix(in srgb, var(--no) 45%, var(--line));
+                   background:var(--card-2); color:var(--no); font-size:.8rem; cursor:pointer; }
   .cl-row { position:relative; overflow:hidden; border-bottom:1px solid var(--line-soft); }
   .cl-del-rail { position:absolute; inset:0 0 0 auto; width:96px; background:var(--no);
                  color:#fff; display:flex; align-items:center; justify-content:center;
@@ -840,6 +867,7 @@
     <div class="home-links" id="homeLinks" hidden>
       <button onclick="openCardList('all','All cards')">🗂 all cards</button>
       <button onclick="openStats()">📊 stats</button>
+      <button id="orphanLink" hidden onclick="openCardList('orphan','Cards with no source')"></button>
     </div>
     <div id="videoList"></div>
   </div>
@@ -997,6 +1025,18 @@
     <div id="clBody" class="cl-body"></div>
   </div>
 
+  <!-- REMOVE-VIDEO VIEW: see the affected cards, choose keep vs delete -->
+  <div id="vidDelView" hidden>
+    <div class="readbar">
+      <button class="backlink" onclick="history.back()">← cancel</button>
+      <div class="rtitle">Remove from library</div>
+      <span style="width:2rem"></span>
+    </div>
+    <div class="vd-head" id="vdHead"></div>
+    <div class="vd-actions" id="vdActions"></div>
+    <div id="vdBody" class="cl-body"></div>
+  </div>
+
   <!-- READ VIEW -->
   <div id="readView" hidden>
     <div class="readbar">
@@ -1064,6 +1104,7 @@ const $ = s => document.querySelector(s);
 const READING_ENABLED = true;   // reading: URL/paste/EPUB import + tap-to-card reader
 let VIDEOS = [];
 let TEXTS = [];
+let ARCHIVED = [];
 let READ = null;             // legacy paste/epub reader
 let READER_MODE = false, READER_ID = null, READER_CH = [];
 let CURRENT = null;          // video id in detail view
@@ -1149,6 +1190,7 @@ async function loadVideos() {
   try {
     VIDEOS = await api('/videos');
     listedOnce = true;
+    api('/videos?archived=1').then(a => { ARCHIVED = a || []; renderList(); }).catch(() => {});
   } catch (e) {
     VIDEOS = await offlineVideoList();
     $('#videoList').innerHTML = '';
@@ -1220,6 +1262,36 @@ function renderList() {
     for (const v of texts) box.appendChild(readCard(v));
     for (const t of TEXTS) box.appendChild(textCard(t));
   }
+  if (ARCHIVED.length) {
+    const h = document.createElement('div');
+    h.className = 'chan arch-head';
+    h.textContent = `Archived (${ARCHIVED.length}) — cards kept`;
+    box.appendChild(h);
+    for (const v of ARCHIVED) box.appendChild(archivedCard(v));
+  }
+}
+
+function archivedCard(v) {
+  const el = document.createElement('div');
+  el.className = 'lib-card arch';
+  const n = v.card_count || 0;
+  el.innerHTML = `
+    <div class="bk">📦</div>
+    <div class="body">
+      <div class="t">${escapeHtml(v.title || 'Untitled')}</div>
+      <div class="m">${n} card${n === 1 ? '' : 's'} still linked here</div>
+      <div class="arch-acts">
+        <button onclick="event.stopPropagation();unarchiveVideo(${v.id})">restore to home</button>
+        <button class="danger" onclick="event.stopPropagation();openVidDelete(${v.id})">delete…</button>
+      </div>
+    </div>`;
+  return el;
+}
+async function unarchiveVideo(id) {
+  try { await api(`/videos/${id}/unhide`, { method: 'POST' }); }
+  catch (e) { toast('couldn’t restore — ' + e.message, 2500); return; }
+  toast('restored to home');
+  loadVideos();
 }
 
 function songCard(v) {
@@ -1627,15 +1699,72 @@ async function resetAndReExtract() {
     startProgress(v, {state:'queued', added:0, elapsed:0});
   } catch (e) { toast('error: ' + e.message, 3500); }
 }
+let VD = { id: null, n: 0 };
 async function deleteVideo() {
   if (!CURRENT) return;
-  const v = VIDEOS.find(x => x.id === CURRENT) || DETAIL_V || {};
-  if (!confirm(`Delete "${v.title || 'this video'}"?\n\nRemoves the transcript and all suggestions. Study cards you already made are kept (they lose the jump-to-moment link).`)) return;
-  const id = CURRENT;
+  openVidDelete(CURRENT);
+}
+async function openVidDelete(id) {
+  const v = VIDEOS.find(x => x.id === id) || DETAIL_V || { id };
+  VD = { id, n: 0, title: v.title || 'this video' };
+  $('#vidDelView').hidden = false;
+  $('#vdHead').innerHTML = `<b>${escapeHtml(VD.title)}</b><br>loading cards…`;
+  $('#vdActions').innerHTML = '';
+  $('#vdBody').innerHTML = SPINNER;
+  let d;
+  try { d = await api(`/videos/${id}/cards`); }
+  catch (e) { $('#vdBody').innerHTML = `<div class="empty">couldn’t load — ${escapeHtml(e.message)}</div>`; return; }
+  VD.n = d.total;
+  const archived = ARCHIVED.some(a => a.id === id);
+  $('#vdHead').innerHTML = d.total
+    ? `<b>${escapeHtml(VD.title)}</b><br>${archived ? 'Archived · ' : ''}${d.total} study card${d.total > 1 ? 's were' : ' was'} made from this video.`
+    : `<b>${escapeHtml(VD.title)}</b><br>No study cards were made from this video.`;
+  const keepBtn = (d.total && !archived) ? `
+    <button class="keep" onclick="vdArchive()">
+      <span class="lbl">📦 Archive — keep the ${d.total} card${d.total > 1 ? 's' : ''}</span>
+      <span class="sub">Removes it from the home screen. The cards still jump to the moment, play their clip and list every place the word is said.</span>
+    </button>` : '';
+  const delBtn = d.total ? `
+    <button class="danger" onclick="vdDeleteAll()">
+      <span class="lbl">🗑 Delete the video and its ${d.total} card${d.total > 1 ? 's' : ''}</span>
+      <span class="sub">Everything below is permanently removed from the SRS.</span>
+    </button>` : `
+    <button class="danger" onclick="vdDeleteAll()">
+      <span class="lbl">🗑 Delete this video</span>
+      <span class="sub">Removes the video and its transcript.</span>
+    </button>`;
+  $('#vdActions').innerHTML = keepBtn + delBtn;
+  renderVdCards(d.cards);
+}
+function renderVdCards(cards) {
+  if (!cards.length) { $('#vdBody').innerHTML = ''; return; }
+  $('#vdBody').innerHTML = `<div class="cl-count">${cards.length} card${cards.length > 1 ? 's' : ''} from this video</div>` +
+    cards.map(c => `<div class="cl-row"><div class="cl-inner"><div class="cl-top">
+        <span class="cl-w">${escapeHtml(c.span_text)}</span>
+        <span class="cl-tr">${escapeHtml(c.translation || '')}</span>
+        ${c.is_new ? '<span class="cl-badge new">new</span>' : c.reps ? `<span class="cl-badge">${c.reps}×</span>` : ''}
+      </div></div></div>`).join('');
+}
+function closeVidDelete() { $('#vidDelView').hidden = true; VD = { id: null, n: 0 }; }
+async function vdArchive() {
+  const id = VD.id; if (!id) return;
   try {
-    await api(`/videos/${id}`, {method:'DELETE'});
-    try { await idbDel('offline', id); } catch {}
-    toast('video deleted');
+    const r = await api(`/videos/${id}?cards=keep`, { method: 'DELETE' });
+    try { await idbDel('offline', 'w' + id); await idbDel('offline', 'r' + id); await idbDel('offline', id); } catch {}
+    closeVidDelete();
+    toast(`archived — ${r.cards_kept || 0} card${r.cards_kept === 1 ? '' : 's'} kept`);
+    showList();
+  } catch (e) { toast('error: ' + e.message, 3500); }
+}
+async function vdDeleteAll() {
+  const id = VD.id; if (!id) return;
+  if (VD.n && !confirm(`Delete the video and ${VD.n} card${VD.n > 1 ? 's' : ''}? This can’t be undone.`)) return;
+  try {
+    const r = await api(`/videos/${id}?cards=delete`, { method: 'DELETE' });
+    try { await idbDel('offline', 'w' + id); await idbDel('offline', 'r' + id); await idbDel('offline', id); } catch {}
+    closeVidDelete();
+    toast(r.cards_deleted ? `deleted — ${r.cards_deleted} card${r.cards_deleted > 1 ? 's' : ''} removed` : 'video deleted');
+    refreshStudyBanner();
     showList();
   } catch (e) { toast('error: ' + e.message, 3500); }
 }
@@ -2254,6 +2383,8 @@ async function refreshStudyBanner() {
   if (pend) s = { ...s, due: Math.max(0, (s.due || 0) - pend) };
   const n = (s.due || 0) + (s.new || 0);
   const hl = $('#homeLinks'); if (hl) hl.hidden = !s.total;
+  const ol = $('#orphanLink');
+  if (ol) { ol.hidden = !s.orphans; ol.textContent = `⚠ ${s.orphans || 0} with no source`; }
   if (!n && !s.total) { b.hidden = true; return; }
   b.hidden = false;
   b.classList.toggle('done', !n);
@@ -2614,7 +2745,10 @@ function renderCardList(d) {
       </div>
     </div>`;
   }).join('');
-  $('#clBody').innerHTML = `<div class="cl-count">${d.shown} of ${d.total}${d.shown < d.total ? ' (refine to see more)' : ''}</div>${rows}`;
+  const orphanBar = (CL.filter === 'orphan' && d.total)
+    ? `<div class="cl-orphan-bar">These cards' source video was deleted — no jump-to-the-moment, clip or context.
+         <button onclick="purgeOrphans()">Delete all ${d.total}</button></div>` : '';
+  $('#clBody').innerHTML = `${orphanBar}<div class="cl-count">${d.shown} of ${d.total}${d.shown < d.total ? ' (refine to see more)' : ''}</div>${rows}`;
   attachCardListSwipe();
   if (CL.autoEdit) { const id = CL.autoEdit; CL.autoEdit = null; clEdit(id);
     const r = $('#clBody').querySelector(`.cl-row[data-id="${id}"]`); if (r) r.scrollIntoView({ block: 'center' }); }
@@ -2643,6 +2777,15 @@ async function clSaveEdit(id) {
   if (d.bolded && w && w.textContent === '⚠') w.remove();
   row.classList.remove('editing');
   toast(d.bolded ? 'saved' : 'saved — still not bolded, check the word', d.bolded ? 1400 : 3000);
+}
+async function purgeOrphans() {
+  if (!confirm('Delete every study card whose source video was removed? This can’t be undone.')) return;
+  try {
+    const r = await api('/srs/cards/orphans/delete', { method: 'POST' });
+    toast(`deleted ${r.deleted} card${r.deleted === 1 ? '' : 's'}`);
+    refreshStudyBanner();
+    loadCardList();
+  } catch (e) { toast('couldn’t — ' + e.message, 2500); }
 }
 function clJump(vid, secs) {
   CURRENT = vid; DETAIL_V = VIDEOS.find(x => x.id === vid) || { id: vid };
@@ -3907,13 +4050,11 @@ function markReadCarded(spanText) {
 }
 async function deleteText() {
   if (READER_MODE) {
-    if (!confirm(`Remove “${$('#rTitle').textContent}” from your library?\n\nStudy cards you already made are kept.`)) return;
     const id = READER_ID;
-    try { await api('/videos/' + id, { method: 'DELETE' }); } catch (e) { toast('couldn’t remove: ' + e.message); return; }
     try { localStorage.removeItem('rdscroll:' + id); localStorage.removeItem('rdpos:' + id); } catch {}
     READER_MODE = false; READER_ID = null; WCUES = []; CURRENT = null;
     $('#tocPanel').hidden = true; $('#readView').hidden = true; $('#listView').hidden = false;
-    loadVideos();
+    openVidDelete(id);       // choose: archive (keep cards) or delete cards too
     return;
   }
   if (!READ) return;
@@ -4380,6 +4521,7 @@ function navBack() {
     if ($('#watchView').classList.contains('fs')) { fsManual = true; exitFs(); return true; }
     closeWatch(); return true;
   }
+  if (!$('#vidDelView').hidden) { closeVidDelete(); return true; }
   if (!$('#cardsView').hidden) { closeCardList(); return true; }
   if (!$('#statsView').hidden) { closeStats(); return true; }
   if (!$('#readView').hidden) { closeReader(); return true; }
@@ -4420,7 +4562,7 @@ addEventListener('popstate', () => { navBack(); try { history.pushState({ ru: 1 
 
 /* ---------------- boot ---------------- */
 // belt-and-suspenders: full-screen overlays must never be left showing
-['#studyView', '#statsView', '#cardsView', '#readView', '#pasteWrap', '#tocPanel', '#transSheet']
+['#studyView', '#statsView', '#cardsView', '#vidDelView', '#readView', '#pasteWrap', '#tocPanel', '#transSheet']
   .forEach(s => { const e = $(s); if (e) e.hidden = true; });
 
 if ('serviceWorker' in navigator) {
