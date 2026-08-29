@@ -211,12 +211,16 @@ def _snap_ts(video_id, sentence, normalized_text, timestamp):
     return timestamp
 
 
-def resnap_timestamps():
-    """Re-run the snap over every existing card. Returns (checked, moved)."""
+def resnap_timestamps(video_id=None):
+    """Re-run the snap over every existing card (or just one video's). Returns
+    (checked, moved)."""
     c = store.connect()
-    rows = [dict(r) for r in c.execute(
-        "SELECT id, video_id, sentence, normalized_text, timestamp FROM srs_cards "
-        "WHERE video_id IS NOT NULL AND timestamp IS NOT NULL")]
+    q = ("SELECT id, video_id, sentence, normalized_text, timestamp FROM srs_cards "
+         "WHERE video_id IS NOT NULL AND timestamp IS NOT NULL")
+    args = ()
+    if video_id is not None:
+        q += " AND video_id=?"; args = (video_id,)
+    rows = [dict(r) for r in c.execute(q, args)]
     c.close()
     moved = 0
     for r in rows:

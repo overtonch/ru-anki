@@ -87,6 +87,17 @@ def test_plain_to_cues_spreads_evenly():
     assert cues[-1][1] == 40.0
 
 
+def test_lrc_to_cues_compresses_when_overshooting_duration():
+    # LRC timed as if the track were ~250s; the audio is 200s
+    lrc = "\n".join(f"[{i // 60:02d}:{i % 60:02d}.00]line {i}" for i in range(2, 252, 10))
+    cues = music.lrc_to_cues(lrc, total=200)
+    assert cues[0][0] < 5                      # intro lead-in kept
+    assert cues[-1][0] < 200                   # last line now inside the track
+    # a well-fitting LRC is left untouched
+    good = music.lrc_to_cues("[00:02.00]a\n[01:00.00]b\n[02:00.00]c", total=200)
+    assert good[-1][0] == 120.0
+
+
 def test_pick_youtube_prefers_official_and_duration():
     results = [
         {"id": "cover", "title": "Кукушка (acoustic cover)", "channel": "SomeGuy", "duration": 240, "url": "u1"},

@@ -443,6 +443,33 @@ def create_song(body: SongIn, background: BackgroundTasks,
             "synced": not need_whisper, "note": note}
 
 
+@app.post("/songs/{video_id}/refetch-lyrics")
+def refetch_song_lyrics(video_id: int):
+    """Re-pull the synced lyrics for a song (e.g. a mis-timed LRC) using its
+    stored artist / title / duration. Keeps the audio and any cards; refreshes
+    the transcript and drops the cached line explanations."""
+    v = store.get_video(video_id)
+    if not v or v.get("kind") != "song":
+        raise HTTPException(404, "no such song")
+    artist = v.get("channel") or ""
+    full = v.get("title") or ""
+    track = full.split("—", 1)[1].strip() if "—" in full else full
+    dur = _hms_secs(v.get("duration")) if isinstance(v.get("duration"), str) else v.get("duration")
+    cues, subs_kind, note = _song_lyrics(artist, track, v.get("duration"), sub_url=v["url"])
+    if not cues:
+        raise HTTPException(404, "still no lyrics found")
+    vtt = whisper_rt.cues_to_vtt(cues)
+    store.set_raw_subs(video_id, vtt, kind=subs_kind, lang="ru")
+    store.replace_subtitle_lines(
+        video_id, [(store.secs_to_hms(s), t) for s, _, t in cues])
+    store.drop_lyric_notes(video_id)
+    cand_moved = store.resnap_candidates(video_id)
+    _, card_moved = srs.resnap_timestamps(video_id)
+    return {"ok": True, "lines": len(cues), "subs_kind": subs_kind, "note": note,
+            "last_ts": round(cues[-1][0], 1), "duration": v.get("duration"),
+            "candidates_resnapped": cand_moved, "cards_resnapped": card_moved}
+
+
 _EXTRACT_KEYS = ("state", "phase", "chunks_done", "chunks_total", "added",
                  "elapsed", "detail", "errors", "model", "usage")
 

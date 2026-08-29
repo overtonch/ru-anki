@@ -4893,8 +4893,22 @@ async function renderTranscribeRow(id) {
   const kind = (DETAIL_V && DETAIL_V.subs_kind) || 'auto';
   const err = s.state === 'error'
     ? `<span style="color:var(--no)">last run failed: ${escapeHtml(s.detail || '')}</span> · ` : '';
+  if (DETAIL_V && DETAIL_V.kind === 'song') {
+    row.innerHTML = `${err}lyrics: ${kind && kind.startsWith('lrclib') ? 'LRCLIB' : escapeHtml(kind)} ·
+      <button class="backlink" onclick="resyncLyrics(${id})">re-sync from LRCLIB</button>`;
+    return;
+  }
   row.innerHTML = `${err}captions: ${kind === 'manual' ? 'manual' : kind === 'whisper' ? 'Whisper' : 'auto'} ·
     <button class="backlink" onclick="retranscribe(${id})">re-transcribe with Whisper${kind === 'whisper' ? ' again' : ''}</button>`;
+}
+async function resyncLyrics(id) {
+  toast('re-syncing lyrics…');
+  try {
+    const r = await api(`/songs/${id}/refetch-lyrics`, { method: 'POST' });
+    toast(`lyrics refreshed · ${r.lines} lines${r.cards_resnapped ? ` · ${r.cards_resnapped} card${r.cards_resnapped === 1 ? '' : 's'} re-snapped` : ''}`, 3500);
+    try { await idbDel('offline', 'w' + id); } catch {}
+    renderTranscribeRow(id);
+  } catch (e) { toast('couldn’t re-sync: ' + e.message, 3500); }
 }
 async function retranscribe(id) {
   if (!confirm('Re-transcribe the audio with Whisper?\n\nRuns on the Mac (no cost), ~2–4 min per 10 min of video, and replaces the current captions. Re-extract cards afterward for the cleaner text.')) return;

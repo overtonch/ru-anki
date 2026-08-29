@@ -692,6 +692,27 @@ def locate_seconds(video_id, sentence, normalized_text, approx_sec):
     return secs[i] if i is not None else approx_sec
 
 
+def resnap_candidates(video_id):
+    """Re-locate each pending candidate's timestamp against the current
+    transcript (after the lyrics/subs were refreshed). Returns rows changed."""
+    c = connect()
+    rows = c.execute(
+        "SELECT id, span_text, normalized_text, sentence, timestamp_start "
+        "FROM candidates WHERE video_id=? AND status='pending'", (video_id,)).fetchall()
+    changed = 0
+    for r in rows:
+        approx = _to_secs(r["timestamp_start"]) if r["timestamp_start"] else 0.0
+        secs = locate_seconds(video_id, r["sentence"] or "",
+                              r["normalized_text"] or r["span_text"], approx)
+        if secs is not None and abs(secs - approx) > 1.5:
+            c.execute("UPDATE candidates SET timestamp_start=? WHERE id=?",
+                      (secs_to_hms(secs)[:8], r["id"]))
+            changed += 1
+    c.commit()
+    c.close()
+    return changed
+
+
 def clip_window(video_id, normalized_text, approx_sec, sentence="", lead=1.2, trail=1.5):
     """Where the audio clip for a card should start/run — snapped to the line
     that best matches the card's sentence / really contains the lemma, spanning

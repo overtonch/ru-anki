@@ -165,6 +165,7 @@ def fetch_lyrics(artist, title, duration=None):
         pass
 
     best, best_score = None, -1.0
+    seen = set()
     for c in cands:
         if not isinstance(c, dict) or c.get("instrumental"):
             continue
@@ -172,9 +173,19 @@ def fetch_lyrics(artist, title, duration=None):
         plain = (c.get("plainLyrics") or "").strip()
         if _cyrillic_fraction(synced or plain) < 0.5:
             continue
+        if synced in seen:                    # /get and /search return overlaps
+            continue
+        seen.add(synced)
         score = 100.0 if synced else 0.0
-        if duration and c.get("duration"):
-            score += max(0.0, 45.0 - abs(float(c["duration"]) - float(duration)))
+        cdur = float(c["duration"]) if c.get("duration") else 0.0
+        if duration and cdur:
+            score += max(0.0, 45.0 - abs(cdur - float(duration)))
+        # a synced LRC whose own last timestamp overshoots its own stated length
+        # is badly synced — dock it so a cleaner entry can win
+        if synced and cdur:
+            over = _lrc_last_ts(synced) - cdur
+            if over > 8:
+                score -= min(40.0, (over - 8) * 1.5)
         if score > best_score:
             best, best_score = c, score
 
@@ -192,10 +203,22 @@ _LRC_TS = re.compile(r"\[(\d{1,2}):(\d{2}(?:[.:]\d{1,3})?)\]")
 _META_TAG = re.compile(r"^\[[a-z]{1,8}:.*\]$", re.I)
 
 
+def _lrc_last_ts(lrc):
+    """The latest [mm:ss] timestamp in an LRC string, in seconds (0 if none)."""
+    last = 0.0
+    for mm, ss in _LRC_TS.findall(lrc or ""):
+        last = max(last, int(mm) * 60 + float(ss.replace(":", ".")))
+    return last
+
+
 def lrc_to_cues(lrc, total=None):
     """`.lrc` text -> [(start, end, text)] sorted by start. A line's end is the
     next line's start (blank LRC lines mark verse gaps and are dropped as cues
-    but still bound the previous line)."""
+    but still bound the previous line).
+
+    If the LRC's timing runs well past the track length (a mis-synced community
+    entry — common), the timestamps are linearly compressed to fit the audio so
+    the karaoke highlight doesn't drift further and further behind."""
     stamped = []
     for raw in (lrc or "").splitlines():
         line = raw.strip()
@@ -209,6 +232,14 @@ def lrc_to_cues(lrc, total=None):
             secs = int(mm) * 60 + float(ss.replace(":", "."))
             stamped.append((round(secs, 2), text))
     stamped.sort(key=lambda r: r[0])
+    if not stamped:
+        return []
+
+    first, last = stamped[0][0], stamped[-1][0]
+    if total and total > 20 and last > total * 1.03 and last - first > 30:
+        # squeeze [first .. last] into [first .. total-1], keeping the intro lead-in
+        k = (total - 1.0 - first) / (last - first)
+        stamped = [(round(first + (t - first) * k, 2), txt) for t, txt in stamped]
 
     cues = []
     for i, (start, text) in enumerate(stamped):
