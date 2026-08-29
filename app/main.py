@@ -33,6 +33,7 @@ import heartbeat  # noqa: E402
 import llm  # noqa: E402
 import music  # noqa: E402
 import srs  # noqa: E402
+import tts  # noqa: E402
 import whisper_rt  # noqa: E402
 import store  # noqa: E402
 import subs  # noqa: E402
@@ -1282,15 +1283,22 @@ def _hms_secs(hms):
 
 def _study_card_view(card, with_preview=True, titles=None):
     """Trim an srs card dict to what the review screen needs. Pass `titles`
-    (a {video_id: title} map) when rendering many cards to avoid a query each."""
+    (store.video_titles()) when rendering many cards to avoid a query each."""
     if not card:
         return None
     vid = card.get("video_id")
     if titles is not None:
-        title = titles.get(vid)
+        m = titles.get(vid) or {}
+        title, kind = m.get("title"), m.get("kind")
     else:
         v = store.get_video(vid) if vid else None
-        title = v["title"] if v else None
+        title, kind = (v["title"], v["kind"]) if v else (None, None)
+    seconds = _hms_secs(card["timestamp"]) if card.get("timestamp") else None
+    # a text source (book / article) has no recorded audio — speak it instead
+    has_clip = seconds is not None and vid is not None and kind != "text"
+    clip = (f"/videos/{vid}/clip?t={round(seconds)}"
+            f"&w={_urlparse.quote(card.get('normalized_text') or '')}") if has_clip \
+        else (f"/srs/cards/{card['id']}/tts" if card.get("id") else None)
     return {
         "id": card["id"], "front_html": card["front_html"],
         "translation": card["translation"], "span_text": card["span_text"],
@@ -1299,7 +1307,9 @@ def _study_card_view(card, with_preview=True, titles=None):
         "video_id": vid,
         "video_title": title,
         "timestamp": card["timestamp"],
-        "seconds": _hms_secs(card["timestamp"]) if card.get("timestamp") else None,
+        "seconds": seconds if has_clip else None,   # only when it maps to a real clip
+        "clip": clip,
+        "tts": not has_clip,
         "preview": srs.preview(card) if with_preview else None,
     }
 
@@ -1371,8 +1381,13 @@ def srs_edit_card(card_id: int, body: CardEditIn):
 def srs_queue(limit: int = 60):
     cards = srs.queue(limit=limit)
     titles = store.video_titles()
-    return {"cards": [_study_card_view(c, titles=titles) for c in cards],
-            **srs.stats()}
+    ctxs = store.card_contexts(cards)
+    out = []
+    for c in cards:
+        v = _study_card_view(c, titles=titles)
+        v["context"] = ctxs.get(c["id"])
+        out.append(v)
+    return {"cards": out, **srs.stats()}
 
 
 @app.get("/srs/offline")
@@ -1382,17 +1397,18 @@ def srs_offline(days: int = 2):
     audio-clip + frame URLs to pre-download."""
     b = srs.offline_bundle(days=max(0, min(14, days)))
     titles = store.video_titles()
+    ctxs = store.card_contexts(b["cards"])
     cards, media = [], []
     for c in b["cards"]:
         v = _study_card_view(c, titles=titles)
         v["due"] = c.get("due")
         v["due_now"] = bool(c.get("due_now"))
+        v["context"] = ctxs.get(c["id"])
+        if v.get("clip"):
+            media.append(v["clip"])
         if v.get("seconds") is not None and v.get("video_id") is not None:
-            t = round(v["seconds"])
-            w = _urlparse.quote(c.get("normalized_text") or "")
-            v["clip"] = f"/videos/{v['video_id']}/clip?t={t}&w={w}"
-            v["frame"] = f"/videos/{v['video_id']}/frame?t={t}"
-            media += [v["clip"], v["frame"]]
+            v["frame"] = f"/videos/{v['video_id']}/frame?t={round(v['seconds'])}"
+            media.append(v["frame"])
         cards.append(v)
     return {"generated_at": b["generated_at"], "days": b["days"],
             "cards": cards, "media": media, **srs.stats()}
@@ -1403,12 +1419,41 @@ def srs_card(card_id: int):
     card = srs.get_card(card_id)
     if not card:
         raise HTTPException(404, "no such card")
-    return {**_study_card_view(card), "preview": srs.preview(card_id)}
+    v = _study_card_view(card)
+    v["context"] = store.card_context(card.get("video_id"), card.get("sentence") or "")
+    return {**v, "preview": srs.preview(card_id)}
 
 
 @app.get("/srs/cards/{card_id}/preview")
 def srs_card_preview(card_id: int):
     return srs.preview(card_id)
+
+
+@app.get("/srs/cards/{card_id}/context")
+def srs_card_context(card_id: int):
+    """The line/paragraph before and after this card's sentence — shown on the
+    card back for context, most useful for text-source cards with no clip."""
+    card = srs.get_card(card_id)
+    if not card:
+        raise HTTPException(404, "no such card")
+    return store.card_context(card.get("video_id"), card.get("sentence") or "")
+
+
+@app.get("/srs/cards/{card_id}/tts")
+def srs_card_tts(card_id: int):
+    """Speak the card's sentence with the local macOS Russian voice — the
+    "listen" clip for cards whose source is text (no recorded audio)."""
+    card = srs.get_card(card_id)
+    if not card:
+        raise HTTPException(404, "no such card")
+    text = (card.get("sentence") or card.get("span_text") or "").strip()
+    try:
+        path = tts.synthesize(text)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"tts failed: {e}")
+    return FileResponse(path, media_type="audio/mp4",
+                        headers={"Accept-Ranges": "bytes",
+                                 "Cache-Control": "max-age=604800"})
 
 
 @app.post("/srs/cards/{card_id}/review")

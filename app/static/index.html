@@ -706,6 +706,9 @@
                   display:flex; flex-direction:column; gap:1rem; }
   .study-q { font-size:1.4rem; line-height:1.5; text-align:center; margin:auto 0; }
   .study-q b { color:var(--accent); font-weight:750; }
+  .study-scroll .a-ctx { text-align:center; font-size:.9rem; line-height:1.5;
+                         color:var(--muted); opacity:.75; margin:0; }
+  .study-scroll .a-ctx + .study-q { margin-top:.2rem; }
   .study-a { border-top:1px solid var(--line); padding-top:1rem; text-align:center; }
   .study-a .a-tr { font-size:1.5rem; font-weight:650; }
   .study-a .a-acc { color:var(--muted); font-size:1rem; margin-top:.25rem; }
@@ -2545,8 +2548,9 @@ function studyCard() { return STUDY && STUDY.queue[STUDY.i]; }
 function clipUrl(c) {
   if (!c) return null;
   if (c.clip) return c.clip;                    // exact string the offline bundle pre-cached
-  return c.seconds != null && c.video_id != null
-    ? `/videos/${c.video_id}/clip?t=${Math.round(c.seconds)}&w=${encodeURIComponent(c.normalized_text || '')}` : null;
+  if (c.seconds != null && c.video_id != null)
+    return `/videos/${c.video_id}/clip?t=${Math.round(c.seconds)}&w=${encodeURIComponent(c.normalized_text || '')}`;
+  return `/srs/cards/${c.id}/tts`;              // no recorded audio → speak the sentence
 }
 let STUDY_AUDIO_FIRST = (() => { try { return localStorage.getItem('studyAudioFirst') === '1'; } catch { return false; } })();
 function setAudioFirst(on) {
@@ -2607,12 +2611,17 @@ function studyReveal() {
            onerror="this.closest('.a-clip').classList.add('noimg')">
       <span class="a-play">▶ ${fmtTime(c.seconds)}${c.video_title ? ' · ' + escapeHtml(c.video_title) : ''}</span>
     </button>` : '';
+  const ctx = c.context || {};
+  const ctxHtml = `
+    ${ctx.before ? `<div class="a-ctx">…&nbsp;${escapeHtml(ctx.before)}</div>` : ''}
+    <div class="study-q" style="font-size:1.05rem;margin:0;color:var(--muted)">${c.front_html}</div>
+    ${ctx.after ? `<div class="a-ctx">${escapeHtml(ctx.after)}&nbsp;…</div>` : ''}`;
   $('#studyBody').innerHTML = `
     <div class="study-scroll">
-      <div class="study-q" style="font-size:1.05rem;margin:0;color:var(--muted)">${c.front_html}</div>
+      ${ctxHtml}
       <div class="study-a">
         ${cu ? `<audio id="studyAudio" src="${cu}" preload="auto"></audio>
-                <button class="a-replay" onclick="playStudyAudio()">🔊 replay line</button>` : ''}
+                <button class="a-replay" onclick="playStudyAudio()">🔊 ${c.seconds != null ? 'replay line' : 'listen'}</button>` : ''}
         <div class="a-tr">${escapeHtml(c.translation || '—')}</div>
         ${c.accented ? `<div class="a-acc">${escapeHtml(c.accented)}</div>` : ''}
         ${clip}

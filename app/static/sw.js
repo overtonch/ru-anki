@@ -90,8 +90,9 @@ self.addEventListener('fetch', e => {
   // session runs with no connection. The page pre-downloads these into
   // 'ru-anki-srs-media' via /srs/offline; anything not pre-cached still falls
   // through to the network when online.
-  if (url.pathname.startsWith('/videos/') &&
-      (url.pathname.includes('/clip') || url.pathname.includes('/frame'))) {
+  if ((url.pathname.startsWith('/videos/') &&
+       (url.pathname.includes('/clip') || url.pathname.includes('/frame'))) ||
+      /^\/srs\/cards\/\d+\/tts$/.test(url.pathname)) {
     e.respondWith(srsMedia(e.request));
     return;
   }

@@ -146,11 +146,12 @@ def get_video(video_id):
 
 
 def video_titles():
-    """{video_id: title} for every video — one query, for batch card rendering."""
+    """{video_id: {"title","kind"}} for every video — one query, for batch card
+    rendering (title + whether the source can yield a real audio clip)."""
     c = connect()
-    rows = c.execute("SELECT id, title FROM videos").fetchall()
+    rows = c.execute("SELECT id, title, kind FROM videos").fetchall()
     c.close()
-    return {r["id"]: r["title"] for r in rows}
+    return {r["id"]: {"title": r["title"], "kind": r["kind"]} for r in rows}
 
 
 def raw_subs(video_id):
@@ -426,6 +427,91 @@ def context_for(video_id, timestamp, span):
     if center is None:
         center = next((i for i, t in enumerate(texts) if _contains(t, span, stems)), anchor)
     return _best_sentence(texts, center, span, stems)
+
+
+def _ctx_norm(s):
+    return _re.sub(r"[^а-яёa-z0-9 ]", "", (s or "").lower().replace("ё", "е"))
+
+
+def card_context(video_id, sentence):
+    """The transcript line / paragraph immediately before and after the one this
+    card's sentence came from. -> {"before": str, "after": str} (either may be
+    ''). Headings ('## …') are skipped. Best-effort fuzzy match."""
+    if not video_id or not (sentence or "").strip():
+        return {"before": "", "after": ""}
+    c = connect()
+    rows = c.execute(
+        "SELECT text FROM subtitle_lines WHERE video_id=? ORDER BY id",
+        (video_id,)).fetchall()
+    c.close()
+    texts = [r["text"] for r in rows if not (r["text"] or "").startswith("## ")]
+    if not texts:
+        return {"before": "", "after": ""}
+    key = _ctx_norm(sentence)
+    kset = set(key.split())
+    best_i, best_score = None, 0.0
+    for i, t in enumerate(texts):
+        nt = _ctx_norm(t)
+        if not nt:
+            continue
+        if key and (key in nt or (len(nt) > 12 and nt in key)):
+            best_i, best_score = i, 1.0
+            break
+        toks = set(nt.split())
+        if not toks:
+            continue
+        j = len(kset & toks) / len(kset | toks)
+        if j > best_score:
+            best_i, best_score = i, j
+    if best_i is None or best_score < 0.34:
+        return {"before": "", "after": ""}
+    before = texts[best_i - 1].strip() if best_i > 0 else ""
+    after = texts[best_i + 1].strip() if best_i + 1 < len(texts) else ""
+    return {"before": before, "after": after}
+
+
+def card_contexts(cards):
+    """Batch card_context() for a list of card dicts -> {card_id: {before, after}}.
+    Loads each source video's lines once."""
+    by_vid = {}
+    for c in cards:
+        if c.get("video_id") and (c.get("sentence") or "").strip():
+            by_vid.setdefault(c["video_id"], []).append(c)
+    out = {}
+    conn = connect()
+    for vid, cs in by_vid.items():
+        rows = conn.execute(
+            "SELECT text FROM subtitle_lines WHERE video_id=? ORDER BY id",
+            (vid,)).fetchall()
+        texts = [r["text"] for r in rows if not (r["text"] or "").startswith("## ")]
+        if not texts:
+            continue
+        norm = [_ctx_norm(t) for t in texts]
+        for c in cs:
+            key = _ctx_norm(c["sentence"])
+            kset = set(key.split())
+            if not kset:
+                continue
+            bi, bs = None, 0.0
+            for i, nt in enumerate(norm):
+                if not nt:
+                    continue
+                if key in nt or (len(nt) > 12 and nt in key):
+                    bi, bs = i, 1.0
+                    break
+                toks = set(nt.split())
+                if toks:
+                    j = len(kset & toks) / len(kset | toks)
+                    if j > bs:
+                        bi, bs = i, j
+            if bi is None or bs < 0.34:
+                continue
+            out[c["id"]] = {
+                "before": texts[bi - 1].strip() if bi > 0 else "",
+                "after": texts[bi + 1].strip() if bi + 1 < len(texts) else "",
+            }
+    conn.close()
+    return out
 
 
 def _score_sentence(text, span, stems, rank_of):
