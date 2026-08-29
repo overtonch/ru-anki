@@ -228,13 +228,14 @@ def extract_candidates(title, transcript, already_decided, model=DEFAULT_MODEL,
 
 # ------------------------------------------------------------------ live lookup
 
-TRANSLATE_SYSTEM = """You gloss ONE Russian word or phrase as used in one specific ASR line, for a B2/C1 learner building a flashcard. The line may be truncated or contain glitches.
+TRANSLATE_SYSTEM = """You gloss ONE Russian word or phrase as used in one specific line, for a B2/C1 learner building a flashcard. The line may be truncated or contain glitches.
 
 Output ONLY one raw JSON object, no fence:
-{"span_text": "...", "is_phrase": true/false, "translation": "...", "sentence": "..."}
-- span_text: clean citation form of what you glossed.
+{"span_text": "...", "is_phrase": true/false, "translation": "...", "sentence": "...", "stressed": "..."}
+- span_text: clean citation (dictionary) form of what you glossed.
 - translation: best contextual English gloss; "a / b" if ambiguous; idioms by meaning.
-- sentence: the line lightly cleaned into a short readable Russian sentence containing an inflected form of span_text; if too fragmentary, write a minimal natural one."""
+- sentence: the line lightly cleaned into a short readable Russian sentence containing an inflected form of span_text; if too fragmentary, write a minimal natural one.
+- stressed: the word/phrase in the EXACT form it appears in the sentence (not the citation form), with a combining acute accent (U+0301) after the stressed vowel and ё written with its dots. One-syllable words and ё get no accent mark. Use the context for mobile-stress words (голова́ → го́ловы)."""
 
 
 TRANSLATE_MODEL = os.environ.get("RU_TRANSLATE_MODEL", "sonnet")

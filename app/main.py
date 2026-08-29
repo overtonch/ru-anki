@@ -1455,6 +1455,8 @@ def _translate_preview(video_id, span, subtitle_line_id=None, timestamp=None,
     front, bolded = anki.front_html(sent, span_text, is_phrase)
     return {"span_text": span_text, "is_phrase": is_phrase, "translation": translation,
             "sentence": sent, "front_html": front, "bolded": bolded, "ts": ts,
+            "stressed": (g.get("stressed") or "").strip() or None,
+            "gloss": store.gloss_for(span) or store.gloss_for(span_text),
             "freq": store.freq_hint(store.lemma_key(span_text), is_phrase)}
 
 
@@ -1533,6 +1535,8 @@ def _translate_ctx(span, ctx):
     front, bolded = anki.front_html(sent, span_text, is_phrase)
     return {"span_text": span_text, "is_phrase": is_phrase, "translation": translation,
             "sentence": sent, "front_html": front, "bolded": bolded,
+            "stressed": (g.get("stressed") or "").strip() or None,
+            "gloss": store.gloss_for(span) or store.gloss_for(span_text),
             "freq": store.freq_hint(store.lemma_key(span_text), is_phrase)}
 
 

@@ -266,6 +266,8 @@
   #modalPreview .pv .sent { font-size:1rem; }
   #modalPreview .pv .sent b { font-weight:700; }
   #modalPreview .pv .tr { color:var(--accent); font-size:1rem; margin-top:.25rem; }
+  #modalPreview .pv-acc { color:var(--fg); font-size:1.05rem; margin-top:.35rem; font-weight:600; }
+  #modalPreview .pv-quick { color:var(--muted); font-size:.85rem; margin-top:.3rem; }
   #modalPreview .pv.quick .tr { color:var(--fg-dim); }
   #modalPreview .qtag { font-size:.62rem; text-transform:uppercase; letter-spacing:.06em;
                         color:var(--muted); border:1px solid var(--line); border-radius:.3rem;
@@ -883,12 +885,14 @@
     </div>
     <div class="watchhint">tap a word to card it · <span class="dot"></span> carded · <span class="dot y"></span> suggested · tap video to pause</div>
     <div id="transcript" class="transcript"></div>
-    <div id="inlineDecide" hidden>
-      <div class="id-head"><b id="idSpan"></b> <span id="idTr"></span></div>
-      <div class="id-freq" id="idFreq"></div>
-      <div class="id-btns" id="idBtns"></div>
-      <button class="id-more" id="idMore">all places this is said →</button>
-    </div>
+  </div>
+
+  <!-- inline decide popover — top-level so it can float over the reader too -->
+  <div id="inlineDecide" hidden>
+    <div class="id-head"><b id="idSpan"></b> <span id="idTr"></span></div>
+    <div class="id-freq" id="idFreq"></div>
+    <div class="id-btns" id="idBtns"></div>
+    <button class="id-more" id="idMore">all places this is said →</button>
   </div>
 
   <!-- WORD VIEW -->
@@ -1857,8 +1861,15 @@ function pvHtml(p) {
   const fq = p.freq;
   const fqHtml = fq && fq.label
     ? ` <span class="fq ${fq.band || ''}">${escapeHtml(fq.label)}</span>` : '';
+  const norm = s => (s || '').toLowerCase().replace(/[́ё]/g, m => m === 'ё' ? 'е' : '');
+  const stress = p.stressed && norm(p.stressed) !== norm(p.translation)
+    ? `<div class="pv-acc">${escapeHtml(p.stressed)}</div>` : '';
+  const g = p.gloss && norm(p.gloss) !== norm(p.translation)
+    ? `<div class="pv-quick">${escapeHtml(p.gloss)} <span class="qtag">dict</span></div>` : '';
   return `<div class="pv"><div class="sent">${p.front_html}</div>
-    <div class="tr">${escapeHtml(p.translation || '')}${fqHtml}</div></div>`;
+    ${stress}
+    <div class="tr">${escapeHtml(p.translation || '')}${fqHtml}</div>
+    ${g}</div>`;
 }
 function updatePreview(span, immediate) {
   clearTimeout(MODAL.pvTimer);
@@ -1945,6 +1956,28 @@ async function confirmCard() {
   }
 
   const watchCue = MODAL.watchCue;
+
+  // reader: post directly + refetch so the server's lemma-aware green is exact
+  if (READER_MODE) {
+    if (!navigator.onLine) { toast('connect to make cards while reading'); return; }
+    const vid = READER_ID, lineId = MODAL.lineId ?? null;
+    const sentence = pv ? pv.sentence : MODAL.sentence;
+    closeCardModal(false);
+    markWordCarded(pv ? pv.span_text : span); renderReaderBody();   // optimistic
+    try {
+      const r = await api(`/videos/${vid}/make-card`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ span, subtitle_line_id: lineId, sentence,
+          span_text: pv ? pv.span_text : null,
+          translation: pv ? pv.translation : null,
+          is_phrase: pv ? pv.is_phrase : null }) });
+      toast(`✓ ${r.span_text} — ${r.translation || ''}`);
+    } catch (e) { toast('couldn’t make card — ' + e.message, 3500); }
+    refreshReader();
+    refreshStudyBanner();
+    return;
+  }
+
   const item = {
     client_id: 'c' + Date.now() + Math.random().toString(36).slice(2, 6),
     video_id: CURRENT, span,
@@ -1963,10 +1996,7 @@ async function confirmCard() {
            : (navigator.onLine ? 'card queued' : 'saved — translates when online'));
   flushQueue();
 
-  if (READER_MODE) {
-    markWordCarded(pv ? pv.span_text : span);   // sets w.c in WCUES
-    renderReaderBody();                         // repaint highlights
-  } else if (watchCue != null && WP) {
+  if (watchCue != null && WP) {
     // replay the line you just carded
     wPausedForModal = false;
     markWordCarded(span);
@@ -3402,7 +3432,7 @@ async function inlineCommit(decision) {
   }
   const carded = decision === 'yes';
   document.querySelectorAll(
-    `#transcript [data-cand="${id}"], #capOverlay [data-cand="${id}"]`
+    `#transcript [data-cand="${id}"], #capOverlay [data-cand="${id}"], #readBody [data-cand="${id}"]`
   ).forEach(s => {
     s.classList.remove('pending');
     if (carded) s.classList.add('has-card');
@@ -3410,10 +3440,9 @@ async function inlineCommit(decision) {
   WCUES.forEach(cue => (cue.words || []).forEach(w => {
     if (+w.p === id) { delete w.p; if (carded) { w.c = true; w.cc = id; } else w.dd = id; }
   }));
-  // keep the candidate info around so an undo can re-show it
-  toast(carded ? (dupe ? 'already in Anki ✓' : '✓ added to Anki · tap again to undo')
-               : 'skipped · tap again to undo');
+  toast(carded ? '✓ carded · tap again to undo' : 'skipped · tap again to undo');
   resume();
+  if (READER_MODE) { refreshReader(); refreshStudyBanner(); }
 }
 document.addEventListener('pointerdown', e => {
   const pop = $('#inlineDecide');
@@ -3488,6 +3517,23 @@ async function openReader(id) {
   const b = $('#readBody');
   let sc = 0; try { sc = +localStorage.getItem('rdscroll:' + id) || 0; } catch {}
   requestAnimationFrame(() => { b.scrollTop = sc * (b.scrollHeight - b.clientHeight); updateReadProg(); });
+}
+async function refreshReader() {
+  if (!READER_MODE || !READER_ID) return;
+  const b = $('#readBody');
+  const max = b.scrollHeight - b.clientHeight;
+  const frac = max > 0 ? b.scrollTop / max : 0;
+  let d;
+  try { d = await api(`/videos/${READER_ID}/read`); idbPut('offline', 'r' + READER_ID, d).catch(() => {}); }
+  catch { return; }
+  READER_CH = d.chapters || [];
+  WCANDS = d.cands || {};
+  WCUES = (d.blocks || []).map(bl => bl.h != null
+    ? { heading: bl.h }
+    : { words: bl.w, text: (bl.w || []).map(x => x.t).join(' '), lineId: bl.line_id });
+  renderReaderBody();
+  renderReaderToc();
+  requestAnimationFrame(() => { b.scrollTop = frac * (b.scrollHeight - b.clientHeight); updateReadProg(); });
 }
 function renderReaderBody() {
   const box = $('#readBody');
