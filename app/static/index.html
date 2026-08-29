@@ -905,6 +905,35 @@
   #tocList button.on { color:var(--accent); background:var(--accent-soft); }
   #tocList button:active { background:var(--card-2); }
 
+  /* ---- mini player ---- */
+  #miniPlayer { position:fixed; left:0; right:0; z-index:19;
+                bottom:calc(env(safe-area-inset-bottom)); display:flex; align-items:stretch;
+                background:var(--card); border-top:1px solid var(--line);
+                box-shadow:0 -6px 24px rgba(0,0,0,.35); animation:miniIn .22s ease; }
+  #miniPlayer[hidden] { display:none; }
+  @keyframes miniIn { from { transform:translateY(100%); } }
+  #miniPlayer .mini-bar { position:absolute; top:0; left:0; right:0; height:2px; background:var(--line-soft); }
+  #miniPlayer .mini-bar i { display:block; height:100%; width:0; background:var(--accent); transition:width .25s linear; }
+  #miniPlayer .mini-main { flex:1; min-width:0; display:flex; align-items:center; gap:.6rem;
+                background:none; border:0; color:var(--fg); text-align:left; padding:.5rem .7rem; cursor:pointer; }
+  #miniPlayer .mini-main img { width:2.4rem; height:2.4rem; border-radius:.35rem; object-fit:cover;
+                background:var(--card-2); flex:none; }
+  #miniPlayer .mini-main img[src=""], #miniPlayer .mini-main img:not([src]) { visibility:hidden; }
+  #miniPlayer .mini-meta { min-width:0; display:flex; flex-direction:column; line-height:1.25; }
+  #miniPlayer .mini-meta b { font-size:.85rem; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #miniPlayer .mini-meta span { font-size:.72rem; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #miniPlayer .mini-btn { flex:none; width:2.9rem; background:none; border:0; color:var(--fg-dim);
+                font-size:1rem; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+  #miniPlayer .mini-btn svg { width:1.15rem; height:1.15rem; }
+  #miniPlayer .mini-btn:active { color:var(--accent); }
+  #miniPlayer .mini-x { color:var(--muted); font-size:.9rem; width:2.4rem; }
+  #miniPlayer #miniPP { font-size:1.15rem; color:var(--fg); }
+  /* make room so the bar never hides content */
+  html.has-mini #listView, html.has-mini #detailView { padding-bottom:4rem; }
+  html.has-mini .cl-body, html.has-mini .studybody, html.has-mini .wordbody,
+  html.has-mini #statsBody, html.has-mini .readbody { padding-bottom:4rem; }
+  html.has-mini .study-foot { margin-bottom:3.4rem; }
+
   #pasteWrap, #shareWrap { position:fixed; inset:0; background:rgba(6,8,11,.6); z-index:20;
                align-items:center; justify-content:center; padding:1rem;
                -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px); }
@@ -1191,6 +1220,20 @@
     </div>
   </div>
 </main>
+
+<!-- MINI PLAYER — a playing song follows you around the app -->
+<div id="miniPlayer" hidden>
+  <div class="mini-bar"><i id="miniFill"></i></div>
+  <button class="mini-main" onclick="expandSong()" aria-label="open lyrics">
+    <img id="miniArt" alt="">
+    <span class="mini-meta"><b id="miniTitle"></b><span id="miniSub"></span></span>
+  </button>
+  <button class="mini-btn" id="miniSong" onclick="miniGoToSong(event)" title="song page" aria-label="song page">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17V5l12-2v12M7 17a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0zm12-2a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+  </button>
+  <button class="mini-btn" id="miniPP" onclick="miniPlayPause(event)" aria-label="play / pause"></button>
+  <button class="mini-btn mini-x" onclick="stopSong(event)" aria-label="stop">✕</button>
+</div>
 
 <!-- SHARE-TO-IMPORT HELP -->
 <div id="shareWrap" hidden onclick="if(event.target===this)closeShareHelp()">
@@ -2454,6 +2497,9 @@ function loadYTApi() {
 }
 
 async function openWatch(id, seekTo) {
+  // already playing this song in the mini-player — just expand it back
+  if (MINI && MINI.id === id && WP && seekTo == null) { expandSong(); return; }
+  if (MINI && MINI.id !== id) stopSong();          // different song → drop the old one
   // jumping to a specific moment (from a review card / word page) is a peek —
   // it must not overwrite "where I was watching"
   watchEphemeral = seekTo != null;
@@ -3454,6 +3500,88 @@ function togglePlay() {
   pausing ? WP.pause() : WP.play();
   bumpCtrls();
   if (pausing) clearTimeout(ctrlTimer);   // controls stay up while paused
+}
+
+/* ---- mini player: a playing song keeps going while you browse ---- */
+let MINI = null, miniTimer = null;
+function minimizeSong() {
+  savePos();
+  clearInterval(capTimer); capTimer = null;
+  clearTimeout(ctrlTimer);
+  $('#lyricSheet').hidden = true;
+  document.documentElement.classList.remove('watching', 'fs-black');
+  $('#watchView').classList.remove('fs');
+  $('#watchView').hidden = true;
+  const v = (WDATA && WDATA.video) || {};
+  MINI = { id: v.id, art: v.thumbnail_url || '',
+           title: $('#audioTitle').textContent || (v.title || 'Song'),
+           artist: $('#audioSub').textContent || (v.channel || '') };
+  $('#miniArt')[MINI.art ? 'setAttribute' : 'removeAttribute']('src', MINI.art);
+  $('#miniTitle').textContent = MINI.title;
+  $('#miniSub').textContent = MINI.artist;
+  $('#miniPlayer').hidden = false;
+  document.documentElement.classList.add('has-mini');
+  clearInterval(miniTimer); miniTimer = setInterval(updateMini, 500);
+  updateMini();
+  const back = (MINI && MINI.returnTo) || '#detailView';
+  const el = $(back);
+  if (el && back !== '#listView') el.hidden = false;
+  else { $('#listView').hidden = false; }
+}
+function updateMini() {
+  if (!WP) { stopSong(); return; }
+  const playing = !WP.paused();
+  $('#miniPP').textContent = playing ? '⏸' : '▶';
+  const d = WP.dur();
+  if (d && isFinite(d)) $('#miniFill').style.width = (WP.time() / d * 100).toFixed(1) + '%';
+  if ('mediaSession' in navigator)
+    try { navigator.mediaSession.playbackState = playing ? 'playing' : 'paused'; } catch {}
+}
+function miniPlayPause(e) {
+  if (e) e.stopPropagation();
+  if (WP) (WP.paused() ? WP.play() : WP.pause());
+  updateMini();
+}
+function miniGoToSong(e) {
+  if (e) e.stopPropagation();
+  if (MINI) openDetail(MINI.id);
+}
+function expandSong() {
+  if (!MINI || !WP) { stopSong(); return; }
+  const views = ['#detailView', '#listView', '#cardsView', '#readView',
+                 '#studyView', '#statsView', '#wordView', '#vidDelView'];
+  MINI.returnTo = views.find(s => !$(s).hidden) || '#detailView';
+  $('#miniPlayer').hidden = true;
+  document.documentElement.classList.remove('has-mini');
+  clearInterval(miniTimer); miniTimer = null;
+  views.forEach(s => { $(s).hidden = true; });
+  document.documentElement.classList.add('watching');
+  SONG_MODE = true; audioMode = true;
+  $('#watchView').classList.add('song-mode', 'audiomode');
+  $('#watchView').hidden = false;
+  const v = (WDATA && WDATA.video) || {};
+  if (v.thumbnail_url) $('#audioArt').src = v.thumbnail_url;
+  $('#audioTitle').textContent = MINI.title;
+  $('#audioSub').textContent = MINI.artist;
+  wActive = -1;
+  renderTranscript();
+  attachTranscriptSelect();
+  refreshLoopBtn(); refreshAudioBtn();
+  clearInterval(capTimer); capTimer = setInterval(tick, 120);
+  onPlayState(!WP.paused());
+}
+function stopSong(e) {
+  if (e) e.stopPropagation();
+  clearInterval(miniTimer); miniTimer = null;
+  clearInterval(capTimer); capTimer = null;
+  teardownAudio();
+  MINI = null;
+  $('#miniPlayer').hidden = true;
+  document.documentElement.classList.remove('has-mini');
+  WP = null; WDATA = null; WCUES = []; WCANDS = {};
+  SONG_MODE = false; SONG_LOOP = false; audioMode = false;
+  $('#watchView').classList.remove('song-mode', 'audiomode');
+  if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
 }
 
 /* ---- fullscreen / immersive ---- */
@@ -5059,6 +5187,7 @@ function navBack() {
   if (!$('#tocPanel').hidden) { $('#tocPanel').hidden = true; return true; }
   if (!$('#watchView').hidden) {
     if ($('#watchView').classList.contains('fs')) { fsManual = true; exitFs(); return true; }
+    if (SONG_MODE && WP) { minimizeSong(); return true; }   // keep the song going
     closeWatch(); return true;
   }
   if (!$('#vidDelView').hidden) { closeVidDelete(); return true; }
