@@ -2247,6 +2247,10 @@ function renderStudyDone() {
         <div class="msg">${STUDY.done ? STUDY.done + ' review' + (STUDY.done === 1 ? '' : 's') + ' done' : 'All caught up'}</div>
         <div class="sub">${s.due || 0} due · ${s.new || 0} new left today · ${s.total} cards total</div>
         <button class="study-set" onclick="openStats()" style="background:none;border:0;cursor:pointer;text-decoration:underline;padding:0">📊 progress &amp; stats</button>
+        <label class="study-set">new cards per day
+          <input type="number" min="0" max="999" value="${s.new_per_day ?? 20}" id="npdInput"
+                 style="width:3.5rem;background:var(--card-2);border:1px solid var(--line);color:var(--fg);border-radius:.3rem;padding:.15rem .3rem"
+                 onchange="setNewPerDay(this.value)"></label>
         <label class="study-set"><input type="checkbox" ${STUDY_AUDIO_FIRST ? 'checked' : ''}
           onchange="setAudioFirst(this.checked)"> audio-first review (hide the sentence, play the line)</label>
         <label class="study-set"><input type="checkbox" ${s.anki_dual_write ? 'checked' : ''}
@@ -2259,6 +2263,13 @@ async function setDualWrite(on) {
   try { await api('/settings', { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ key: 'anki_dual_write', value: on }) });
     toast(on ? 'new cards will also go to Anki' : 'new cards stay in-app only', 2600);
+  } catch (e) { toast('couldn’t save — ' + e.message, 3000); }
+}
+async function setNewPerDay(v) {
+  const n = Math.max(0, Math.min(999, parseInt(v, 10) || 0));
+  try { await api('/settings', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ key: 'new_per_day', value: n }) });
+    toast(`${n} new cards/day`, 2000); refreshStudyBanner();
   } catch (e) { toast('couldn’t save — ' + e.message, 3000); }
 }
 

@@ -1133,6 +1133,7 @@ def _study_card_view(card, with_preview=True):
 def srs_stats():
     s = srs.stats()
     s["anki_dual_write"] = srs.anki_dual_write()
+    s["new_per_day"] = srs.new_per_day()
     return s
 
 
@@ -1264,14 +1265,18 @@ def srs_export():
 
 @app.get("/settings")
 def get_settings():
-    return {"anki_dual_write": srs.anki_dual_write()}
+    return {"anki_dual_write": srs.anki_dual_write(),
+            "new_per_day": srs.new_per_day()}
 
 
 @app.post("/settings")
 def post_settings(body: SettingIn):
-    if body.key not in ("anki_dual_write",):
+    if body.key == "anki_dual_write":
+        srs.set_setting(body.key, bool(body.value))
+    elif body.key == "new_per_day":
+        srs.set_setting(body.key, max(0, min(999, int(body.value))))
+    else:
         raise HTTPException(422, f"unknown setting {body.key}")
-    srs.set_setting(body.key, bool(body.value))
     return {"ok": True, body.key: srs.get_setting(body.key)}
 
 

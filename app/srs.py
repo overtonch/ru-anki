@@ -16,8 +16,16 @@ if HERE not in sys.path:
 import anki           # noqa: E402
 import store          # noqa: E402
 
-NEW_PER_DAY = int(os.environ.get("RU_SRS_NEW_PER_DAY", "20"))
+NEW_PER_DAY = int(os.environ.get("RU_SRS_NEW_PER_DAY", "20"))   # default; overridable in app_settings
 DAY_CUTOFF_HOUR = int(os.environ.get("RU_SRS_DAY_CUTOFF_HOUR", "4"))
+
+
+def new_per_day():
+    try:
+        v = int(get_setting("new_per_day", NEW_PER_DAY))
+        return max(0, min(999, v))
+    except (TypeError, ValueError):
+        return NEW_PER_DAY
 
 RATINGS = {1: "Again", 2: "Hard", 3: "Good", 4: "Easy"}
 
@@ -362,7 +370,7 @@ def stats():
     reviewed_today = c.execute(
         "SELECT COUNT(*) n FROM srs_reviews WHERE reviewed_at >= ?",
         (_day_start_iso(),)).fetchone()["n"]
-    new_left = max(0, NEW_PER_DAY - _new_introduced_today(c))
+    new_left = max(0, new_per_day() - _new_introduced_today(c))
     c.close()
     return {"due": due, "new": min(new_total, new_left),
             "new_total": new_total, "total": total,
@@ -438,7 +446,7 @@ def queue(limit=60):
         """SELECT * FROM srs_cards
            WHERE suspended=0 AND last_review IS NOT NULL AND due <= ?
            ORDER BY due ASC LIMIT ?""", (now, limit))]
-    budget = max(0, NEW_PER_DAY - _new_introduced_today(c))
+    budget = max(0, new_per_day() - _new_introduced_today(c))
     fresh = []
     if budget:
         fresh = [dict(r) for r in c.execute(
