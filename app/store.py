@@ -471,24 +471,64 @@ def _to_secs(hms):
     return int(m.group(1) or 0) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
 
 
-def clip_window(video_id, normalized_text, approx_sec, lead=1.2, trail=1.5):
-    """Where the audio clip for a card should actually start/run. The stored
-    timestamp is only the transcript LINE start (and the LLM sometimes tags a
-    neighbouring line), so snap to the line that really contains this lemma
-    nearest `approx_sec`, then span that line plus a little trailing context.
-    -> (start_sec, duration_sec)."""
+def secs_to_hms(s):
+    s = max(0.0, float(s))
+    return f"{int(s // 3600):02d}:{int(s % 3600 // 60):02d}:{s % 60:06.3f}"
+
+
+def _locate_line(video_id, sentence, normalized_text, approx_sec):
+    """Index of the transcript line where this card's moment actually is: the
+    line that best matches the card's SENTENCE, falling back to the nearest
+    occurrence of the lemma, then to the line nearest `approx_sec`.
+    -> (line_index, secs_list) or (None, secs_list)."""
+    texts, times, idx = _lemma_index(video_id)
+    secs = [_to_secs(t) for t in times]
+    valid = [i for i, s in enumerate(secs) if s is not None]
+    if not valid:
+        return None, secs
+    lem_lines = set(idx.get(lemma_key(normalized_text or ""), []))
+    sent_stems = [s for s in _stems(sentence or "") if len(s) >= 3]
+    best, best_score = None, 1.5           # need a real match to override
+    for i in valid:
+        if not sent_stems:
+            break
+        toks = _re.split(r"[^а-яёa-z-]+", norm(texts[i]))
+        overlap = sum(1 for st in sent_stems
+                      if any(tok.startswith(st) for tok in toks if tok))
+        if not overlap:
+            continue
+        score = overlap + (1.2 if i in lem_lines else 0) - abs(secs[i] - approx_sec) / 600.0
+        if score > best_score:
+            best, best_score = i, score
+    if best is not None:
+        return best, secs
+    if lem_lines:
+        cand = [i for i in lem_lines if secs[i] is not None]
+        if cand:
+            return min(cand, key=lambda i: abs(secs[i] - approx_sec)), secs
+    return min(valid, key=lambda i: abs(secs[i] - approx_sec)), secs
+
+
+def locate_seconds(video_id, sentence, normalized_text, approx_sec):
+    """Corrected timestamp (seconds) for a card, or approx_sec if unlocatable."""
     try:
-        texts, times, idx = _lemma_index(video_id)
+        i, secs = _locate_line(video_id, sentence, normalized_text, approx_sec)
+    except Exception:  # noqa: BLE001
+        return approx_sec
+    return secs[i] if i is not None else approx_sec
+
+
+def clip_window(video_id, normalized_text, approx_sec, sentence="", lead=1.2, trail=1.5):
+    """Where the audio clip for a card should start/run — snapped to the line
+    that best matches the card's sentence / really contains the lemma, spanning
+    that line plus a little trailing context. -> (start_sec, duration_sec)."""
+    try:
+        i, secs = _locate_line(video_id, sentence, normalized_text, approx_sec)
     except Exception:  # noqa: BLE001
         return max(0.0, approx_sec - lead), lead + 5.0
-    secs = [_to_secs(t) for t in times]
-    lines = [i for i in idx.get(lemma_key(normalized_text or ""), [])
-             if secs[i] is not None]
-    if not lines:                       # phrase / lemma not indexed → nearest line
-        lines = [i for i, s in enumerate(secs) if s is not None]
-    if not lines:
+    if i is None:
         return max(0.0, approx_sec - lead), lead + 5.0
-    hit = min(lines, key=lambda i: abs(secs[i] - approx_sec))
+    hit = i
     start = max(0.0, secs[hit] - lead)
     # end = start of the line two positions on, if that's a sane gap; else fixed
     nxt = next((secs[j] for j in range(hit + 1, min(hit + 3, len(secs)))

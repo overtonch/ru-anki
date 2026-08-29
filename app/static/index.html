@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta id="vp" name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta id="vp" name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#14161a">
 <link rel="manifest" href="/manifest.json">
@@ -535,6 +535,37 @@
   .mix-legend span::before { content:"●"; margin-right:.3rem; }
   .mix-legend .lnew::before { color:#e6b93c; } .mix-legend .llearn::before { color:#5b9bd5; }
   .mix-legend .lrev::before { color:var(--accent); } .mix-legend .lmat::before { color:var(--ok); }
+  .stat-cell.tap { cursor:pointer; } .stat-cell.tap:active { background:var(--line-soft); }
+  .mix-legend span.tap { cursor:pointer; text-decoration:underline; text-decoration-style:dotted; }
+
+  #cardsView { position:fixed; inset:0; z-index:16; background:var(--bg); flex-direction:column;
+               padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+  #cardsView[hidden] { display:none; }
+  #cardsView:not([hidden]) { display:flex; }
+  .cl-tools { display:flex; gap:.5rem; padding:.5rem .9rem; flex:none; border-bottom:1px solid var(--line-soft); }
+  .cl-tools input { flex:1; background:var(--card-2); border:1px solid var(--line); color:var(--fg);
+                    border-radius:var(--r-sm); padding:.45rem .7rem; font-size:.9rem; }
+  .cl-body { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:.3rem 0 3rem; }
+  .cl-count { color:var(--muted); font-size:.78rem; padding:.5rem .9rem .2rem; }
+  .cl-row { border-bottom:1px solid var(--line-soft); padding:.6rem .9rem; cursor:pointer; }
+  .cl-row:active { background:var(--card-2); }
+  .cl-row .cl-top { display:flex; align-items:baseline; gap:.5rem; }
+  .cl-row .cl-w { font-size:1rem; font-weight:650; }
+  .cl-row .cl-w.sus { opacity:.5; text-decoration:line-through; }
+  .cl-row .cl-tr { color:var(--muted); font-size:.85rem; flex:1; min-width:0; overflow:hidden;
+                   text-overflow:ellipsis; white-space:nowrap; }
+  .cl-row .cl-badge { font-size:.68rem; padding:.1em .45em; border-radius:.3rem; border:1px solid var(--line);
+                      color:var(--muted); white-space:nowrap; }
+  .cl-row .cl-badge.new { color:#e6b93c; border-color:rgba(230,185,60,.4); }
+  .cl-row .cl-badge.due { color:var(--no); border-color:rgba(224,90,90,.4); }
+  .cl-row .cl-exp { margin-top:.5rem; font-size:.9rem; line-height:1.5; display:none; }
+  .cl-row.open .cl-exp { display:block; }
+  .cl-row .cl-exp .cl-sent b { color:var(--accent); }
+  .cl-row .cl-exp .cl-acts { display:flex; gap:.5rem; margin-top:.6rem; }
+  .cl-row .cl-exp .cl-acts button { flex:1; padding:.45rem; border-radius:var(--r-sm); border:1px solid var(--line);
+                                    background:var(--card-2); color:var(--fg-dim); font-size:.82rem; cursor:pointer; }
+  .cl-row .cl-exp .cl-acts button.cl-del:active { border-color:var(--no); color:var(--no); }
+  .cl-row .cl-exp .cl-acts button.cl-jump { color:var(--accent); }
   .studybar { display:flex; align-items:center; gap:.5rem; padding:.5rem .9rem; flex:none;
               border-bottom:1px solid var(--line-soft); }
   .studybar .prog { flex:1; text-align:center; font-size:.82rem; color:var(--muted);
@@ -845,6 +876,28 @@
       <span style="width:2rem"></span>
     </div>
     <div id="statsBody" class="wordbody"></div>
+  </div>
+
+  <!-- CARD LIST VIEW -->
+  <div id="cardsView" hidden>
+    <div class="readbar">
+      <button class="backlink" onclick="history.back()">← back</button>
+      <div class="rtitle" id="clTitle">Cards</div>
+      <span style="width:2rem"></span>
+    </div>
+    <div class="cl-tools">
+      <input type="search" id="clSearch" placeholder="filter…" autocapitalize="off"
+             autocomplete="off" spellcheck="false" oninput="clSearchDebounced()">
+      <select class="minisel" id="clSort" onchange="loadCardList()">
+        <option value="added">newest</option>
+        <option value="oldest">oldest</option>
+        <option value="alpha">A–Я</option>
+        <option value="due">due soon</option>
+        <option value="reviewed">last seen</option>
+        <option value="hardest">hardest</option>
+      </select>
+    </div>
+    <div id="clBody" class="cl-body"></div>
   </div>
 
   <!-- READ VIEW -->
@@ -2207,14 +2260,15 @@ function renderStats(d) {
     `<i class="${x.count ? '' : 'z'}" style="height:${Math.round(x.count / max * 100)}%" title="${x.date}: ${x.count}"></i>`).join('');
   const first = d.reviews_by_day[0].date.slice(5), last = d.reviews_by_day[d.reviews_by_day.length - 1].date.slice(5);
   const seg = (n, cls) => n ? `<i class="${cls}" style="flex:${n}"></i>` : '';
+  const cell = (v, k, filt, title) => `<div class="stat-cell${filt ? ' tap' : ''}"${filt ? ` onclick="openCardList('${filt}','${title}')"` : ''}><div class="v">${v}</div><div class="k">${k}</div></div>`;
   $('#statsBody').innerHTML = `
     <div class="stat-grid">
-      <div class="stat-cell"><div class="v">${d.streak}</div><div class="k">day streak</div></div>
-      <div class="stat-cell"><div class="v">${d.reviews_today}</div><div class="k">today</div></div>
-      <div class="stat-cell"><div class="v">${d.retention != null ? Math.round(d.retention * 100) + '%' : '—'}</div><div class="k">retention</div></div>
-      <div class="stat-cell"><div class="v">${cn.total}</div><div class="k">cards</div></div>
-      <div class="stat-cell"><div class="v">${cn.mature}</div><div class="k">mature</div></div>
-      <div class="stat-cell"><div class="v">${d.total_reviews}</div><div class="k">reviews</div></div>
+      ${cell(d.streak, 'day streak', '', '')}
+      ${cell(d.reviews_today, 'reviews today', 'today', 'Reviewed today')}
+      ${cell(d.retention != null ? Math.round(d.retention * 100) + '%' : '—', 'retention', '', '')}
+      ${cell(cn.total, 'cards', 'all', 'All cards')}
+      ${cell(cn.mature, 'mature', 'mature', 'Mature')}
+      ${cell(d.total_reviews, 'reviews', 'reviewed', 'Reviewed')}
     </div>
     <div class="stat-h">reviews · last ${d.reviews_by_day.length} days</div>
     <div class="cal">${bars}</div>
@@ -2225,10 +2279,84 @@ function renderStats(d) {
       ${seg(cn.review - cn.mature, 'mrev')}${seg(cn.mature, 'mmat')}
     </div>
     <div class="mix-legend">
-      <span class="lnew">${cn.new} new</span><span class="llearn">${cn.learning} learning</span>
-      <span class="lrev">${Math.max(0, cn.review - cn.mature)} young</span><span class="lmat">${cn.mature} mature</span>
-      ${cn.suspended ? `<span>${cn.suspended} suspended</span>` : ''}
+      <span class="lnew tap" onclick="openCardList('new','New')">${cn.new} new</span>
+      <span class="llearn tap" onclick="openCardList('learning','Learning')">${cn.learning} learning</span>
+      <span class="lrev tap" onclick="openCardList('young','Young')">${Math.max(0, cn.review - cn.mature)} young</span>
+      <span class="lmat tap" onclick="openCardList('mature','Mature')">${cn.mature} mature</span>
+      ${cn.suspended ? `<span class="tap" onclick="openCardList('suspended','Suspended')">${cn.suspended} suspended</span>` : ''}
     </div>`;
+}
+
+/* ---- card list ---- */
+let CL = { filter: 'all', title: 'Cards' };
+function openCardList(filter, title) {
+  CL = { filter, title: title || 'Cards' };
+  $('#clTitle').textContent = CL.title;
+  $('#clSearch').value = '';
+  $('#cardsView').hidden = false;
+  loadCardList();
+}
+function closeCardList() { $('#cardsView').hidden = true; }
+let _clTimer = null;
+function clSearchDebounced() { clearTimeout(_clTimer); _clTimer = setTimeout(loadCardList, 300); }
+async function loadCardList() {
+  $('#clBody').innerHTML = SPINNER;
+  const q = $('#clSearch').value.trim(), sort = $('#clSort').value;
+  let d;
+  try { d = await api(`/srs/cards?filter=${encodeURIComponent(CL.filter)}&sort=${sort}&q=${encodeURIComponent(q)}`); }
+  catch (e) { $('#clBody').innerHTML = `<div class="empty">couldn’t load — ${escapeHtml(e.message)}</div>`; return; }
+  renderCardList(d);
+}
+function renderCardList(d) {
+  if (!d.cards.length) { $('#clBody').innerHTML = '<div class="empty">no cards</div>'; return; }
+  const rows = d.cards.map(c => {
+    const badge = c.suspended ? '<span class="cl-badge">suspended</span>'
+      : c.is_new ? '<span class="cl-badge new">new</span>'
+      : c.overdue ? '<span class="cl-badge due">due</span>'
+      : c.due_in ? `<span class="cl-badge">${c.due_in}</span>` : '';
+    const sent = c.sentence ? boldSpan(c.sentence, c.span_text) : '';
+    const jump = c.seconds != null && c.video_id != null
+      ? `<button class="cl-jump" onclick="event.stopPropagation();clJump(${c.video_id},${c.seconds})">▶ watch</button>` : '';
+    return `<div class="cl-row" data-id="${c.id}" onclick="this.classList.toggle('open')">
+      <div class="cl-top">
+        <span class="cl-w${c.suspended ? ' sus' : ''}">${escapeHtml(c.span_text)}</span>
+        <span class="cl-tr">${escapeHtml(c.translation || '')}</span>${badge}
+      </div>
+      <div class="cl-exp">
+        <div class="cl-sent">${sent}</div>
+        ${c.accented ? `<div style="color:var(--muted);font-size:.8rem;margin-top:.2rem">${escapeHtml(c.accented)}</div>` : ''}
+        <div class="cl-acts">
+          ${jump}
+          <button onclick="event.stopPropagation();clSuspend(${c.id},${c.suspended ? 0 : 1})">${c.suspended ? 'unsuspend' : 'suspend'}</button>
+          <button class="cl-del" onclick="event.stopPropagation();clDelete(${c.id},'${encodeURIComponent(c.span_text)}')">delete</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+  $('#clBody').innerHTML = `<div class="cl-count">${d.shown} of ${d.total}${d.shown < d.total ? ' (refine to see more)' : ''}</div>${rows}`;
+}
+function boldSpan(sentence, span) {
+  const t = rnorm(stripPunct(span)).split(/\s+/)[0].slice(0, 5);
+  return escapeHtml(sentence).replace(/[А-Яа-яЁёA-Za-z-]+/g, w =>
+    (t && rnorm(w).startsWith(t)) ? '<b>' + w + '</b>' : w);
+}
+function clJump(vid, secs) {
+  CURRENT = vid; DETAIL_V = VIDEOS.find(x => x.id === vid) || { id: vid };
+  $('#cardsView').hidden = true; $('#statsView').hidden = true;
+  openWatch(vid, Math.max(0, secs - 1.5));
+}
+async function clSuspend(id, on) {
+  try { await api(`/srs/cards/${id}/suspend?on=${on ? 'true' : 'false'}`, { method: 'POST' }); loadCardList(); }
+  catch (e) { toast('couldn’t — ' + e.message, 2500); }
+}
+async function clDelete(id, encName) {
+  if (!confirm(`Delete the card for “${decodeURIComponent(encName)}”? It won’t be suggested again.`)) return;
+  try { await api(`/srs/cards/${id}`, { method: 'DELETE' }); }
+  catch (e) { toast('couldn’t delete — ' + e.message, 2500); return; }
+  const row = $('#clBody').querySelector(`.cl-row[data-id="${id}"]`);
+  if (row) row.remove();
+  toast('deleted', 1400);
+  refreshStudyBanner();
 }
 
 /* ---- resume where you left off (per video, this device) ---- */
@@ -2524,8 +2652,8 @@ function togglePlay() {
 
 /* ---- fullscreen / immersive ---- */
 let fsManual = false, ctrlTimer = null;
-const VP_DEFAULT = 'width=device-width, initial-scale=1, viewport-fit=cover';
-const VP_LOCKED = VP_DEFAULT + ', maximum-scale=1, user-scalable=no';
+const VP_DEFAULT = 'width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no';
+const VP_LOCKED = VP_DEFAULT;
 function enterFs() {
   const el = $('#watchView');
   el.classList.add('fs');
@@ -3705,6 +3833,7 @@ function navBack() {
     if ($('#watchView').classList.contains('fs')) { fsManual = true; exitFs(); return true; }
     closeWatch(); return true;
   }
+  if (!$('#cardsView').hidden) { closeCardList(); return true; }
   if (!$('#statsView').hidden) { closeStats(); return true; }
   if (!$('#readView').hidden) { closeReader(); return true; }
   if (!$('#studyView').hidden) { closeStudy(); return true; }
@@ -3744,7 +3873,7 @@ addEventListener('popstate', () => { navBack(); try { history.pushState({ ru: 1 
 
 /* ---------------- boot ---------------- */
 // belt-and-suspenders: full-screen overlays must never be left showing
-['#studyView', '#statsView'].forEach(s => { const e = $(s); if (e) e.hidden = true; });
+['#studyView', '#statsView', '#cardsView'].forEach(s => { const e = $(s); if (e) e.hidden = true; });
 if (!READING_ENABLED) ['#readView', '#pasteWrap', '#tocPanel'].forEach(s => { const e = $(s); if (e) e.hidden = true; });
 
 if ('serviceWorker' in navigator) {

@@ -139,6 +139,7 @@ def create_card(sentence, span_text, normalized_text, is_phrase, translation,
         existing = card_for_candidate(candidate_id)
         if existing:
             return existing
+    timestamp = _snap_ts(video_id, sentence, normalized_text, timestamp)
     f = _fresh_card_fields()
     c = store.connect()
     cur = c.execute(
@@ -157,6 +158,43 @@ def create_card(sentence, span_text, normalized_text, is_phrase, translation,
     row = c.execute("SELECT * FROM srs_cards WHERE id=?", (cid,)).fetchone()
     c.close()
     return _card_dict(row)
+
+
+def _snap_ts(video_id, sentence, normalized_text, timestamp):
+    """Correct a card's stored HH:MM:SS to where the word is actually spoken."""
+    if not (video_id and timestamp):
+        return timestamp
+    approx = store._to_secs(timestamp)
+    if approx is None:
+        return timestamp
+    try:
+        snapped = store.locate_seconds(video_id, sentence, normalized_text, approx)
+    except Exception:  # noqa: BLE001
+        return timestamp
+    if snapped is not None and abs(snapped - approx) > 0.75:
+        return store.secs_to_hms(snapped)
+    return timestamp
+
+
+def resnap_timestamps():
+    """Re-run the snap over every existing card. Returns (checked, moved)."""
+    c = store.connect()
+    rows = [dict(r) for r in c.execute(
+        "SELECT id, video_id, sentence, normalized_text, timestamp FROM srs_cards "
+        "WHERE video_id IS NOT NULL AND timestamp IS NOT NULL")]
+    c.close()
+    moved = 0
+    for r in rows:
+        new = _snap_ts(r["video_id"], r["sentence"], r["normalized_text"],
+                       r["timestamp"])
+        if new != r["timestamp"]:
+            cc = store.connect()
+            cc.execute("UPDATE srs_cards SET timestamp=? WHERE id=?",
+                       (new, r["id"]))
+            cc.commit()
+            cc.close()
+            moved += 1
+    return len(rows), moved
 
 
 def set_anki_note(card_id, note_id):
@@ -329,6 +367,66 @@ def stats():
     return {"due": due, "new": min(new_total, new_left),
             "new_total": new_total, "total": total,
             "reviewed_today": reviewed_today}
+
+
+_LIST_FILTERS = {
+    "all":       ("1", []),
+    "today":     ("id IN (SELECT card_id FROM srs_reviews WHERE reviewed_at >= :d)", ["d"]),
+    "reviewed":  ("last_review IS NOT NULL", []),
+    "new":       ("last_review IS NULL AND suspended=0", []),
+    "learning":  ("last_review IS NOT NULL AND fsrs_state IN (1,3)", []),
+    "young":     ("last_review IS NOT NULL AND fsrs_state=2 AND (stability IS NULL OR stability < 21)", []),
+    "mature":    ("suspended=0 AND stability >= 21", []),
+    "due":       ("suspended=0 AND last_review IS NOT NULL AND due <= :n", ["n"]),
+    "suspended": ("suspended=1", []),
+}
+_LIST_SORTS = {
+    "added": "created_at DESC, id DESC", "oldest": "created_at ASC, id ASC",
+    "due": "due ASC", "alpha": "normalized_text ASC",
+    "reviewed": "last_review DESC", "hardest": "difficulty DESC, lapses DESC",
+    "reps": "reps DESC",
+}
+
+
+def list_cards(filt="all", sort="added", q="", limit=1000):
+    where, needs = _LIST_FILTERS.get(filt, _LIST_FILTERS["all"])
+    params = {}
+    if "d" in needs:
+        params["d"] = _day_start_iso()
+    if "n" in needs:
+        params["n"] = _iso(_utc())
+    clauses = [where]
+    if q:
+        clauses.append("(span_text LIKE :q OR normalized_text LIKE :q OR translation LIKE :q)")
+        params["q"] = f"%{q}%"
+    order = _LIST_SORTS.get(sort, _LIST_SORTS["added"])
+    params["lim"] = limit
+    c = store.connect()
+    rows = c.execute(
+        f"SELECT * FROM srs_cards WHERE {' AND '.join(clauses)} "
+        f"ORDER BY {order} LIMIT :lim", params).fetchall()
+    total = c.execute(
+        f"SELECT COUNT(*) n FROM srs_cards WHERE {' AND '.join(clauses)}",
+        params).fetchone()["n"]
+    c.close()
+    now = _utc()
+    out = []
+    for r in rows:
+        d = dict(r)
+        due = _parse(d["due"])
+        out.append({
+            "id": d["id"], "span_text": d["span_text"],
+            "normalized_text": d["normalized_text"], "translation": d["translation"],
+            "accented": d["accented"], "is_phrase": bool(d["is_phrase"]),
+            "sentence": d["sentence"], "video_id": d["video_id"],
+            "seconds": store._to_secs(d["timestamp"]) if d["timestamp"] else None,
+            "is_new": d["last_review"] is None, "suspended": bool(d["suspended"]),
+            "reps": d["reps"], "lapses": d["lapses"],
+            "state": d["fsrs_state"], "stability": d["stability"],
+            "due_in": _human_delta(d["due"], now) if d["last_review"] else None,
+            "overdue": bool(d["last_review"] and due and due < now),
+        })
+    return {"cards": out, "total": total, "shown": len(out)}
 
 
 def queue(limit=60):

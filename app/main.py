@@ -1141,6 +1141,21 @@ def srs_analytics(days: int = 30):
     return srs.analytics(days=max(7, min(120, days)))
 
 
+@app.get("/srs/cards")
+def srs_cards_list(filter: str = "all", sort: str = "added", q: str = "",
+                   limit: int = 1000):
+    return {**srs.list_cards(filter, sort, q.strip(), max(1, min(2000, limit))),
+            "filter": filter}
+
+
+@app.post("/srs/resnap")
+def srs_resnap(background: BackgroundTasks):
+    """Re-align every card's stored timestamp to where the word is actually
+    spoken in the transcript (fixes clips/jumps that were off)."""
+    checked, moved = srs.resnap_timestamps()
+    return {"checked": checked, "moved": moved}
+
+
 @app.get("/srs/queue")
 def srs_queue(limit: int = 60):
     cards = srs.queue(limit=limit)
