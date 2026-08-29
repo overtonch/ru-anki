@@ -37,6 +37,11 @@ _SCHED = None
 LEARNING_STEPS = (_dt.timedelta(minutes=1),)
 RELEARNING_STEPS = (_dt.timedelta(minutes=10),)
 
+# If you finish your reviews and a learning-step card is due again "soon" (within
+# this window), surface it now rather than making you wait out the timer. Lets a
+# whole day's reviews be done in one sitting.
+LEARNING_HORIZON = _dt.timedelta(minutes=30)
+
 
 def _scheduler():
     global _SCHED
@@ -243,6 +248,50 @@ def update_card(card_id, *, sentence=None, span_text=None, translation=None,
     return get_card(card_id)
 
 
+def set_accent_for_lemma(normalized_text, accented):
+    """Backfill the stress-marked form onto every card of a lemma that lacks one.
+    Called after the async accent computation finishes. Returns rows touched."""
+    acc = (accented or "").strip()
+    if not normalized_text or not acc:
+        return 0
+    c = store.connect()
+    n = c.execute(
+        "UPDATE srs_cards SET accented=? "
+        "WHERE normalized_text=? AND (accented IS NULL OR accented='')",
+        (acc, normalized_text)).rowcount
+    c.commit()
+    c.close()
+    return n
+
+
+_MISSING_ACCENT_WHERE = (
+    "is_phrase=0 AND (accented IS NULL OR accented='') "
+    "AND span_text NOT LIKE '% %'")
+
+
+def count_missing_accent():
+    c = store.connect()
+    n = c.execute(
+        f"SELECT COUNT(*) n FROM srs_cards WHERE {_MISSING_ACCENT_WHERE}"
+    ).fetchone()["n"]
+    c.close()
+    return n
+
+
+def cards_missing_accent(limit=None):
+    """One row per distinct lemma missing a stress hint (span_text,
+    normalized_text, sentence). Uses the newest card's sentence as LLM context."""
+    c = store.connect()
+    q = (f"SELECT span_text, normalized_text, sentence, MAX(id) mid FROM srs_cards "
+         f"WHERE {_MISSING_ACCENT_WHERE} "
+         f"GROUP BY normalized_text ORDER BY mid DESC")
+    if limit:
+        q += f" LIMIT {int(limit)}"
+    rows = [dict(r) for r in c.execute(q)]
+    c.close()
+    return rows
+
+
 # ---------------------------------------------------------------- review
 
 def preview(card_id):
@@ -390,10 +439,14 @@ def _new_introduced_today(c):
 
 def stats():
     c = store.connect()
-    now = _iso(_utc())
+    _now = _utc()
+    now = _iso(_now)
+    soon = _iso(_now + LEARNING_HORIZON)
     due = c.execute(
-        "SELECT COUNT(*) n FROM srs_cards WHERE suspended=0 AND last_review IS NOT NULL "
-        "AND due <= ?", (now,)).fetchone()["n"]
+        """SELECT COUNT(*) n FROM srs_cards
+           WHERE suspended=0 AND last_review IS NOT NULL
+             AND ( due <= :now OR (fsrs_state IN (1,3) AND due <= :soon) )""",
+        {"now": now, "soon": soon}).fetchone()["n"]
     new_total = c.execute(
         "SELECT COUNT(*) n FROM srs_cards WHERE suspended=0 AND last_review IS NULL"
     ).fetchone()["n"]
@@ -475,15 +528,22 @@ def list_cards(filt="all", sort="added", q="", limit=1000):
     return {"cards": out, "total": total, "shown": len(out)}
 
 
-def queue(limit=60):
-    """The study order: due learning/review cards (soonest first), then as many
-    fresh cards as the daily new budget allows."""
+def queue(limit=80):
+    """The study order: cards genuinely due now, PLUS learning-step cards due
+    within the next 30 min (so a session flows in one chunk instead of making
+    you wait out a 1-minute step or come back later), then fresh cards up to the
+    daily budget."""
     c = store.connect()
-    now = _iso(_utc())
+    now = _utc()
+    soon = _iso(now + LEARNING_HORIZON)
+    now_i = _iso(now)
     due = [dict(r) for r in c.execute(
         """SELECT * FROM srs_cards
-           WHERE suspended=0 AND last_review IS NOT NULL AND due <= ?
-           ORDER BY due ASC LIMIT ?""", (now, limit))]
+           WHERE suspended=0 AND last_review IS NOT NULL
+             AND ( due <= :now
+                   OR (fsrs_state IN (1,3) AND due <= :soon) )
+           ORDER BY due ASC LIMIT :lim""",
+        {"now": now_i, "soon": soon, "lim": limit})]
     budget = max(0, new_per_day() - _new_introduced_today(c))
     fresh = []
     if budget:

@@ -109,15 +109,25 @@ def _do_sync():
 def _learn_accent(span_text, sentence=""):
     """Fill the stress/ё hint for a freshly carded word (single words only)."""
     lemma = store.lemma_key((span_text or "").strip())
-    if not lemma or " " in lemma or store.accent_for(lemma):
+    if not lemma or " " in lemma:
         return
-    try:
-        acc = llm.accent_word(store.yo_form(lemma), sentence)
-        if acc:
-            store.set_accent(lemma, acc)
-            print(f"[accent] {lemma} -> {acc}")
-    except Exception as e:  # noqa: BLE001
-        print(f"[accent] {lemma}: {e}")
+    acc = store.accent_for(lemma)
+    if not acc:
+        try:
+            acc = llm.accent_word(store.yo_form(lemma), sentence)
+            if acc:
+                store.set_accent(lemma, acc)
+                print(f"[accent] {lemma} -> {acc}")
+        except Exception as e:  # noqa: BLE001
+            print(f"[accent] {lemma}: {e}")
+            return
+    if acc:
+        # write it onto the card(s) that triggered this — create_card stores
+        # accented=None when the hint isn't cached yet.
+        try:
+            srs.set_accent_for_lemma(lemma, acc)
+        except Exception as e:  # noqa: BLE001
+            print(f"[accent] card backfill {lemma}: {e}")
 
 
 def _learn_accent_async(span_text, sentence=""):
@@ -1272,6 +1282,37 @@ def srs_delete(card_id: int, requeue: bool = False):
 def srs_backfill(video_id: int | None = None, limit: int | None = None):
     n = srs.backfill_from_candidates(video_id=video_id, limit=limit)
     return {"created": n, **srs.stats()}
+
+
+def _backfill_accents(limit=None):
+    """Fill srs_cards.accented for single-word cards that never got a stress
+    hint (review-swipe cards, pre-feature imports). Cache first, LLM for the
+    rest. Runs in a background thread."""
+    rows = srs.cards_missing_accent(limit=limit)
+    print(f"[accent] backfilling {len(rows)} cards…")
+    done = 0
+    for r in rows:
+        lem = store.lemma_key(r["span_text"])
+        if not lem or " " in lem:
+            continue
+        acc = store.accent_for(lem)
+        if not acc:
+            try:
+                acc = llm.accent_word(store.yo_form(lem), r["sentence"] or "")
+                if acc:
+                    store.set_accent(lem, acc)
+            except Exception as e:  # noqa: BLE001
+                print(f"[accent] {lem}: {e}")
+                continue
+        if acc and srs.set_accent_for_lemma(r["normalized_text"], acc):
+            done += 1
+    print(f"[accent] backfill done: {done} cards updated")
+
+
+@app.post("/srs/backfill-accents")
+def srs_backfill_accents(background: BackgroundTasks, limit: int | None = None):
+    background.add_task(_backfill_accents, limit)
+    return {"queued": srs.count_missing_accent()}
 
 
 @app.get("/srs/export")
