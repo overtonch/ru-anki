@@ -142,8 +142,9 @@ def list_videos():
 
 
 def delete_video(video_id):
-    """Remove the video, its transcript and its candidates. Keeps resolved_words
-    (your decisions stand) and keeps any Anki cards already created."""
+    """Remove the video, its transcript and its candidates. Study cards you
+    already made are kept — just detached (they lose the jump-to-moment / clip).
+    resolved_words (your decisions) stand."""
     v = get_video(video_id)
     if v and v.get("media_path"):
         try:
@@ -151,12 +152,23 @@ def delete_video(video_id):
         except OSError:
             pass
     c = connect()
+    # detach study cards first so the FK deletes below can proceed
+    c.execute("UPDATE srs_cards SET candidate_id=NULL, video_id=NULL, timestamp=NULL "
+              "WHERE video_id=? OR candidate_id IN "
+              "(SELECT id FROM candidates WHERE video_id=?)", (video_id, video_id))
+    for tbl in ("candidate_sentences_cache",):
+        try:
+            c.execute(f"DELETE FROM {tbl} WHERE video_id=?", (video_id,))
+        except sqlite3.OperationalError:
+            pass
     c.execute("DELETE FROM candidates WHERE video_id=?", (video_id,))
     c.execute("DELETE FROM subtitle_lines WHERE video_id=?", (video_id,))
     c.execute("UPDATE resolved_words SET video_id=NULL WHERE video_id=?", (video_id,))
     n = c.execute("DELETE FROM videos WHERE id=?", (video_id,)).rowcount
     c.commit()
     c.close()
+    _LEMMA_IDX.pop(video_id, None)
+    drop_sentence_cache(video_id=video_id)
     return n
 
 

@@ -500,7 +500,8 @@
   #studyBanner { display:flex; align-items:center; gap:.7rem; width:100%; text-align:left;
                  background:linear-gradient(135deg, var(--accent), #3f6d94); color:#0b1016;
                  border:0; border-radius:var(--r); padding:.85rem 1rem; margin:.2rem 0 .6rem;
-                 cursor:pointer; font:inherit; box-shadow:var(--sh); }
+                 cursor:pointer; font:inherit; box-shadow:var(--sh);
+                 transition:background .2s, color .2s, box-shadow .2s; }
   #studyBanner:active { transform:scale(.99); }
   #studyBanner .sb-ico { font-size:1.4rem; }
   #studyBanner .sb-main { flex:1; min-width:0; }
@@ -508,6 +509,12 @@
   #studyBanner .sb-m { font-size:.8rem; opacity:.8; }
   #studyBanner .sb-go { font-size:1.3rem; font-weight:700; }
   #studyBanner[hidden] { display:none; }
+  /* caught-up: quiet, "done" look instead of the call-to-action gradient */
+  #studyBanner.done { background:var(--card-2); color:var(--fg-dim);
+                      border:1px solid rgba(67,176,114,.35); box-shadow:none; padding:.7rem 1rem; }
+  #studyBanner.done .sb-t { font-weight:650; color:var(--ok); }
+  #studyBanner.done .sb-m { opacity:.7; }
+  #studyBanner.done .sb-go { color:var(--muted); font-size:1rem; }
   .home-links { display:flex; gap:.5rem; margin:-.2rem 0 .7rem; }
   .home-links[hidden] { display:none; }
   .home-links button { flex:1; background:var(--card-2); border:1px solid var(--line-soft);
@@ -1453,7 +1460,7 @@ async function resetAndReExtract() {
 async function deleteVideo() {
   if (!CURRENT) return;
   const v = VIDEOS.find(x => x.id === CURRENT) || DETAIL_V || {};
-  if (!confirm(`Delete "${v.title || 'this video'}"?\n\nRemoves the transcript and all suggestions. Cards you already made stay in Anki.`)) return;
+  if (!confirm(`Delete "${v.title || 'this video'}"?\n\nRemoves the transcript and all suggestions. Study cards you already made are kept (they lose the jump-to-moment link).`)) return;
   const id = CURRENT;
   try {
     await api(`/videos/${id}`, {method:'DELETE'});
@@ -2041,6 +2048,9 @@ async function refreshStudyBanner() {
   const hl = $('#homeLinks'); if (hl) hl.hidden = !s.total;
   if (!n && !s.total) { b.hidden = true; return; }
   b.hidden = false;
+  b.classList.toggle('done', !n);
+  b.querySelector('.sb-ico').textContent = n ? '🧠' : '✅';
+  b.querySelector('.sb-go').textContent = n ? '→' : '';
   if (n) {
     $('#studyBannerT').textContent = 'Study — ' + n + ' card' + (n === 1 ? '' : 's');
     const bits = [];
@@ -2048,8 +2058,9 @@ async function refreshStudyBanner() {
     if (s.new) bits.push(s.new + ' new');
     $('#studyBannerM').textContent = bits.join(' · ');
   } else {
-    $('#studyBannerT').textContent = 'Study';
-    $('#studyBannerM').textContent = 'all caught up · ' + s.total + ' cards';
+    $('#studyBannerT').textContent = 'All caught up';
+    const nd = s.next_due && s.next_due !== '<1m' ? 'next in ' + s.next_due + ' · ' : '';
+    $('#studyBannerM').textContent = nd + s.total + ' card' + (s.total === 1 ? '' : 's');
   }
 }
 

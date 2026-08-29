@@ -395,10 +395,14 @@ def stats():
         "SELECT COUNT(*) n FROM srs_reviews WHERE reviewed_at >= ?",
         (_day_start_iso(),)).fetchone()["n"]
     new_left = max(0, new_per_day() - _new_introduced_today(c))
+    nd = c.execute(
+        "SELECT MIN(due) d FROM srs_cards WHERE suspended=0 AND last_review IS NOT NULL "
+        "AND due > ?", (now,)).fetchone()["d"]
     c.close()
     return {"due": due, "new": min(new_total, new_left),
             "new_total": new_total, "total": total,
-            "reviewed_today": reviewed_today}
+            "reviewed_today": reviewed_today,
+            "next_due": _human_delta(nd) if nd else None}
 
 
 _LIST_FILTERS = {
