@@ -470,6 +470,57 @@ def refetch_song_lyrics(video_id: int):
             "candidates_resnapped": cand_moved, "cards_resnapped": card_moved}
 
 
+class SwapIn(BaseModel):
+    url: str
+
+
+def _run_song_swap(video_id, new_url):
+    try:
+        meta = ytdlp.fetch_meta(new_url)
+    except Exception as e:  # noqa: BLE001
+        TRANSCRIBE_STATUS[video_id] = {"state": "error", "detail": f"bad link: {e}"}
+        return
+    store.set_song_source(video_id, new_url, meta.get("duration"),
+                          meta.get("thumbnail_url"))
+    _STREAM_CACHE.pop(video_id, None)
+    ap = ytdlp.audio_path(video_id)
+    if ap:
+        try:
+            os.remove(ap)
+        except OSError:
+            pass
+    _run_audio_download(video_id, new_url)          # pull the new audio
+    v = store.get_video(video_id)
+    artist = v.get("channel") or ""
+    full = v.get("title") or ""
+    track = full.split("—", 1)[1].strip() if "—" in full else full
+    cues, subs_kind, _ = _song_lyrics(artist, track, v.get("duration"), sub_url=new_url)
+    if cues:
+        store.set_raw_subs(video_id, whisper_rt.cues_to_vtt(cues), kind=subs_kind, lang="ru")
+        store.replace_subtitle_lines(
+            video_id, [(store.secs_to_hms(s), t) for s, _, t in cues])
+        store.drop_lyric_notes(video_id)
+        store.resnap_candidates(video_id)
+        srs.resnap_timestamps(video_id)
+    TRANSCRIBE_STATUS[video_id] = {"state": "done", "detail": "new source ready"}
+    backup.snapshot_async("song-swap")
+
+
+@app.post("/songs/{video_id}/swap-source")
+def swap_song_source(video_id: int, body: SwapIn, background: BackgroundTasks):
+    """Replace a song's audio source (e.g. a censored clip → the album version).
+    Re-downloads the audio and re-syncs the lyrics in the background."""
+    v = store.get_video(video_id)
+    if not v or v.get("kind") != "song":
+        raise HTTPException(404, "no such song")
+    url = (body.url or "").strip()
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(422, "give a full http(s) link")
+    TRANSCRIBE_STATUS[video_id] = {"state": "running", "pct": 0.0, "detail": "swapping source"}
+    background.add_task(_run_song_swap, video_id, url)
+    return {"ok": True, "queued": True}
+
+
 _EXTRACT_KEYS = ("state", "phase", "chunks_done", "chunks_total", "added",
                  "elapsed", "detail", "errors", "model", "usage")
 

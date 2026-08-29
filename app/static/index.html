@@ -5041,8 +5041,14 @@ async function renderTranscribeRow(id) {
   const err = s.state === 'error'
     ? `<span style="color:var(--no)">last run failed: ${escapeHtml(s.detail || '')}</span> · ` : '';
   if (DETAIL_V && DETAIL_V.kind === 'song') {
+    if (s.state === 'running' && (s.detail || '').includes('swap')) {
+      row.innerHTML = `<span class="spin"></span> swapping audio source…`;
+      row._t = setTimeout(() => { if (CURRENT === id) renderTranscribeRow(id); }, 4000);
+      return;
+    }
     row.innerHTML = `${err}lyrics: ${kind && kind.startsWith('lrclib') ? 'LRCLIB' : escapeHtml(kind)} ·
-      <button class="backlink" onclick="resyncLyrics(${id})">re-sync from LRCLIB</button>`;
+      <button class="backlink" onclick="resyncLyrics(${id})">re-sync</button> ·
+      <button class="backlink" onclick="swapSongSource(${id})">wrong / censored version?</button>`;
     return;
   }
   row.innerHTML = `${err}captions: ${kind === 'manual' ? 'manual' : kind === 'whisper' ? 'Whisper' : 'auto'} ·
@@ -5056,6 +5062,19 @@ async function resyncLyrics(id) {
     try { await idbDel('offline', 'w' + id); } catch {}
     renderTranscribeRow(id);
   } catch (e) { toast('couldn’t re-sync: ' + e.message, 3500); }
+}
+async function swapSongSource(id) {
+  const url = prompt('Paste a YouTube link to the correct version (e.g. the uncensored / album audio):');
+  if (!url || !/^https?:\/\//.test(url.trim())) return;
+  try {
+    await api(`/songs/${id}/swap-source`, { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url: url.trim() }) });
+    toast('swapping the audio — this runs in the background', 3500);
+    try { await idbDel('offline', 'w' + id); } catch {}
+    try { (await caches.open(SONG_AUDIO_CACHE)).delete(new Request(songAudioURL(id))); } catch {}
+    if (MINI && MINI.id === id) stopSong();
+    renderTranscribeRow(id);
+  } catch (e) { toast('couldn’t swap: ' + e.message, 3500); }
 }
 async function retranscribe(id) {
   if (!confirm('Re-transcribe the audio with Whisper?\n\nRuns on the Mac (no cost), ~2–4 min per 10 min of video, and replaces the current captions. Re-extract cards afterward for the cleaner text.')) return;

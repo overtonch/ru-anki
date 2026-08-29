@@ -160,6 +160,17 @@ def video_titles():
     return {r["id"]: {"title": r["title"], "kind": r["kind"]} for r in rows}
 
 
+def set_song_source(video_id, url, duration=None, thumbnail_url=None):
+    """Point a song at a new audio URL (and refresh its duration / art)."""
+    c = connect()
+    c.execute(
+        "UPDATE videos SET url=?, "
+        "duration=COALESCE(?, duration), thumbnail_url=COALESCE(?, thumbnail_url) "
+        "WHERE id=?", (url, duration, thumbnail_url, video_id))
+    c.commit()
+    c.close()
+
+
 def raw_subs(video_id):
     """The full subtitle/lyric text for a video (VTT). Its own call so the common
     get_video() path stays cheap."""
