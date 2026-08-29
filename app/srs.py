@@ -166,6 +166,21 @@ def card_for_candidate(candidate_id):
     return _card_dict(r) if r else None
 
 
+def cards_for_video(video_id):
+    """Every study card sourced from this video (directly or via its candidates),
+    oldest first — for the per-content 'practice these cards' refresher."""
+    c = store.connect()
+    rows = c.execute(
+        """SELECT * FROM srs_cards
+           WHERE suspended=0
+             AND ( video_id = :vid
+                   OR candidate_id IN (SELECT id FROM candidates WHERE video_id = :vid) )
+           ORDER BY created_at ASC, id ASC""",
+        {"vid": video_id}).fetchall()
+    c.close()
+    return [_card_dict(r) for r in rows]
+
+
 def _strip_stress(s):
     return (s or "").replace("́", "").replace("̀", "")
 
@@ -477,6 +492,20 @@ def delete_cards_for_candidate(candidate_id):
     for cid in ids:
         delete_card(cid)
     return len(ids)
+
+
+def card_counts_by_video():
+    """{video_id: n_cards} across all sources — one query, for the home list so
+    each row knows whether it has a practice deck. Cards reached via a candidate
+    are attributed to that candidate's video."""
+    c = store.connect()
+    rows = c.execute(
+        """SELECT COALESCE(s.video_id,
+                           (SELECT video_id FROM candidates WHERE id=s.candidate_id)) vid,
+                  COUNT(*) n
+           FROM srs_cards s WHERE s.suspended=0 GROUP BY vid""").fetchall()
+    c.close()
+    return {r["vid"]: r["n"] for r in rows if r["vid"] is not None}
 
 
 def _card_ids_for_video(c, video_id):

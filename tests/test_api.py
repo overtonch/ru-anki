@@ -58,6 +58,31 @@ def test_make_card_then_queue_and_review(client, seeded_video):
     assert rv.status_code == 200
 
 
+def test_video_practice_deck(client, seeded_video):
+    mk = client.post(f"/videos/{seeded_video}/make-card",
+                     json={"span": "блефовать", "timestamp": "00:00:00",
+                           "sentence": "Он блефовал за столом.",
+                           "span_text": "блефовать", "translation": "to bluff",
+                           "is_phrase": False})
+    card_id = mk.json()["srs_card"]["id"]
+
+    # shows up in the home list's per-content count
+    assert client.get("/videos").json()[0]["card_count"] == 1
+
+    p = client.get(f"/videos/{seeded_video}/study")
+    assert p.status_code == 200
+    body = p.json()
+    assert [c["id"] for c in body["cards"]] == [card_id]
+    assert "title" in body
+
+    # practice must not touch the schedule: card is still new & due after
+    before = client.get("/srs/queue").json()
+    due_before = next(c for c in before["cards"] if c["id"] == card_id)
+    assert due_before["is_new"]
+
+    client.get("/videos/999999/study").status_code == 404
+
+
 def test_srs_stats_and_offline_bundle(client, seeded_video):
     client.post(f"/videos/{seeded_video}/make-card",
                 json={"span": "ветер", "timestamp": "00:00:06",

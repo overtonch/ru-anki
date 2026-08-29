@@ -12,6 +12,7 @@ import time
 import traceback
 import urllib.parse as _urlparse
 
+import random as _random
 import re as _re
 
 import httpx
@@ -538,12 +539,12 @@ def videos(archived: bool = False):
     the ones whose cards were kept when the video was removed."""
     out = store.list_videos(include_hidden=True)
     out = [v for v in out if bool(v.get("hidden")) == archived]
+    counts = srs.card_counts_by_video()
     for v in out:
         ex = _extract_view(v["id"])
         if ex:
             v["extract"] = ex
-        if archived:
-            v["card_count"] = srs.list_cards(video=v["id"], limit=1)["total"]
+        v["card_count"] = counts.get(v["id"], 0)
         if v.get("kind") == "song":
             tr = TRANSCRIBE_STATUS.get(v["id"])
             if tr:
@@ -575,6 +576,26 @@ def video_cards(video_id: int):
     if not store.get_video(video_id):
         raise HTTPException(404, "no such video")
     return srs.list_cards(video=video_id, sort="added", limit=2000)
+
+
+@app.get("/videos/{video_id}/study")
+def video_study(video_id: int):
+    """Cards from this one piece of content, shaped for the review screen — a
+    self-contained refresher. Ratings here are pure flip-through: they never call
+    /review, so nothing is rescheduled and the daily queue is untouched."""
+    v = store.get_video(video_id)
+    if not v:
+        raise HTTPException(404, "no such video")
+    cards = srs.cards_for_video(video_id)
+    _random.shuffle(cards)
+    titles = store.video_titles()
+    ctxs = store.card_contexts(cards)
+    out = []
+    for c in cards:
+        cv = _study_card_view(c, with_preview=False, titles=titles)
+        cv["context"] = ctxs.get(c["id"])
+        out.append(cv)
+    return {"cards": out, "title": v["title"], "kind": v["kind"]}
 
 
 @app.delete("/videos/{video_id}")
@@ -976,6 +997,7 @@ def video(video_id: int):
     v.pop("raw_subs", None)
     v["extract"] = _extract_view(video_id) or {"state": "idle"}
     v["counts"] = _status_counts(video_id)
+    v["card_count"] = srs.list_cards(video=video_id, limit=1)["total"]
     return v
 
 

@@ -1018,6 +1018,7 @@
     <div class="vhead" id="vhead"></div>
     <button class="btn watch-cta" id="watchBtn" onclick="openWatch(CURRENT)">▶ Watch with captions</button>
     <button class="btn watch-cta" id="readBtn" hidden onclick="openReader(CURRENT)">📖 Read</button>
+    <button class="btn watch-cta ghost" id="practiceBtn" hidden onclick="openPractice(CURRENT)"></button>
     <div id="offlineRow" class="status"></div>
     <div id="mediaRow" class="status"></div>
     <div id="transcribeRow" class="status"></div>
@@ -1700,6 +1701,9 @@ async function openDetail(id) {
   $('#detailView').classList.toggle('song-detail', isSong);
   renderVHead(DETAIL_V);
   $('#readBtn').hidden = !isText;
+  const nCards = DETAIL_V.card_count || 0;
+  $('#practiceBtn').hidden = !nCards;
+  $('#practiceBtn').textContent = `🔁 Practice ${nCards} card${nCards === 1 ? '' : 's'} from this`;
   if (isText) {
     $('#watchBtn').hidden = true;
   } else if (isSong) {
@@ -2652,7 +2656,36 @@ async function openStudy() {
             startedAt: 0, paceS: 6 };
   await loadStudyQueue();
 }
-function closeStudy() { $('#studyView').hidden = true; STUDY = null; refreshStudyBanner(); }
+function closeStudy() {
+  const wasPractice = STUDY && STUDY.practice;
+  $('#studyView').hidden = true; STUDY = null;
+  if (!wasPractice) refreshStudyBanner();
+}
+
+/* Practice mode: flip through just this piece of content's cards. Ratings do
+   nothing to the schedule — no /review call, no daily-queue impact. "Again"
+   re-queues the card for later this session; anything else drops it. */
+async function openPractice(id) {
+  $('#studyView').hidden = false;
+  $('#studyBody').innerHTML = SPINNER;
+  $('#studyProg').innerHTML = '';
+  STUDY = { practice: true, videoId: id, title: '', queue: [], i: 0,
+            revealed: false, shownAt: 0, history: [], done: 0, total: 0 };
+  let d;
+  try { d = await api(`/videos/${id}/study`); }
+  catch (e) {
+    $('#studyBody').innerHTML = `<div class="study-done"><div class="big">😕</div><div class="msg">couldn’t load</div><div class="sub">${escapeHtml(e.message)}</div></div>`;
+    return;
+  }
+  STUDY.queue = d.cards || [];
+  STUDY.title = d.title || '';
+  STUDY.total = STUDY.queue.length;
+  if (!STUDY.queue.length) {
+    $('#studyBody').innerHTML = `<div class="study-done"><div class="big">🗂</div><div class="msg">no cards yet</div><div class="sub">make some from this content first</div></div>`;
+    return;
+  }
+  renderStudyCard();
+}
 
 async function loadStudyQueue() {
   await flushSrs();
@@ -2761,12 +2794,17 @@ function renderStudyCard() {
   STUDY.revealed = false;
   STUDY.shownAt = Date.now();
   const left = STUDY.queue.length - STUDY.i;
-  // pace: this session's real rate once there's enough of it, else the rolling median
-  const pace = (STUDY.done >= 5 && STUDY.startedAt)
-    ? (Date.now() - STUDY.startedAt) / 1000 / STUDY.done
-    : (STUDY.paceS || 6);
-  const eta = left > 1 ? ` · ~${etaText(left * pace)} left` : '';
-  $('#studyProg').innerHTML = `<b>${STUDY.done}</b> done · ${left} left${eta}${STUDY.offline ? ' · <span style="color:var(--muted)">offline</span>' : ''}`;
+  if (STUDY.practice) {
+    const t = STUDY.title ? escapeHtml(STUDY.title) + ' · ' : '';
+    $('#studyProg').innerHTML = `${t}refresher · <b>${left}</b> left`;
+  } else {
+    // pace: this session's real rate once there's enough of it, else the rolling median
+    const pace = (STUDY.done >= 5 && STUDY.startedAt)
+      ? (Date.now() - STUDY.startedAt) / 1000 / STUDY.done
+      : (STUDY.paceS || 6);
+    const eta = left > 1 ? ` · ~${etaText(left * pace)} left` : '';
+    $('#studyProg').innerHTML = `<b>${STUDY.done}</b> done · ${left} left${eta}${STUDY.offline ? ' · <span style="color:var(--muted)">offline</span>' : ''}`;
+  }
   const cu = clipUrl(c);
   const audioFirst = STUDY_AUDIO_FIRST && cu;
   const q = audioFirst
@@ -2822,10 +2860,12 @@ function studyReveal() {
         <div class="a-links"><button onclick="studyOpenWord('${encodeURIComponent(c.normalized_text)}')">all places “${escapeHtml(c.span_text)}” is said →</button></div>
       </div>
     </div>
-    <div class="study-foot"><div class="study-rate">
-      <button class="again" onclick="studyRate(1)"><span class="rl">Again</span><span class="ri">${p[1] || ''}</span></button>
-      <button class="good" onclick="studyRate(3)"><span class="rl">Good</span><span class="ri">${p[3] || ''}</span></button>
-      <button onclick="studyRate(4)"><span class="rl">Easy</span><span class="ri">${p[4] || ''}</span></button>
+    <div class="study-foot"><div class="study-rate">${STUDY.practice
+      ? `<button class="again" onclick="studyRate(1)"><span class="rl">Again</span></button>
+         <button class="good" onclick="studyRate(3)"><span class="rl">Got it</span></button>`
+      : `<button class="again" onclick="studyRate(1)"><span class="rl">Again</span><span class="ri">${p[1] || ''}</span></button>
+         <button class="good" onclick="studyRate(3)"><span class="rl">Good</span><span class="ri">${p[3] || ''}</span></button>
+         <button onclick="studyRate(4)"><span class="rl">Easy</span><span class="ri">${p[4] || ''}</span></button>`}
     </div></div>`;
   if (cu && !STUDY_AUDIO_FIRST) playStudyAudio();   // in audio-first it already played on the question
 }
@@ -2833,6 +2873,18 @@ function studyReveal() {
 async function studyRate(rating) {
   const c = studyCard();
   if (!c || STUDY._busy) return;
+
+  if (STUDY.practice) {
+    // pure flip-through — never touches the scheduler
+    STUDY.history.push({ card: c, rating });
+    STUDY.done++;
+    STUDY.queue.splice(STUDY.i, 1);
+    if (rating === 1) STUDY.queue.push(c);          // "Again" — see it again later
+    else if (STUDY.i >= STUDY.queue.length) STUDY.i = 0;
+    renderStudyCard();
+    return;
+  }
+
   STUDY._busy = true;
   $('#studyBody').querySelectorAll('.study-rate button').forEach(b => b.disabled = true);
   const elapsed = Date.now() - STUDY.shownAt;
@@ -2884,7 +2936,8 @@ async function studyDelete() {
   STUDY.history = STUDY.history.filter(h => h.card.id !== c.id);
   if (STUDY.i >= STUDY.queue.length) STUDY.i = 0;
   toast('card deleted', 1800);
-  if (!STUDY.queue.length && !STUDY.offline) loadStudyQueue(); else renderStudyCard();
+  if (!STUDY.queue.length && !STUDY.practice && !STUDY.offline) loadStudyQueue();
+  else renderStudyCard();
   refreshStudyBanner();
 }
 
@@ -2893,7 +2946,9 @@ async function studyUndo() {
   const h = STUDY.history[STUDY.history.length - 1];
   const id = h.card.id;
   let card = h.card;
-  if (h.offline) {
+  if (STUDY.practice) {
+    // nothing was persisted — just put the card back
+  } else if (h.offline) {
     const pend = (await idbAll('srsOut').catch(() => []))
       .filter(x => x.card_id === id).sort((a, b) => (a.reviewed_at < b.reviewed_at ? 1 : -1))[0];
     if (pend) await idbDel('srsOut', pend.client_id).catch(() => {});
@@ -2923,6 +2978,18 @@ function renderStudyDone() {
   $('#studyEdit').hidden = true;
   $('#studyDelete').hidden = true;
   $('#studyUndo').hidden = !(STUDY && STUDY.history.length);
+  if (STUDY && STUDY.practice) {
+    $('#studyProg').innerHTML = '';
+    const n = STUDY.done;
+    $('#studyBody').innerHTML = `
+      <div class="study-done">
+        <div class="big">🔁</div>
+        <div class="msg">${n} card${n === 1 ? '' : 's'} reviewed</div>
+        <div class="sub">${STUDY.title ? escapeHtml(STUDY.title) + ' · ' : ''}nothing was rescheduled — this was just a refresher</div>
+        <button class="sd-stats" onclick="openPractice(${STUDY.videoId})">🔁 go again</button>
+      </div>`;
+    return;
+  }
   api('/srs/stats').then(s => {
     $('#studyProg').innerHTML = '';
     $('#studyBody').innerHTML = `
