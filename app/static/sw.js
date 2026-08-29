@@ -1,11 +1,11 @@
 // ru-anki service worker — keeps the app shell available offline.
 // Data (transcripts, the outbound card queue) lives in IndexedDB, handled by
 // the page itself; this SW only makes sure the page can load with no network.
-const SHELL = 'ru-anki-shell-v83';
+const SHELL = 'ru-anki-shell-v84';
 const SHELL_URLS = ['/', '/sw.js', '/manifest.json',
   '/icons/icon-192.png', '/icons/apple-touch-icon.png', '/icons/icon.svg'];
 // caches that survive an activate/version bump (managed by the page, not the shell)
-const KEEP = ['ru-anki-thumbs', 'ru-anki-srs-media'];
+const KEEP = ['ru-anki-thumbs', 'ru-anki-srs-media', 'ru-anki-song-audio'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(SHELL).then(c => c.addAll(SHELL_URLS)).then(() => self.skipWaiting()));
@@ -27,23 +27,9 @@ async function trimCache(cache, max) {
   for (const k of keys.slice(0, keys.length - max)) await cache.delete(k);
 }
 
-// SRS review clips + frames: cache-first from 'ru-anki-srs-media' (the page
-// pre-downloads them via /srs/offline). We always store the full 200; if the
-// media element asks for a byte range we slice the cached copy ourselves so an
-// offline <audio> gets a proper 206.
-async function srsMedia(request) {
-  const cache = await caches.open('ru-anki-srs-media');
-  const keyReq = new Request(request.url);            // strip Range for the lookup
-  let full = await cache.match(keyReq, { ignoreVary: true });
-  if (!full) {
-    try {
-      const net = await fetch(keyReq);
-      if (net && net.status === 200) { cache.put(keyReq, net.clone()); full = net; }
-      else return net || Response.error();
-    } catch (_) {
-      return new Response('', { status: 504 });
-    }
-  }
+// Slice a byte range out of a full cached response so an offline <audio>/<video>
+// element gets a proper 206 (Cache API match ignores Range).
+async function sliceRange(full, request) {
   const range = request.headers.get('range');
   if (!range || !full) return full;
   const m = /bytes=(\d+)-(\d*)/.exec(range);
@@ -61,6 +47,35 @@ async function srsMedia(request) {
       'Accept-Ranges': 'bytes',
     },
   });
+}
+
+// SRS review clips + frames: cache-first from 'ru-anki-srs-media' (the page
+// pre-downloads them via /srs/offline). A network miss is cached for next time.
+async function srsMedia(request) {
+  const cache = await caches.open('ru-anki-srs-media');
+  const keyReq = new Request(request.url);            // strip Range for the lookup
+  let full = await cache.match(keyReq, { ignoreVary: true });
+  if (!full) {
+    try {
+      const net = await fetch(keyReq);
+      if (net && net.status === 200) { cache.put(keyReq, net.clone()); full = net; }
+      else return net || Response.error();
+    } catch (_) {
+      return new Response('', { status: 504 });
+    }
+  }
+  return sliceRange(full, request);
+}
+
+// Full song audio: served from 'ru-anki-song-audio' when the user saved the song
+// for offline (page does cache.add). A miss just passes through to the network —
+// we never cache a song implicitly, only on the explicit "save offline".
+async function songAudio(request) {
+  const cache = await caches.open('ru-anki-song-audio');
+  const full = await cache.match(new Request(request.url), { ignoreVary: true });
+  if (full) return sliceRange(full, request);
+  try { return await fetch(request); }
+  catch (_) { return new Response('', { status: 504 }); }
 }
 
 self.addEventListener('fetch', e => {
@@ -94,6 +109,12 @@ self.addEventListener('fetch', e => {
        (url.pathname.includes('/clip') || url.pathname.includes('/frame'))) ||
       /^\/srs\/cards\/\d+\/tts$/.test(url.pathname)) {
     e.respondWith(srsMedia(e.request));
+    return;
+  }
+
+  // full song audio — cached only when the user saved the song offline
+  if (/^\/videos\/\d+\/audio$/.test(url.pathname)) {
+    e.respondWith(songAudio(e.request));
     return;
   }
 

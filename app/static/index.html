@@ -426,8 +426,20 @@
                 border-radius:1rem 1rem 0 0; padding:1.1rem 1.1rem calc(1.1rem + env(safe-area-inset-bottom));
                 animation:tsIn .2s ease; max-height:82vh; overflow-y:auto; }
   @keyframes tsIn { from { transform:translateY(100%); } }
-  #lyricSheet .ly-ru { font-size:1.05rem; line-height:1.55; color:var(--fg); font-weight:600;
+  #lyricSheet .ly-head { display:flex; align-items:center; justify-content:space-between;
+                         margin:-.3rem -.3rem .6rem 0; }
+  #lyricSheet .ly-hint { font-size:.72rem; color:var(--muted); }
+  #lyricSheet .ly-x { background:var(--card-2); border:1px solid var(--line); color:var(--fg-dim);
+                      width:1.9rem; height:1.9rem; border-radius:50%; font-size:.9rem; cursor:pointer;
+                      display:flex; align-items:center; justify-content:center; flex:none; }
+  #lyricSheet .ly-x:active { background:var(--line-soft); }
+  #lyricSheet .ly-ru { font-size:1.08rem; line-height:1.7; color:var(--fg); font-weight:600;
                        border-left:2px solid var(--accent); padding-left:.7rem; margin-bottom:.9rem; }
+  #lyricSheet .ly-w { cursor:pointer; border-radius:3px; padding:.05em .12em;
+                      -webkit-tap-highlight-color:transparent; }
+  #lyricSheet .ly-w:active { background:var(--accent); color:#0b1016; }
+  #lyricSheet .ly-w.has-card { color:var(--ok); }
+  #lyricSheet .ly-w.pending { box-shadow:inset 0 -2px 0 rgba(230,185,60,.8); }
   #lyricSheet .ly-tr { font-size:1.12rem; line-height:1.5; color:var(--fg); margin-bottom:.7rem; }
   #lyricSheet .ly-gist { font-size:.92rem; line-height:1.6; color:var(--fg-dim); margin-bottom:.8rem; }
   #lyricSheet .ly-notes { list-style:none; display:flex; flex-direction:column; gap:.55rem; }
@@ -1009,6 +1021,10 @@
   <!-- deep line-by-line lyric read (song mode) -->
   <div id="lyricSheet" hidden onclick="if(event.target===this)closeLyricSheet()">
     <div class="ts-card">
+      <div class="ly-head">
+        <span class="ly-hint">tap a word to card it</span>
+        <button class="ly-x" onclick="closeLyricSheet()" aria-label="close">✕</button>
+      </div>
       <div class="ly-ru" id="lyRu"></div>
       <div id="lyBody"></div>
       <div class="ts-btns" id="lyBtns"></div>
@@ -1578,9 +1594,11 @@ async function openDetail(id) {
   if (isText) {
     $('#watchBtn').hidden = true;
   } else if (isSong) {
-    $('#watchBtn').hidden = !navigator.onLine && !(await opfsHas(id));
+    const savedSong = await songAudioCached(id);
+    $('#watchBtn').hidden = !navigator.onLine && !savedSong;
     $('#watchBtn').textContent = '🎵 Listen with lyrics';
-    $('#offlineRow').innerHTML = ''; $('#mediaRow').innerHTML = '';
+    $('#mediaRow').innerHTML = '';
+    await renderSongOfflineRow(id);
     renderTranscribeRow(id);
   } else {
     const localOK = await opfsHas(id);
@@ -1844,7 +1862,8 @@ async function vdArchive() {
   const id = VD.id; if (!id) return;
   try {
     const r = await api(`/videos/${id}?cards=keep`, { method: 'DELETE' });
-    try { await idbDel('offline', 'w' + id); await idbDel('offline', 'r' + id); await idbDel('offline', id); } catch {}
+    try { await idbDel('offline', 'w' + id); await idbDel('offline', 'r' + id); await idbDel('offline', id);
+           (await caches.open(SONG_AUDIO_CACHE)).delete(new Request(songAudioURL(id))); } catch {}
     closeVidDelete();
     toast(`archived — ${r.cards_kept || 0} card${r.cards_kept === 1 ? '' : 's'} kept`);
     showList();
@@ -1855,7 +1874,8 @@ async function vdDeleteAll() {
   if (VD.n && !confirm(`Delete the video and ${VD.n} card${VD.n > 1 ? 's' : ''}? This can’t be undone.`)) return;
   try {
     const r = await api(`/videos/${id}?cards=delete`, { method: 'DELETE' });
-    try { await idbDel('offline', 'w' + id); await idbDel('offline', 'r' + id); await idbDel('offline', id); } catch {}
+    try { await idbDel('offline', 'w' + id); await idbDel('offline', 'r' + id); await idbDel('offline', id);
+           (await caches.open(SONG_AUDIO_CACHE)).delete(new Request(songAudioURL(id))); } catch {}
     closeVidDelete();
     toast(r.cards_deleted ? `deleted — ${r.cards_deleted} card${r.cards_deleted > 1 ? 's' : ''} removed` : 'video deleted');
     refreshStudyBanner();
@@ -2365,11 +2385,11 @@ async function openWatch(id, seekTo) {
   // jumping to a specific moment (from a review card / word page) is a peek —
   // it must not overwrite "where I was watching"
   watchEphemeral = seekTo != null;
-  const haveLocal = await opfsHas(id);
+  const haveLocal = (await opfsHas(id)) || (await songAudioCached(id));
   let data;
   try { data = await api(`/videos/${id}/watch`); idbPut('offline', 'w' + id, data).catch(() => {}); touchOfflineLRU('w' + id); }
   catch { data = await idbGet('offline', 'w' + id); }
-  if (!haveLocal && !navigator.onLine) { toast('download this video to watch it offline'); return; }
+  if (!haveLocal && !navigator.onLine) { toast('download this to use it offline'); return; }
   if (!haveLocal && !data) { toast('couldn’t load this video'); return; }
   if (!data) {
     // downloaded, but captions were never cached — play the video without them
@@ -3176,9 +3196,14 @@ async function enterAudioMode(id, at) {
   let src, isBlob = false;
   if (audioSrc) { src = audioSrc; isBlob = audioSrcIsBlob; }
   else if (await opfsHas(id)) { src = await opfsURL(id); isBlob = true; }
+  else if (SONG_MODE && await songAudioCached(id)) { src = songAudioURL(id); }  // SW serves the cache
   else {
-    if (!navigator.onLine) { toast('background audio needs a connection, or download the video first'); return; }
-    src = await ensureAudioFile(id, btn);
+    if (!navigator.onLine) {
+      toast(SONG_MODE ? 'save this song offline first (from its page)'
+                      : 'background audio needs a connection, or download the video first');
+      return;
+    }
+    src = await ensureAudioFile(id, btn);   // waits for the server-side download
     if (!src) { refreshAudioBtn(); return; }
   }
   mountAudio(src, at, isBlob);
@@ -3764,8 +3789,17 @@ function lyricKey(i) { return `${CURRENT}:${i}`; }
 function lyricCached(i) { return !!LYRIC_NOTES[lyricKey(i)]; }
 async function openLyricSheet(i) {
   _lyIdx = i;
-  const line = (WCUES[i] && WCUES[i].text) || '';
-  $('#lyRu').textContent = line;
+  const cue = WCUES[i] || {};
+  const ru = $('#lyRu');
+  ru.innerHTML = '';
+  (cue.words || []).forEach((w, wi) => {
+    const sp = document.createElement('span');
+    sp.className = 'ly-w' + (w.c ? ' has-card' : (w.p ? ' pending' : ''));
+    sp.textContent = w.t;
+    sp.onclick = () => lyricWordCard(wi);
+    ru.append(sp, document.createTextNode(' '));
+  });
+  if (!(cue.words || []).length) ru.textContent = cue.text || '';
   $('#lyBtns').innerHTML = `<button onclick="closeLyricSheet()">done</button>`;
   $('#lyricSheet').hidden = false;
   const cached = LYRIC_NOTES[lyricKey(i)];
@@ -3804,6 +3838,12 @@ function lyricToCard() {
   const cue = WCUES[i];
   if (!cue || !cue.words) return;
   _phraseCard({ words: cue.words.slice(0, 12), startCi: i, endCi: i });
+}
+function lyricWordCard(wi) {
+  const i = _lyIdx;
+  closeLyricSheet();
+  if (i == null || !WCUES[i] || !(WCUES[i].words || [])[wi]) return;
+  watchTapWord(i, wi);            // same flow as tapping the word in the lyrics
 }
 
 /* ---- passage translation (comprehension check) ---- */
@@ -4438,6 +4478,63 @@ async function downloadOffline(id) {
 async function offlineVideoMeta(id) {
   const off = await idbGet('offline', id);
   return off ? { ...off.video, lines: off.lines.length } : { id, title: 'video ' + id };
+}
+
+/* ---------------- offline SONGS (Cache API — small AAC files) ---------------- */
+const SONG_AUDIO_CACHE = 'ru-anki-song-audio';
+function songAudioURL(id) { return `/videos/${id}/audio`; }
+async function songAudioCached(id) {
+  try {
+    const c = await caches.open(SONG_AUDIO_CACHE);
+    return !!(await c.match(new Request(songAudioURL(id)), { ignoreVary: true }));
+  } catch { return false; }
+}
+async function renderSongOfflineRow(id) {
+  const row = $('#offlineRow');
+  const saved = await songAudioCached(id);
+  const lyr = await idbGet('offline', 'w' + id).catch(() => null);
+  if (saved) {
+    row.innerHTML = `✓ saved offline${lyr ? ' with lyrics' : ''} ·
+      <button class="backlink" onclick="removeSongOffline(${id})">remove</button>`;
+  } else if (navigator.onLine) {
+    row.innerHTML = `<button class="btn sm ghost" id="songDlBtn" onclick="saveSongOffline(${id})">${DL_ICON} Save song offline</button>`;
+  } else {
+    row.textContent = 'offline — this song isn’t saved';
+  }
+}
+async function saveSongOffline(id) {
+  const btn = $('#songDlBtn');
+  setBusy(btn, true, 'saving');
+  try {
+    // lyrics + word flags
+    try {
+      const w = await api(`/videos/${id}/watch`);
+      await idbPut('offline', 'w' + id, w); touchOfflineLRU('w' + id);
+      if (w.video && w.video.thumbnail_url) fetch(w.video.thumbnail_url).catch(() => {});
+    } catch {}
+    // make sure the server has the audio file, then cache it
+    let st = await api(`/videos/${id}/audio/status`).catch(() => ({}));
+    if (st.state !== 'done') {
+      await api(`/videos/${id}/audio`, { method: 'POST' }).catch(() => {});
+      for (let i = 0; i < 90 && st.state !== 'done'; i++) {
+        await sleep(1500);
+        st = await api(`/videos/${id}/audio/status`).catch(() => ({}));
+        if (st.state === 'error') throw new Error(st.detail || 'audio download failed');
+      }
+    }
+    const c = await caches.open(SONG_AUDIO_CACHE);
+    await c.add(new Request(songAudioURL(id)));      // one ~4 MB fetch
+    toast('song saved for offline');
+  } catch (e) {
+    toast('couldn’t save: ' + e.message, 3500);
+  }
+  setBusy(btn, false);
+  renderSongOfflineRow(id);
+}
+async function removeSongOffline(id) {
+  try { (await caches.open(SONG_AUDIO_CACHE)).delete(new Request(songAudioURL(id))); } catch {}
+  toast('removed offline copy');
+  renderSongOfflineRow(id);
 }
 
 const DL_ICON = '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a1 1 0 0 1 1 1v9.59l2.3-2.3a1 1 0 1 1 1.4 1.42l-4 4a1 1 0 0 1-1.4 0l-4-4a1 1 0 1 1 1.4-1.42L11 13.6V4a1 1 0 0 1 1-1z"/><path d="M5 18a1 1 0 0 1 1 1v1h12v-1a1 1 0 1 1 2 0v2a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-2a1 1 0 0 1 1-1z"/></svg>';
