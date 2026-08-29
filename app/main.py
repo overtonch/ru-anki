@@ -30,6 +30,7 @@ import backup  # noqa: E402
 import epub  # noqa: E402
 import heartbeat  # noqa: E402
 import llm  # noqa: E402
+import music  # noqa: E402
 import srs  # noqa: E402
 import whisper_rt  # noqa: E402
 import store  # noqa: E402
@@ -215,6 +216,10 @@ class VideoIn(BaseModel):
     url: str
 
 
+class SongIn(BaseModel):
+    url: str
+
+
 class DecisionIn(BaseModel):
     decision: str  # "yes" | "no"
     sentence: str | None = None   # override the card's context sentence
@@ -324,6 +329,84 @@ def create_video(body: VideoIn):
             "subs": f"{got['subs_kind']}/{got['subs_lang']}", "lines": n}
 
 
+# ------------------------------------------------------------------ songs
+
+def _song_lyrics(url, title, uploader, duration):
+    """(cues, subs_kind, note). Try LRCLIB synced lyrics, then the video's own
+    Russian subtitles, then plain LRCLIB lyrics spread over the runtime. Returns
+    ([], 'pending', ...) when nothing usable was found — the caller Whispers."""
+    artist, track = music.parse_artist_title(title, uploader)
+    try:
+        lyr = music.fetch_lyrics(artist, track, duration)
+    except Exception as e:  # noqa: BLE001
+        print(f"[song] lyrics lookup failed: {e}")
+        lyr = {"source": None}
+    if lyr.get("source") == "lrclib":
+        cues = music.lrc_to_cues(lyr["synced"], duration)
+        if cues:
+            return cues, "lrclib", f"synced lyrics · {lyr.get('matched')}"
+    try:
+        got = ytdlp.fetch_subs(url)
+        if got.get("raw_subs"):
+            cues = [(c["s"], c.get("re") or c["e"], c["text"])
+                    for c in subs.caption_cues(got["raw_subs"]) if c.get("text")]
+            if cues:
+                return cues, got["subs_kind"], f"{got['subs_kind']} captions"
+    except Exception as e:  # noqa: BLE001
+        print(f"[song] no video subs: {e}")
+    if lyr.get("source") == "lrclib-plain":
+        cues = music.plain_to_cues(lyr["plain"], duration)
+        if cues:
+            return cues, "lrclib-plain", "plain lyrics (approx timing)"
+    return [], "pending", "no lyrics found — transcribing"
+
+
+def _song_pipeline(video_id, url, need_whisper, model):
+    """Background: audio download → (Whisper if no lyrics) → vocab extraction."""
+    try:
+        _run_audio_download(video_id, url)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+    if need_whisper:
+        _run_transcribe(video_id)
+        if (TRANSCRIBE_STATUS.get(video_id) or {}).get("state") != "done":
+            _set_status(video_id, state="error", phase="error",
+                        detail="couldn’t transcribe the lyrics")
+            return
+    _run_extraction(video_id, model)
+
+
+@app.post("/songs")
+def create_song(body: SongIn, background: BackgroundTasks,
+                model: str = llm.DEFAULT_MODEL):
+    """Add a song: fetch synced lyrics, store as a kind='song' video, then in the
+    background pull the audio and extract vocab (repeated chorus lines rank
+    high). Whisper only if no lyrics source has it."""
+    try:
+        meta = ytdlp.fetch_meta(body.url)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"couldn’t read that link: {e}")
+    dur = meta.get("duration")
+    artist, track = music.parse_artist_title(meta.get("title"), meta.get("channel"))
+    cues, subs_kind, note = _song_lyrics(body.url, meta.get("title"),
+                                         meta.get("channel"), dur)
+    need_whisper = not cues
+    if need_whisper:                       # placeholder line so the row is valid
+        cues = [(0.0, max(dur or 4.0, 4.0), "…")]
+    display = f"{artist} — {track}" if artist and track else (meta.get("title") or track)
+    vid = store.add_song(body.url, display, artist or meta.get("channel"),
+                         cues, subs_kind, dur, meta.get("thumbnail_url"))
+    if need_whisper:
+        TRANSCRIBE_STATUS[vid] = {"state": "running", "pct": 0.0, "detail": "queued"}
+    _set_status(vid, state="queued", phase="queued", model=model,
+                chunks_done=0, chunks_total=0, added=0, errors=[], elapsed=0.0,
+                detail="getting the song ready")
+    background.add_task(_song_pipeline, vid, body.url, need_whisper, model)
+    return {"id": vid, "video_id": vid, "kind": "song", "title": display,
+            "artist": artist, "track": track, "lyrics": subs_kind,
+            "synced": not need_whisper, "note": note}
+
+
 _EXTRACT_KEYS = ("state", "phase", "chunks_done", "chunks_total", "added",
                  "elapsed", "detail", "errors", "model", "usage")
 
@@ -342,6 +425,10 @@ def videos():
         ex = _extract_view(v["id"])
         if ex:
             v["extract"] = ex
+        if v.get("kind") == "song":
+            tr = TRANSCRIBE_STATUS.get(v["id"])
+            if tr:
+                v["transcribe"] = {"state": tr.get("state"), "detail": tr.get("detail")}
     return out
 
 
@@ -1423,7 +1510,7 @@ def watch(video_id: int):
     return {
         "video": {k: v.get(k) for k in
                   ("id", "title", "channel", "url", "youtube_id", "duration",
-                   "thumbnail_url")},
+                   "thumbnail_url", "kind")},
         "cues": out,
         "card_count": card_count,
         "cands": {r["id"]: {"span": r["span_text"], "tr": r["translation"],

@@ -36,6 +36,13 @@
   Constraint: the audio and the subtitles must be the SAME translation, not a
   dub script vs. a separately-made caption file.
 - (done) Local RU→EN dict (build_dict.py / WikDict) for instant glosses
+- (done 2026-08-29) **Music / songs** — `app/music.py`. Paste a song link → 🎵
+  button → `POST /songs`. Synced lyrics from LRCLIB (lrclib.net, free/keyless),
+  fall back to the video's own RU subs, then Whisper. Stored as `kind='song'`
+  video → same extraction / cards / word pages. Player: audio + karaoke lyrics
+  (`.song-mode`), tap line to seek, 🔁 repeat, 0.75× speed. "Music" home section.
+  Follow-ups: A–B loop for drilling a phrase; move LRCLIB-miss subtitle lookup
+  off the request path; offline (OPFS) for songs; paste-your-own-lyrics.
 - (done) Reading feature — EPUB/txt/paste import, scroll reader, tap-to-card
 - (done) Non-YouTube video via yt-dlp (VK/RuTube/Dzen) + plain VTT/SRT subs
 - (done) Offline video + audio, OPFS + <video>, Media Session — needs device testing

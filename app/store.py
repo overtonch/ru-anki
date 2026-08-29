@@ -1116,6 +1116,26 @@ def add_reading_text(url, title, author, chapters):
     return vid
 
 
+def add_song(url, title, artist, cues, subs_kind="lrclib", duration=None,
+             thumbnail_url=None):
+    """Store a song as a kind='song' video. `cues`: [(start, end, text)] — the
+    timed lyrics. VTT feeds the player; each lyric line is one subtitle_line so
+    extraction / search / word pages work exactly as for a video."""
+    vtt = ["WEBVTT", ""]
+    for s, e, txt in cues:
+        vtt += [f"{secs_to_hms(s)} --> {secs_to_hms(max(e, s + 0.8))}", txt, ""]
+    raw = "\n".join(vtt)
+    vid = upsert_video(url, title, subs_kind, "ru", raw,
+                       channel=artist, thumbnail_url=thumbnail_url,
+                       duration=duration)
+    c = connect()
+    c.execute("UPDATE videos SET kind='song' WHERE id=?", (vid,))
+    c.commit()
+    c.close()
+    replace_subtitle_lines(vid, [(secs_to_hms(s), txt) for s, _, txt in cues])
+    return vid
+
+
 def reading_chapters(video_id):
     """[{n, title, first_line_id}] from the '## …' lines — the reader's TOC."""
     c = connect()

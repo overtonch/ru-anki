@@ -378,6 +378,23 @@
                             color:var(--fg); border-radius:3px; }
   .transcript .cw.sel { background:var(--accent); color:#0b1016; box-shadow:none; }
 
+  /* ---- song mode: audio + karaoke lyrics ---- */
+  #loopBtn { display:none; }
+  #watchView.song-mode #loopBtn { display:inline-flex; }
+  #watchView.song-mode #audioBtn, #watchView.song-mode #fsBtn { display:none; }
+  #loopBtn.on { background:var(--accent-soft); border-color:var(--accent); color:var(--fg); }
+  #watchView.song-mode .player-wrap { aspect-ratio:auto; height:min(34vh, 300px); }
+  #watchView.song-mode.audiomode #audioStage { gap:.6rem; }
+  #watchView.song-mode #audioStage img { width:min(46%, 190px); box-shadow:0 8px 30px rgba(0,0,0,.5); }
+  #watchView.song-mode .watchhint { display:none; }
+  #watchView.song-mode .transcript { padding:1rem 1.1rem 40vh; text-align:center; scroll-behavior:smooth; }
+  #watchView.song-mode .transcript .cue { font-size:1.16rem; line-height:1.7; color:var(--muted);
+                        padding:.5rem .4rem; opacity:.5; }
+  #watchView.song-mode .transcript .cue.on { opacity:1; color:var(--fg); background:transparent;
+                        box-shadow:none; font-weight:650; font-size:1.32rem; }
+  #watchView.song-mode .transcript .cue-ts { display:none; }
+  #watchView.song-mode .transcript .cw { padding:.04em .1em; }
+
   /* inline approve/deny popover for a suggested card, shown over the watch view */
   #transSheet { position:fixed; inset:0; z-index:42; background:rgba(6,8,11,.55);
                 display:flex; align-items:flex-end; justify-content:center;
@@ -793,10 +810,11 @@
   <!-- LIST VIEW -->
   <div id="listView">
     <div class="addbar">
-      <input type="text" id="url" placeholder="Paste a video or article/book link"
+      <input type="text" id="url" placeholder="Paste a video, song, article or book link"
              autocapitalize="off" autocomplete="off" spellcheck="false"
              onkeydown="if(event.key==='Enter')addVideo()">
       <button class="btn" id="addBtn" onclick="addVideo()">Add</button>
+      <button class="btn ghost" id="addSongBtn" onclick="addSong()" title="add as a song — pulls synced lyrics">🎵</button>
     </div>
     <div class="status">
       model
@@ -900,6 +918,7 @@
     <div class="wctrls">
       <button id="fsBtn" onclick="toggleFs()" title="full screen">⛶ full screen</button>
       <button id="audioBtn" onclick="toggleAudioMode()">🎧 background audio</button>
+      <button id="loopBtn" onclick="toggleLoop()" title="repeat this song">🔁 repeat</button>
     </div>
     <div class="watchhint">tap a word to card it · <span class="dot"></span> carded · <span class="dot y"></span> suggested · tap video to pause</div>
     <div id="transcript" class="transcript"></div>
@@ -1054,6 +1073,7 @@ let listTimer = null, sse = null, tickTimer = null, searchTimer = null;
 let ytPlayer = null, ytApiP = null, capTimer = null, WP = null, localURL = null;
 let WDATA = null, bgAudio = null, audioMode = false, audioURL = null, audioUserPaused = false;
 let audioSrc = null, audioSrcIsBlob = false, autoSwapped = false;
+let SONG_MODE = false, SONG_LOOP = false;
 let WCUES = [], WCANDS = {}, wActive = -1, wUserScroll = 0, wPausedForModal = false, capHidden = false;
 
 function toast(msg, ms=2400) {
@@ -1171,15 +1191,20 @@ function extractLine(ex) {
 
 function renderList() {
   const box = $('#videoList');
-  const vids = VIDEOS.filter(v => v.kind !== 'text');
+  const vids = VIDEOS.filter(v => v.kind !== 'text' && v.kind !== 'song');
+  const songs = VIDEOS.filter(v => v.kind === 'song');
   const texts = VIDEOS.filter(v => v.kind === 'text');
-  if (!vids.length && !texts.length && !TEXTS.length) {
+  if (!vids.length && !songs.length && !texts.length && !TEXTS.length) {
     box.innerHTML = '<div class="empty">Nothing yet. Paste a video link, or a book / article link, above.</div>';
     return;
   }
   box.innerHTML = '';
   const head = t => { const h = document.createElement('div'); h.className = 'chan'; h.textContent = t; box.appendChild(h); };
 
+  if (songs.length) {
+    head('Music');
+    for (const v of songs) box.appendChild(songCard(v));
+  }
   if (vids.length) {
     head('Videos');
     box.appendChild(videoCard(vids[0], true));
@@ -1195,6 +1220,26 @@ function renderList() {
     for (const v of texts) box.appendChild(readCard(v));
     for (const t of TEXTS) box.appendChild(textCard(t));
   }
+}
+
+function songCard(v) {
+  const el = document.createElement('div');
+  el.className = 'lib-card';
+  const ex = v.extract || { state: 'idle' };
+  const tr = v.transcribe || {};
+  const bits = [v.channel,
+    tr.state === 'running' ? 'transcribing lyrics…'
+      : ex.state === 'running' || ex.state === 'queued' ? 'finding words…'
+      : v.pending ? `${v.pending} to review`
+      : v.lines ? 'ready' : null].filter(Boolean);
+  el.innerHTML = `
+    <div class="bk">🎵</div>
+    <div class="body">
+      <div class="t">${escapeHtml(v.title || 'Untitled')}</div>
+      <div class="m">${escapeHtml(bits.join(' · '))}</div>
+    </div>`;
+  el.onclick = () => openDetail(v.id);
+  return el;
 }
 
 function readCard(v) {
@@ -1311,6 +1356,31 @@ async function addVideo() {
   } finally { setBusy($('#addBtn'), false); }
 }
 
+async function addSong() {
+  const url = $('#url').value.trim();
+  if (!url) { $('#url').focus(); return; }
+  setBusy($('#addBtn'), true);
+  $('#addSongBtn').disabled = true;
+  $('#addStatus').textContent = 'finding lyrics…';
+  try {
+    const r = await api('/songs', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    $('#url').value = '';
+    $('#addStatus').textContent = r.note || (r.synced ? 'synced lyrics' : 'transcribing…');
+    // the server's song pipeline downloads audio, (Whispers if needed) and
+    // extracts vocab on its own — nothing more to kick off here
+    await openDetail(r.id);
+    loadVideosQuiet();
+  } catch (e) {
+    $('#addStatus').textContent = 'error: ' + e.message;
+  } finally {
+    setBusy($('#addBtn'), false);
+    $('#addSongBtn').disabled = false;
+  }
+}
+
 /* ---------------- detail view ---------------- */
 function showList() {
   CURRENT = null;
@@ -1332,11 +1402,18 @@ async function openDetail(id) {
   if (!v) { try { v = await api(`/videos/${id}`); } catch { v = await offlineVideoMeta(id); } }
   DETAIL_V = v || {id};
   const isText = DETAIL_V.kind === 'text';
+  const isSong = DETAIL_V.kind === 'song';
   $('#detailView').classList.toggle('text-mode', isText);
+  $('#detailView').classList.toggle('song-detail', isSong);
   renderVHead(DETAIL_V);
   $('#readBtn').hidden = !isText;
   if (isText) {
     $('#watchBtn').hidden = true;
+  } else if (isSong) {
+    $('#watchBtn').hidden = !navigator.onLine && !(await opfsHas(id));
+    $('#watchBtn').textContent = '🎵 Listen with lyrics';
+    $('#offlineRow').innerHTML = ''; $('#mediaRow').innerHTML = '';
+    renderTranscribeRow(id);
   } else {
     const localOK = await opfsHas(id);
     $('#watchBtn').hidden = !navigator.onLine && !localOK;
@@ -1356,12 +1433,15 @@ async function openDetail(id) {
 
 function renderVHead(v) {
   const isText = v.kind === 'text';
+  const isSong = v.kind === 'song';
   $('#vhead').innerHTML = `
     ${!isText && v.thumbnail_url ? `<img src="${escapeHtml(v.thumbnail_url)}" alt="">` : ''}
     <div style="flex:1;min-width:0">
       <div class="vtitle">${escapeHtml(v.title || '')}</div>
       <div class="vmeta">${isText
         ? `${escapeHtml(v.channel || '')} · ${v.lines || 0} paragraphs`
+        : isSong
+        ? `${escapeHtml(v.channel || '')} · ${v.lines || 0} lyric lines`
         : `${channelLink(v)} · ${v.lines || 0} lines`}
         · <a href="${escapeHtml(v.url)}" target="_blank" rel="noopener">source ↗</a></div>
     </div>`;
@@ -2076,19 +2156,27 @@ async function openWatch(id, seekTo) {
   WCANDS = data.cands || {};
   WDATA = data;
   wActive = -1; WP = null; audioMode = false;
+  SONG_MODE = (data.video && data.video.kind === 'song');
   document.documentElement.classList.add('watching');
   $('#detailView').hidden = true;
   $('#watchView').hidden = false;
   $('#watchView').classList.remove('audiomode');
-  $('#capOverlay').textContent = 'tap to play';
+  $('#watchView').classList.toggle('song-mode', SONG_MODE);
+  $('#capOverlay').textContent = SONG_MODE ? '' : 'tap to play';
   fsManual = false;
-  if (matchMedia('(orientation: landscape)').matches) enterFs(); else exitFs();
   renderTranscript();
   refreshAudioBtn();
   const resumeAt = seekTo != null ? seekTo : loadPos(id);
-  startPlayer(id, resumeAt);
-  if (seekTo == null && resumeAt) toast('picked up at ' + fmtTime(resumeAt));
-  prepAudio(id);   // ready an audio source so backgrounding keeps playing
+  if (SONG_MODE) {
+    exitFs();
+    refreshLoopBtn();
+    await enterAudioMode(id, resumeAt);   // songs are audio + lyrics, no video
+  } else {
+    if (matchMedia('(orientation: landscape)').matches) enterFs(); else exitFs();
+    startPlayer(id, resumeAt);
+    if (seekTo == null && resumeAt) toast('picked up at ' + fmtTime(resumeAt));
+    prepAudio(id);   // ready an audio source so backgrounding keeps playing
+  }
 }
 function jumpTo(sec) { openWatch(CURRENT, Math.max(0, sec - 1.5)); }
 
@@ -2747,6 +2835,16 @@ function refreshAudioBtn() {
   b.classList.toggle('on', audioMode);
   b.textContent = audioMode ? '🎬 back to video' : '🎧 background audio';
 }
+function refreshLoopBtn() {
+  const b = $('#loopBtn'); if (!b) return;
+  b.classList.toggle('on', SONG_LOOP);
+  b.textContent = SONG_LOOP ? '🔂 repeating' : '🔁 repeat';
+}
+function toggleLoop() {
+  SONG_LOOP = !SONG_LOOP;
+  if (bgAudio) bgAudio.loop = SONG_LOOP;
+  refreshLoopBtn();
+}
 async function toggleAudioMode() {
   const id = WDATA && WDATA.video.id; if (!id) return;
   const at = WP ? WP.time() : 0;
@@ -2813,6 +2911,7 @@ function mountAudio(src, at, isBlob) {
   bgAudio.addEventListener('loadedmetadata', () => { if (at) { try { bgAudio.currentTime = at; } catch {} } });
   if (at) { try { bgAudio.currentTime = at; } catch {} }
   bgAudio.playbackRate = rate;
+  bgAudio.loop = SONG_LOOP;
   clearInterval(capTimer); capTimer = setInterval(tick, 120);
   audioMode = true;
   $('#watchView').classList.add('audiomode');
@@ -2909,7 +3008,8 @@ function closeWatch() {
   try { if (audioSrc && audioSrcIsBlob) URL.revokeObjectURL(audioSrc); } catch {}
   audioSrc = null; audioSrcIsBlob = false; autoSwapped = false;
   WP = null; WDATA = null; audioMode = false;
-  $('#watchView').classList.remove('audiomode');
+  SONG_MODE = false; SONG_LOOP = false;
+  $('#watchView').classList.remove('audiomode', 'song-mode');
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
   wActive = -1;
   exitFs();
@@ -3193,6 +3293,9 @@ function renderTranscript() {
     ts.className = 'cue-ts'; ts.textContent = fmtTime(cue.s);
     ts.onclick = () => { if (WP) { WP.seek(cue.s); WP.play(); } };
     line.appendChild(ts);
+    if (SONG_MODE) line.onclick = e => {
+      if (e.target === line && WP) { WP.seek(cue.s); WP.play(); }
+    };
     (cue.words || []).forEach((w, wi) => {
       const sp = document.createElement('span');
       sp.className = 'cw' + (w.c ? ' has-card' : (w.p ? ' pending' : ''));
