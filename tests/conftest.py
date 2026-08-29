@@ -56,7 +56,7 @@ def stub_llm(monkeypatch):
     def _span(sentence, span, model=None):
         return {"span_text": span, "is_phrase": " " in span,
                 "translation": f"[{span}]", "sentence": sentence or span,
-                "stressed": span}
+                "stressed": span, "dict_form": span + "́"}
 
     monkeypatch.setattr(llm, "translate_span", _span)
     monkeypatch.setattr(llm, "translate_passage", lambda t, model=None: f"EN: {t}")
@@ -65,6 +65,9 @@ def stub_llm(monkeypatch):
                         {"translation": f"EN: {line}", "gist": "the gist", "notes": []})
     monkeypatch.setattr(llm, "accent_word", lambda w, s="", model=None: w)
     monkeypatch.setattr(llm, "accent_words", lambda items, model=None: [w for w, _ in items])
+    monkeypatch.setattr(llm, "dict_form", lambda w, s="", model=None: (w or "") + "́")
+    monkeypatch.setattr(llm, "dict_forms",
+                        lambda items, model=None: [(w or "") + "́" for w, _ in items])
     monkeypatch.setattr(llm, "word_family", lambda w, model=None: (w, [w]))
     monkeypatch.setattr(llm, "extract_candidates",
                         lambda *a, **k: ([], [], {"calls": 0, "in": 0, "out": 0,

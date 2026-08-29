@@ -289,6 +289,7 @@
   #modalPreview .pv .sent b { font-weight:700; }
   #modalPreview .pv .tr { color:var(--accent); font-size:1rem; margin-top:.25rem; }
   #modalPreview .pv-acc { color:var(--fg); font-size:1.05rem; margin-top:.35rem; font-weight:600; }
+  #modalPreview .pv-acc .pv-surf { color:var(--muted); font-size:.78rem; font-weight:400; margin-left:.4rem; }
   #modalPreview .pv-quick { color:var(--muted); font-size:.85rem; margin-top:.3rem; }
   #modalPreview .pv.quick .tr { color:var(--fg-dim); }
   #modalPreview .qtag { font-size:.62rem; text-transform:uppercase; letter-spacing:.06em;
@@ -757,7 +758,8 @@
   .study-scroll .a-ctx + .study-q { margin-top:.2rem; }
   .study-a { border-top:1px solid var(--line); padding-top:1rem; text-align:center; }
   .study-a .a-tr { font-size:1.5rem; font-weight:650; }
-  .study-a .a-acc { color:var(--muted); font-size:1rem; margin-top:.25rem; }
+  .study-a .a-acc { color:var(--fg-dim); font-size:1.15rem; font-weight:600; margin-top:.35rem;
+                    letter-spacing:.01em; }
   .study-a .a-clip { display:block; margin:1rem auto 0; max-width:15rem; width:100%;
                      border-radius:.5rem; overflow:hidden; border:1px solid var(--line);
                      background:var(--card-2); cursor:pointer; position:relative; }
@@ -2279,12 +2281,19 @@ function pvHtml(p) {
   const fqHtml = fq && fq.label
     ? ` <span class="fq ${fq.band || ''}">${escapeHtml(fq.label)}</span>` : '';
   const norm = s => (s || '').toLowerCase().replace(/[́ё]/g, m => m === 'ё' ? 'е' : '');
-  const stress = p.stressed && norm(p.stressed) !== norm(p.translation)
-    ? `<div class="pv-acc">${escapeHtml(p.stressed)}</div>` : '';
+  const df = (p.dict_form || '').trim(), sf = (p.stressed || '').trim();
+  let acc = '';
+  if (df) {
+    const surf = sf && norm(sf) !== norm(df)
+      ? ` <span class="pv-surf">as used: ${escapeHtml(sf)}</span>` : '';
+    acc = `<div class="pv-acc">${escapeHtml(df)}${surf}</div>`;
+  } else if (sf && norm(sf) !== norm(p.translation)) {
+    acc = `<div class="pv-acc">${escapeHtml(sf)}</div>`;
+  }
   const g = p.gloss && norm(p.gloss) !== norm(p.translation)
     ? `<div class="pv-quick">${escapeHtml(p.gloss)} <span class="qtag">dict</span></div>` : '';
   return `<div class="pv"><div class="sent">${p.front_html}</div>
-    ${stress}
+    ${acc}
     <div class="tr">${escapeHtml(p.translation || '')}${fqHtml}</div>
     ${g}</div>`;
 }

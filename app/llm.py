@@ -231,11 +231,12 @@ def extract_candidates(title, transcript, already_decided, model=DEFAULT_MODEL,
 TRANSLATE_SYSTEM = """You gloss ONE Russian word or phrase as used in one specific line, for a B2/C1 learner building a flashcard. The line may be truncated or contain glitches.
 
 Output ONLY one raw JSON object, no fence:
-{"span_text": "...", "is_phrase": true/false, "translation": "...", "sentence": "...", "stressed": "..."}
+{"span_text": "...", "is_phrase": true/false, "translation": "...", "sentence": "...", "stressed": "...", "dict_form": "..."}
 - span_text: clean citation (dictionary) form of what you glossed.
 - translation: best contextual English gloss; "a / b" if ambiguous; idioms by meaning.
 - sentence: the line lightly cleaned into a short readable Russian sentence containing an inflected form of span_text; if too fragmentary, write a minimal natural one.
-- stressed: the word/phrase in the EXACT form it appears in the sentence (not the citation form), with a combining acute accent (U+0301) after the stressed vowel and ё written with its dots. One-syllable words and ё get no accent mark. Use the context for mobile-stress words (голова́ → го́ловы)."""
+- stressed: the word/phrase in the EXACT form it appears in the sentence (not the citation form), with a combining acute accent (U+0301) after the stressed vowel and ё written with its dots. One-syllable words and ё get no accent mark. Use the context for mobile-stress words (голова́ → го́ловы).
+- dict_form: the citation/dictionary form (infinitive for verbs, nominative singular for nouns, nominative masculine singular for adjectives) written WITH the U+0301 stress mark and ё-dots. e.g. from "печале́н" → "печа́льный", from "зол" → "злой", from "нужны" → "ну́жный", from "затупи́вшийся" → "затупи́ться". Same as `stressed` only when the word already is its dictionary form. For a fixed phrase, the phrase in its dictionary form."""
 
 
 TRANSLATE_MODEL = os.environ.get("RU_TRANSLATE_MODEL", "sonnet")
@@ -526,3 +527,42 @@ def accent_words(items, model=None):
 
 def accent_word(word, sentence="", model=None):
     return (accent_words([(word, sentence)], model=model) or [""])[0]
+
+
+_DICT_FORM_SYSTEM = """For each numbered line "WORD — context" output "N. FORM".
+
+FORM is the Russian DICTIONARY / citation form of WORD:
+- verbs (incl. participles and gerunds): the infinitive
+- nouns: nominative singular
+- adjectives (incl. short forms, comparatives): nominative masculine singular
+- adverbs, particles, pronouns: their normal headword form
+- a fixed multi-word phrase: the phrase in its dictionary form
+
+Write FORM WITH a combining acute accent (U+0301) right after the stressed vowel
+and ё spelled with its dots. A one-syllable form and ё take no added mark.
+
+Use the context ONLY to disambiguate: a homograph (за́мок «castle» / замо́к
+«lock»), or a short adjective vs an unrelated word (зол → злой, NOT the noun
+зло; на́чал → нача́ть). Output only the numbered lines, nothing else."""
+
+
+def dict_forms(items, model=None):
+    """items: [(word, sentence), …] -> the stressed dictionary/citation form of
+    each, aligned to items (best-effort; unparsable -> '')."""
+    if not items:
+        return []
+    numbered = "\n".join(
+        f"{i + 1}. {w} — {(s or '').strip()}".rstrip(" —")
+        for i, (w, s) in enumerate(items))
+    text = _warm_or_oneshot(numbered, _DICT_FORM_SYSTEM, model or TRANSLATE_MODEL,
+                            timeout=45)
+    by_num = {}
+    for ln in text.splitlines():
+        m = re.match(r"\s*(\d+)[.)]\s*(.+)", ln.strip())
+        if m:
+            by_num[int(m.group(1))] = m.group(2).strip().strip('"')
+    return [by_num.get(i + 1, "") for i in range(len(items))]
+
+
+def dict_form(word, sentence="", model=None):
+    return (dict_forms([(word, sentence)], model=model) or [""])[0]

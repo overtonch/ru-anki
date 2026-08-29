@@ -116,28 +116,37 @@ def _do_sync():
         print(f"[sync] {err}")
 
 
+def _dict_form(span_text, sentence=""):
+    """The stressed dictionary/citation form for a word (e.g. 'зол'/'печале́н' →
+    'злой'/'печа́льный'). Cached by the surface form; a miss is one warm LLM
+    call. Returns '' for phrases or on failure."""
+    st = (span_text or "").strip()
+    if not st or " " in st:
+        return ""
+    df = store.accent_for(st)
+    if df:
+        return df
+    try:
+        df = (llm.dict_form(st, sentence) or "").strip()
+    except Exception as e:  # noqa: BLE001
+        print(f"[dictform] {st}: {e}")
+        return ""
+    if df:
+        store.set_accent(st, df)
+        store.set_accent(df, df)          # also findable under the dict form itself
+    return df
+
+
 def _learn_accent(span_text, sentence=""):
-    """Fill the stress/ё hint for a freshly carded word (single words only)."""
-    lemma = store.lemma_key((span_text or "").strip())
-    if not lemma or " " in lemma:
+    """Async: compute the dictionary form for a freshly carded word and write it
+    onto its card(s) (create_card leaves accented=None on a cache miss)."""
+    df = _dict_form(span_text, sentence)
+    if not df:
         return
-    acc = store.accent_for(lemma)
-    if not acc:
-        try:
-            acc = llm.accent_word(store.yo_form(lemma), sentence)
-            if acc:
-                store.set_accent(lemma, acc)
-                print(f"[accent] {lemma} -> {acc}")
-        except Exception as e:  # noqa: BLE001
-            print(f"[accent] {lemma}: {e}")
-            return
-    if acc:
-        # write it onto the card(s) that triggered this — create_card stores
-        # accented=None when the hint isn't cached yet.
-        try:
-            srs.set_accent_for_lemma(lemma, acc)
-        except Exception as e:  # noqa: BLE001
-            print(f"[accent] card backfill {lemma}: {e}")
+    try:
+        srs.set_accent_for_lemma(store.norm(span_text), df)
+    except Exception as e:  # noqa: BLE001
+        print(f"[dictform] card backfill {span_text}: {e}")
 
 
 def _learn_accent_async(span_text, sentence=""):
@@ -167,19 +176,11 @@ def _commit_card(*, sentence, span_text, normalized_text, is_phrase, translation
 
 
 def _accent_sync(span_text, sentence, is_phrase):
-    """Stress/ё hint for a card being made right now (deliberate, latency-OK).
-    Cache hit is instant; a miss is one ~2s warm call. Phrases get nothing."""
+    """Stressed dictionary form for a card being made right now (deliberate,
+    latency-OK). Cache hit is instant; a miss is one warm call. Phrases: None."""
     if is_phrase:
         return None
-    lem = store.lemma_key(span_text)
-    acc = store.accent_for(lem)
-    if not acc:
-        try:
-            acc = llm.accent_word(store.yo_form(lem), sentence)
-            store.set_accent(lem, acc)
-        except Exception as e:  # noqa: BLE001
-            print(f"[accent] {lem}: {e}")
-    return acc
+    return _dict_form(span_text, sentence) or None
 
 
 def _learn_family(lemma):
@@ -1570,35 +1571,41 @@ def srs_backfill(video_id: int | None = None, limit: int | None = None):
     return {"created": n, **srs.stats()}
 
 
-def _backfill_accents(limit=None):
-    """Fill srs_cards.accented for single-word cards that never got a stress
-    hint (review-swipe cards, pre-feature imports). Cache first, LLM for the
-    rest. Runs in a background thread."""
-    rows = srs.cards_missing_accent(limit=limit)
-    print(f"[accent] backfilling {len(rows)} cards…")
+def _backfill_accents(limit=None, force=False):
+    """Put the stressed dictionary form on srs_cards.accented. `force` re-derives
+    every single-word card; otherwise only ones still missing it. Batched LLM
+    calls. Runs in a background thread."""
+    rows = (srs.accent_backfill_rows() if force
+            else srs.cards_missing_accent(limit=limit))
+    if limit:
+        rows = rows[:limit]
+    print(f"[dictform] backfilling {len(rows)} card lemmas (force={force})…")
     done = 0
-    for r in rows:
-        lem = store.lemma_key(r["span_text"])
-        if not lem or " " in lem:
+    BATCH = 25
+    for i in range(0, len(rows), BATCH):
+        chunk = rows[i:i + BATCH]
+        try:
+            forms = llm.dict_forms([(r["span_text"], r.get("sentence") or "")
+                                    for r in chunk])
+        except Exception as e:  # noqa: BLE001
+            print(f"[dictform] batch {i}: {e}")
             continue
-        acc = store.accent_for(lem)
-        if not acc:
-            try:
-                acc = llm.accent_word(store.yo_form(lem), r["sentence"] or "")
-                if acc:
-                    store.set_accent(lem, acc)
-            except Exception as e:  # noqa: BLE001
-                print(f"[accent] {lem}: {e}")
+        for r, df in zip(chunk, forms):
+            df = (df or "").strip()
+            if not df:
                 continue
-        if acc and srs.set_accent_for_lemma(r["normalized_text"], acc):
-            done += 1
-    print(f"[accent] backfill done: {done} cards updated")
+            store.set_accent(r["span_text"], df)
+            store.set_accent(df, df)
+            done += srs.set_accent_for_lemma(r["normalized_text"], df, force=force)
+    print(f"[dictform] backfill done: {done} cards updated")
 
 
 @app.post("/srs/backfill-accents")
-def srs_backfill_accents(background: BackgroundTasks, limit: int | None = None):
-    background.add_task(_backfill_accents, limit)
-    return {"queued": srs.count_missing_accent()}
+def srs_backfill_accents(background: BackgroundTasks, limit: int | None = None,
+                         force: bool = False):
+    background.add_task(_backfill_accents, limit, force)
+    return {"queued": len(srs.accent_backfill_rows()) if force
+            else srs.count_missing_accent(), "force": force}
 
 
 @app.get("/srs/export")
@@ -1813,6 +1820,20 @@ def _resolve_ts(video_id, subtitle_line_id, timestamp):
     return timestamp
 
 
+def _pv_dict_form(g, span_text, is_phrase):
+    """The stressed dictionary form for a translate preview — from the same LLM
+    call if it gave one, else the cache. Caches whatever we settle on."""
+    if is_phrase:
+        return None
+    df = (g.get("dict_form") or "").strip()
+    if not df:
+        df = store.accent_for(span_text) or ""
+    if df:
+        store.set_accent(span_text, df)
+        store.set_accent(df, df)
+    return df or None
+
+
 def _translate_preview(video_id, span, subtitle_line_id=None, timestamp=None,
                        sentence=None):
     """Just the back-of-card content — no card is created. Fast single call."""
@@ -1826,9 +1847,11 @@ def _translate_preview(video_id, span, subtitle_line_id=None, timestamp=None,
     if "\x00" not in store.bold(sent, span_text, is_phrase, "\x00"):
         sent = ctx
     front, bolded = anki.front_html(sent, span_text, is_phrase)
+    df = _pv_dict_form(g, span_text, is_phrase)
     return {"span_text": span_text, "is_phrase": is_phrase, "translation": translation,
             "sentence": sent, "front_html": front, "bolded": bolded, "ts": ts,
             "stressed": (g.get("stressed") or "").strip() or None,
+            "dict_form": df,
             "gloss": store.gloss_for(span) or store.gloss_for(span_text),
             "freq": store.freq_hint(store.lemma_key(span_text), is_phrase)}
 
@@ -1909,6 +1932,7 @@ def _translate_ctx(span, ctx):
     return {"span_text": span_text, "is_phrase": is_phrase, "translation": translation,
             "sentence": sent, "front_html": front, "bolded": bolded,
             "stressed": (g.get("stressed") or "").strip() or None,
+            "dict_form": _pv_dict_form(g, span_text, is_phrase),
             "gloss": store.gloss_for(span) or store.gloss_for(span_text),
             "freq": store.freq_hint(store.lemma_key(span_text), is_phrase)}
 

@@ -267,20 +267,32 @@ def update_card(card_id, *, sentence=None, span_text=None, translation=None,
     return get_card(card_id)
 
 
-def set_accent_for_lemma(normalized_text, accented):
-    """Backfill the stress-marked form onto every card of a lemma that lacks one.
-    Called after the async accent computation finishes. Returns rows touched."""
+def set_accent_for_lemma(normalized_text, accented, force=False):
+    """Write the stress-marked dictionary form onto every card of a lemma.
+    Without `force`, only fills cards that don't already have one. Rows touched."""
     acc = (accented or "").strip()
     if not normalized_text or not acc:
         return 0
     c = store.connect()
-    n = c.execute(
-        "UPDATE srs_cards SET accented=? "
-        "WHERE normalized_text=? AND (accented IS NULL OR accented='')",
-        (acc, normalized_text)).rowcount
+    q = "UPDATE srs_cards SET accented=? WHERE normalized_text=? AND is_phrase=0"
+    if not force:
+        q += " AND (accented IS NULL OR accented='')"
+    n = c.execute(q, (acc, normalized_text)).rowcount
     c.commit()
     c.close()
     return n
+
+
+def accent_backfill_rows():
+    """One row per distinct single-word card lemma: (normalized_text, span_text,
+    sentence) — newest card's sentence as context for the dict-form call."""
+    c = store.connect()
+    rows = [dict(r) for r in c.execute(
+        "SELECT normalized_text, span_text, sentence, MAX(id) mid FROM srs_cards "
+        "WHERE is_phrase=0 AND span_text NOT LIKE '% %' "
+        "GROUP BY normalized_text ORDER BY mid DESC")]
+    c.close()
+    return rows
 
 
 _MISSING_ACCENT_WHERE = (
