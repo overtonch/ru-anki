@@ -498,6 +498,8 @@
   #inlineDecide[hidden] { display:none; }
   #inlineDecide .id-head { font-size:.92rem; line-height:1.35; margin-bottom:.35rem; }
   #inlineDecide .id-head span { color:var(--muted); }
+  #inlineDecide #idDict { color:var(--fg-dim); font-weight:600; margin-left:.35rem; }
+  #inlineDecide #idDict[hidden] { display:none; }
   #inlineDecide .id-freq { font-size:.75rem; margin-bottom:.55rem; min-height:1px; }
   #inlineDecide .id-freq:empty { display:none; }
   #inlineDecide .id-btns { display:flex; gap:.5rem; }
@@ -1122,7 +1124,7 @@
 
   <!-- inline decide popover — top-level so it can float over the reader too -->
   <div id="inlineDecide" hidden>
-    <div class="id-head"><b id="idSpan"></b> <span id="idTr"></span></div>
+    <div class="id-head"><b id="idSpan"></b><span id="idDict" hidden></span> <span id="idTr"></span></div>
     <div class="id-freq" id="idFreq"></div>
     <div class="id-btns" id="idBtns"></div>
     <button class="id-more" id="idMore">all places this is said →</button>
@@ -4202,7 +4204,7 @@ function markWordCarded(span) {
 /* route a tapped word to the right action */
 function wordAction(w, sp, ci, wi) {
   if (w.p && !w.c) return inlineDecide(w.p, sp);
-  if (w.cc) return inlineUndo(w.cc, sp, 'carded', w.tr);
+  if (w.cc) return inlineUndo(w.cc, sp, 'carded', w.tr, { s: w.ac, d: w.da });
   if (w.dd && !w.c) return inlineUndo(w.dd, sp, 'skipped', w.tr);
   if (w.c) return inlineGreen(w, sp, ci, wi);   // globally green, no candidate here
   watchTapWord(ci, wi);
@@ -4216,11 +4218,13 @@ function inlineGreen(w, sp, ci, wi) {
   const sub = w.tr ? '— ' + w.tr : '— you’re learning this';   // card back, if /watch carried it
   _openInlinePop(sp, word, sub, '',
     `<button class="id-no" onclick="greenDiscard()">not learning</button>
-     <button class="id-yes" onclick="greenCard()">✎ card</button>`);
-  if (!w.tr) api('/words/' + encodeURIComponent(word)).then(d => {   // fallback (e.g. family-green words)
+     <button class="id-yes" onclick="greenCard()">✎ card</button>`,
+    { s: w.ac, d: w.da });
+  if (!w.tr || !(w.ac || w.da)) api('/words/' + encodeURIComponent(word)).then(d => {   // fallback (e.g. family-green words)
+    if (!_greenCtx || _greenCtx.word !== word || $('#inlineDecide').hidden) return;
     const tr = d && (d.translation || d.gloss);
-    if (tr && _greenCtx && _greenCtx.word === word && !$('#inlineDecide').hidden)
-      $('#idTr').textContent = '— ' + tr;
+    if (!w.tr && tr) $('#idTr').textContent = '— ' + tr;
+    if (!(w.ac || w.da) && d && d.accented) { $('#idSpan').textContent = d.accented; $('#idDict').hidden = true; }
   }).catch(() => {});
 }
 function greenCard() {
@@ -4244,10 +4248,16 @@ function clearGreen(word) {
   document.querySelectorAll('#transcript .cw.has-card, #capOverlay .capw.has-card')
     .forEach(el => { if (hit(el.textContent)) el.classList.remove('has-card'); });
 }
-function _openInlinePop(anchor, span, sub, freqHtml, btns) {
+function _bareStress(s) { return (s || '').toLowerCase().replace(/[́̀]/g, ''); }
+function _openInlinePop(anchor, span, sub, freqHtml, btns, acc) {
   if (WP && !WP.paused()) { try { WP.pause(); } catch {} wPausedForModal = true; }
   const pop = $('#inlineDecide');
-  $('#idSpan').textContent = span || '';
+  const head = (acc && acc.s) || span || '';
+  $('#idSpan').textContent = head;
+  const dictEl = $('#idDict');
+  if (acc && acc.d && _bareStress(acc.d) !== _bareStress(head)) {
+    dictEl.textContent = '→ ' + acc.d; dictEl.hidden = false;
+  } else { dictEl.textContent = ''; dictEl.hidden = true; }
   $('#idTr').textContent = sub || '';
   $('#idFreq').innerHTML = freqHtml || '';
   $('#idBtns').innerHTML = btns;
@@ -4280,17 +4290,22 @@ function inlineDecide(candId, anchor) {
 }
 
 /* ---- undo a card / skip made while watching ---- */
-function inlineUndo(candId, anchor, kind, tr) {
+function inlineUndo(candId, anchor, kind, tr, acc) {
   const word = anchor.textContent.replace(/^[^А-Яа-яЁёA-Za-z-]+|[^А-Яа-яЁёA-Za-z-]+$/g, '');
   $('#inlineDecide').dataset.cand = candId;
   const fallback = kind === 'carded' ? '— you have a card for this' : '— you skipped this';
   _openInlinePop(anchor, word, tr ? '— ' + tr : fallback, '',
     `<button class="id-no" onclick="closeInline(true)">keep</button>
-     <button class="id-yes" onclick="inlineUndoCommit('${kind}')">${kind === 'carded' ? 'remove card' : 'add back to review'}</button>`);
-  if (!tr) api('/words/' + encodeURIComponent(word)).then(d => {
+     <button class="id-yes" onclick="inlineUndoCommit('${kind}')">${kind === 'carded' ? 'remove card' : 'add back to review'}</button>`,
+    acc);
+  if ((!tr || !(acc && (acc.s || acc.d)))) api('/words/' + encodeURIComponent(word)).then(d => {
+    if ($('#inlineDecide').hidden || $('#inlineDecide').dataset.cand != candId) return;
     const t = d && (d.translation || d.gloss);
-    if (t && !$('#inlineDecide').hidden && $('#inlineDecide').dataset.cand == candId)
-      $('#idTr').textContent = '— ' + t;
+    if (!tr && t) $('#idTr').textContent = '— ' + t;
+    if (!(acc && (acc.s || acc.d)) && d && d.accented) {
+      $('#idSpan').textContent = d.accented;
+      $('#idDict').hidden = true;
+    }
   }).catch(() => {});
 }
 async function inlineUndoCommit(kind) {

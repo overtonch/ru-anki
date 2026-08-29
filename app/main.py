@@ -1770,6 +1770,7 @@ def _word_flagger(video_id):
     """-> (flag(text) -> [word dict], pend_rows). Shared by /watch and /read."""
     have = store.card_lemmas() | store.known_family_lemmas()
     glosses = store.carded_glosses()
+    accents = store.carded_accents()
     pend_rows = store.list_candidates(video_id, status="pending")
     pending = {r["normalized_text"]: r["id"]
                for r in pend_rows if r.get("normalized_text")}
@@ -1786,6 +1787,12 @@ def _word_flagger(video_id):
                     w["c"] = True
                     if lem in glosses:
                         w["tr"] = glosses[lem]
+                    ac = accents.get(lem)
+                    if ac:
+                        if ac[0]:
+                            w["ac"] = ac[0]
+                        if ac[1] and ac[1] != ac[0]:
+                            w["da"] = ac[1]
                 elif lem in pending:
                     w["p"] = pending[lem]
                 d = decided.get(lem)

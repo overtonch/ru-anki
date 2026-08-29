@@ -972,6 +972,24 @@ def carded_glosses():
     return out
 
 
+def carded_accents():
+    """{normalized_text: (surface_stressed, dict_stressed)} for words you have a
+    card for — feeds the stress hint in the inline reader/watch popover."""
+    c = connect()
+    out = {}
+    try:
+        for r in c.execute(
+            "SELECT normalized_text, accented, dict_accented FROM srs_cards "
+            "WHERE (accented IS NOT NULL AND accented != '') "
+            "   OR (dict_accented IS NOT NULL AND dict_accented != '')"):
+            out.setdefault(r["normalized_text"],
+                           (r["accented"] or "", r["dict_accented"] or ""))
+    except sqlite3.OperationalError:
+        pass
+    c.close()
+    return out
+
+
 def known_family_lemmas():
     """Every lemma that shares a word-formation family with something you've
     carded — so работа / рабочий / работник all count as 'known' once you have
