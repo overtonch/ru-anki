@@ -106,6 +106,9 @@ def _stem(w):
     return w[:3] if len(w) < 3 else w
 
 
+_BOLD_CYR = re.compile(r"[а-я][а-я-]*")
+
+
 def bold(sentence, span, is_phrase, tag="**"):
     """Wrap the occurrence of `span` (or its inflected form) in `sentence`.
 
@@ -139,24 +142,37 @@ def bold(sentence, span, is_phrase, tag="**"):
             lcp += 1
         return lcp >= (len(stem) if len(stem) <= 4 else 5)
 
+    def _lem(t):
+        t = norm(t)
+        return _lemma_one(t) if _BOLD_CYR.fullmatch(t) else None
+
     if not is_phrase:
         st = _stem(span)
         for a, b in toks:
             if hit(sentence[a:b], st):
                 return wrap(a, b)
+        # morphology fallback — the crude stemmer misses fleeting vowels
+        # (иголка/иголок), consonant mutation (вертеть/верчу) and verb-class
+        # shifts (блефовать/блефуешь); pymorphy lemmas catch them.
+        sp_lem = _lem(span)
+        if sp_lem:
+            for a, b in toks:
+                if _lem(sentence[a:b]) == sp_lem:
+                    return wrap(a, b)
         return sentence
 
-    # Phrase: stem every content word of the span (>= 3 chars, so we skip
-    # prepositions / particles like за, в, не), then find sentence tokens that
-    # match any of them. Bold from the first to the last such token — but only
-    # if at least two matched and they sit close together, so a single weak
-    # match or two scattered ones never produces a misleading bold. Anything
-    # that fails this is treated as "not present" and auto-discarded upstream.
-    stems = [s for s in (_stem(w) for w in span.split()) if len(s) >= 3]
-    matched = [(a, b) for a, b in toks if any(hit(sentence[a:b], s) for s in stems)]
+    # Phrase: match each content word of the span (>= 3 chars — skip prepositions
+    # / particles) by stem OR lemma, bold from first to last matched token, but
+    # only if 2+ matched and they sit close together.
+    parts = [w for w in span.split() if len(norm(w)) >= 3]
+    stems = [s for s in (_stem(w) for w in parts) if len(s) >= 3]
+    lems = {l for l in (_lem(w) for w in parts) if l}
+    matched = [(a, b) for a, b in toks
+               if any(hit(sentence[a:b], s) for s in stems)
+               or _lem(sentence[a:b]) in lems]
     if len(matched) >= 2:
         span_toks = sum(1 for a, b in toks if matched[0][0] <= a and b <= matched[-1][1])
-        if span_toks <= max(len(stems) + 2, 5):
+        if span_toks <= max(len(parts) + 2, 5):
             return wrap(matched[0][0], matched[-1][1])
     return sentence
 

@@ -574,12 +574,23 @@
   .cl-row .cl-badge.due { color:var(--no); border-color:rgba(224,90,90,.4); }
   .cl-row .cl-exp { margin-top:.5rem; font-size:.9rem; line-height:1.5; display:none; }
   .cl-row.open .cl-exp { display:block; }
-  .cl-row .cl-exp .cl-sent b { color:var(--accent); }
+  .cl-row .cl-exp .cl-sent { color:var(--fg); }
+  .cl-row .cl-exp .cl-sent b { color:var(--accent); font-weight:700; }
+  .cl-row .cl-exp .cl-acc { color:var(--muted); font-size:.8rem; margin-top:.2rem; }
   .cl-row .cl-exp .cl-acts { display:flex; gap:.5rem; margin-top:.6rem; }
   .cl-row .cl-exp .cl-acts button { flex:1; padding:.45rem; border-radius:var(--r-sm); border:1px solid var(--line);
                                     background:var(--card-2); color:var(--fg-dim); font-size:.82rem; cursor:pointer; }
   .cl-row .cl-exp .cl-acts button.cl-del:active { border-color:var(--no); color:var(--no); }
   .cl-row .cl-exp .cl-acts button.cl-jump { color:var(--accent); }
+  .cl-row .cl-edit { display:none; margin-top:.6rem; }
+  .cl-row.editing .cl-exp > .cl-acts { display:none; }
+  .cl-row.editing .cl-edit { display:block; }
+  .cl-row.editing .cl-sent, .cl-row.editing .cl-acc { display:none; }
+  .cl-edit label { display:block; font-size:.72rem; color:var(--muted); margin-bottom:.5rem; text-transform:uppercase; letter-spacing:.04em; }
+  .cl-edit input, .cl-edit textarea { display:block; width:100%; margin-top:.15rem; background:var(--card-2);
+      border:1px solid var(--line); color:var(--fg); border-radius:.35rem; padding:.4rem .5rem; font:inherit; font-size:.9rem; }
+  .cl-edit textarea { resize:vertical; }
+  .cl-edit .ce-save { color:var(--accent); border-color:rgba(90,150,220,.4); }
   .studybar { display:flex; align-items:center; gap:.5rem; padding:.5rem .9rem; flex:none;
               border-bottom:1px solid var(--line-soft); }
   .studybar .prog { flex:1; text-align:center; font-size:.82rem; color:var(--muted);
@@ -880,6 +891,7 @@
     <div class="studybar">
       <button class="backlink" onclick="history.back()">← done</button>
       <div class="prog" id="studyProg"></div>
+      <button class="sbtn" id="studyEdit" onclick="studyEditCard()" title="edit this card" disabled>✏️</button>
       <button class="sbtn" id="studyDelete" onclick="studyDelete()" title="delete this card" disabled>🗑</button>
       <button class="sbtn" id="studyUndo" onclick="studyUndo()" disabled>↩ undo</button>
     </div>
@@ -2103,6 +2115,7 @@ function renderStudyCard() {
   const c = studyCard();
   $('#studyUndo').disabled = !STUDY.history.length;
   $('#studyDelete').disabled = !c;
+  $('#studyEdit').disabled = !c;
   if (!c) return renderStudyDone();
   STUDY.revealed = false;
   STUDY.shownAt = Date.now();
@@ -2189,6 +2202,12 @@ async function studyRate(rating) {
   else renderStudyCard();
   refreshStudyBanner();
   refreshQueuePill();
+}
+
+function studyEditCard() {
+  const c = studyCard();
+  if (!c) return;
+  openCardList('all', 'Edit card', c.span_text, c.id);
 }
 
 async function studyDelete() {
@@ -2318,11 +2337,11 @@ function renderStats(d) {
 }
 
 /* ---- card list ---- */
-let CL = { filter: 'all', title: 'Cards' };
-function openCardList(filter, title) {
-  CL = { filter, title: title || 'Cards' };
+let CL = { filter: 'all', title: 'Cards', autoEdit: null };
+function openCardList(filter, title, search, autoEditId) {
+  CL = { filter, title: title || 'Cards', autoEdit: autoEditId || null };
   $('#clTitle').textContent = CL.title;
-  $('#clSearch').value = '';
+  $('#clSearch').value = search || '';
   $('#cardsView').hidden = false;
   loadCardList();
 }
@@ -2344,7 +2363,7 @@ function renderCardList(d) {
       : c.is_new ? '<span class="cl-badge new">new</span>'
       : c.overdue ? '<span class="cl-badge due">due</span>'
       : c.due_in ? `<span class="cl-badge">${c.due_in}</span>` : '';
-    const sent = c.sentence ? boldSpan(c.sentence, c.span_text) : '';
+    const warn = c.bolded ? '' : '<span class="cl-badge due" title="target word not bolded">⚠</span>';
     const jump = c.seconds != null && c.video_id != null
       ? `<button class="cl-jump" onclick="event.stopPropagation();clJump(${c.video_id},${c.seconds})">▶ watch</button>` : '';
     return `<div class="cl-row" data-id="${c.id}" data-name="${escapeHtml(c.span_text)}">
@@ -2352,15 +2371,25 @@ function renderCardList(d) {
       <div class="cl-inner">
         <div class="cl-top">
           <span class="cl-w${c.suspended ? ' sus' : ''}">${escapeHtml(c.span_text)}</span>
-          <span class="cl-tr">${escapeHtml(c.translation || '')}</span>${badge}
+          <span class="cl-tr">${escapeHtml(c.translation || '')}</span>${warn}${badge}
         </div>
         <div class="cl-exp">
-          <div class="cl-sent">${sent}</div>
-          ${c.accented ? `<div style="color:var(--muted);font-size:.8rem;margin-top:.2rem">${escapeHtml(c.accented)}</div>` : ''}
+          <div class="cl-sent">${c.front_html || ''}</div>
+          ${c.accented ? `<div class="cl-acc">${escapeHtml(c.accented)}</div>` : ''}
           <div class="cl-acts">
             ${jump}
+            <button onclick="event.stopPropagation();clEdit(${c.id})">✏️ edit</button>
             <button onclick="event.stopPropagation();clSuspend(${c.id},${c.suspended ? 0 : 1})">${c.suspended ? 'unsuspend' : 'suspend'}</button>
             <button class="cl-del" onclick="event.stopPropagation();clDelete(${c.id})">delete</button>
+          </div>
+          <div class="cl-edit">
+            <label>word / phrase<input class="ce-span" value="${escapeHtml(c.span_text)}"></label>
+            <label>sentence<textarea class="ce-sent" rows="2">${escapeHtml(c.sentence || '')}</textarea></label>
+            <label>translation<input class="ce-tr" value="${escapeHtml(c.translation || '')}"></label>
+            <div class="cl-acts">
+              <button onclick="event.stopPropagation();clSaveEdit(${c.id})" class="ce-save">save</button>
+              <button onclick="event.stopPropagation();this.closest('.cl-row').classList.remove('editing')">cancel</button>
+            </div>
           </div>
         </div>
       </div>
@@ -2368,11 +2397,33 @@ function renderCardList(d) {
   }).join('');
   $('#clBody').innerHTML = `<div class="cl-count">${d.shown} of ${d.total}${d.shown < d.total ? ' (refine to see more)' : ''}</div>${rows}`;
   attachCardListSwipe();
+  if (CL.autoEdit) { const id = CL.autoEdit; CL.autoEdit = null; clEdit(id);
+    const r = $('#clBody').querySelector(`.cl-row[data-id="${id}"]`); if (r) r.scrollIntoView({ block: 'center' }); }
 }
-function boldSpan(sentence, span) {
-  const t = rnorm(stripPunct(span)).split(/\s+/)[0].slice(0, 5);
-  return escapeHtml(sentence).replace(/[А-Яа-яЁёA-Za-z-]+/g, w =>
-    (t && rnorm(w).startsWith(t)) ? '<b>' + w + '</b>' : w);
+function clEdit(id) {
+  const row = $('#clBody').querySelector(`.cl-row[data-id="${id}"]`);
+  if (row) { row.classList.add('open', 'editing'); row.querySelector('.ce-sent').focus(); }
+}
+async function clSaveEdit(id) {
+  const row = $('#clBody').querySelector(`.cl-row[data-id="${id}"]`);
+  if (!row) return;
+  const btn = row.querySelector('.ce-save'); btn.disabled = true;
+  const body = {
+    span_text: row.querySelector('.ce-span').value.trim(),
+    sentence: row.querySelector('.ce-sent').value.trim(),
+    translation: row.querySelector('.ce-tr').value.trim(),
+  };
+  let d;
+  try { d = await api(`/srs/cards/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); }
+  catch (e) { btn.disabled = false; toast('couldn’t save — ' + e.message, 3000); return; }
+  row.querySelector('.cl-w').textContent = d.span_text;
+  row.querySelector('.cl-tr').textContent = d.translation || '';
+  row.querySelector('.cl-sent').innerHTML = d.front_html;
+  row.dataset.name = d.span_text;
+  const w = row.querySelector('.cl-top .cl-badge.due');
+  if (d.bolded && w && w.textContent === '⚠') w.remove();
+  row.classList.remove('editing');
+  toast(d.bolded ? 'saved' : 'saved — still not bolded, check the word', d.bolded ? 1400 : 3000);
 }
 function clJump(vid, secs) {
   CURRENT = vid; DETAIL_V = VIDEOS.find(x => x.id === vid) || { id: vid };

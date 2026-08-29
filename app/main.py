@@ -1157,6 +1157,24 @@ def srs_resnap(background: BackgroundTasks):
     return {"checked": checked, "moved": moved}
 
 
+class CardEditIn(BaseModel):
+    sentence: str | None = None
+    span_text: str | None = None
+    translation: str | None = None
+
+
+@app.patch("/srs/cards/{card_id}")
+def srs_edit_card(card_id: int, body: CardEditIn):
+    if not srs.get_card(card_id):
+        raise HTTPException(404, "no such card")
+    card = srs.update_card(card_id, sentence=body.sentence,
+                           span_text=body.span_text, translation=body.translation)
+    front, bolded = anki.front_html(card["sentence"], card["span_text"],
+                                    bool(card["is_phrase"]))
+    return {**_study_card_view(card, with_preview=False),
+            "front_html": front, "bolded": bolded, "sentence": card["sentence"]}
+
+
 @app.get("/srs/queue")
 def srs_queue(limit: int = 60):
     cards = srs.queue(limit=limit)

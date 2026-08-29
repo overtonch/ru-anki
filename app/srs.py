@@ -212,6 +212,30 @@ def set_anki_note(card_id, note_id):
     c.close()
 
 
+def update_card(card_id, *, sentence=None, span_text=None, translation=None,
+                accented=None):
+    """Edit a card's content (not its schedule). Returns the updated card dict."""
+    sets, args = [], []
+    if sentence is not None:
+        sets += ["sentence=?"]; args += [sentence.strip()]
+    if span_text is not None:
+        sp = span_text.strip()
+        sets += ["span_text=?", "normalized_text=?", "is_phrase=?"]
+        args += [sp, store.lemma_key(sp), 1 if " " in sp else 0]
+    if translation is not None:
+        sets += ["translation=?"]; args += [translation.strip()]
+    if accented is not None:
+        sets += ["accented=?"]; args += [accented.strip() or None]
+    if not sets:
+        return get_card(card_id)
+    c = store.connect()
+    c.execute(f"UPDATE srs_cards SET {', '.join(sets)} WHERE id=?",
+              (*args, card_id))
+    c.commit()
+    c.close()
+    return get_card(card_id)
+
+
 # ---------------------------------------------------------------- review
 
 def preview(card_id):
@@ -422,8 +446,11 @@ def list_cards(filt="all", sort="added", q="", limit=1000):
     for r in rows:
         d = dict(r)
         due = _parse(d["due"])
+        front, bolded = anki.front_html(d["sentence"] or "", d["span_text"],
+                                        bool(d["is_phrase"]))
         out.append({
-            "id": d["id"], "span_text": d["span_text"],
+            "id": d["id"], "span_text": d["span_text"], "front_html": front,
+            "bolded": bolded,
             "normalized_text": d["normalized_text"], "translation": d["translation"],
             "accented": d["accented"], "is_phrase": bool(d["is_phrase"]),
             "sentence": d["sentence"], "video_id": d["video_id"],
