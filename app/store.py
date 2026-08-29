@@ -26,10 +26,10 @@ bold = _legacy.bold
 
 
 def connect():
-    c = sqlite3.connect(DB)
+    c = sqlite3.connect(DB, timeout=15.0)
     c.row_factory = sqlite3.Row
-    c.execute("PRAGMA foreign_keys=ON")
-    c.execute("PRAGMA journal_mode=WAL")
+    c.execute("PRAGMA foreign_keys=ON")   # per-connection, must be set every time
+    c.execute("PRAGMA busy_timeout=15000")
     return c
 
 
@@ -40,6 +40,8 @@ def _has_column(c, table, col):
 def init_db():
     """Create/upgrade the schema. Safe to run on every startup."""
     c = connect()
+    c.execute("PRAGMA journal_mode=WAL")     # persists in the db file — set once
+    c.execute("PRAGMA synchronous=NORMAL")   # safe under WAL, fewer fsyncs
     for fn in ("schema.sql", "schema_v2.sql"):
         with open(os.path.join(ROOT, fn), encoding="utf-8") as f:
             c.executescript(f.read())

@@ -7,7 +7,12 @@ review them with a tap, and confirmed ones become Anki recognition cards.
 
 ```sh
 ./run.sh                     # uvicorn on 0.0.0.0:8000
+./check.sh                   # pre-deploy gate: syntax + tests (fast, offline, no LLM)
 ```
+
+Run `./check.sh` before restarting the server or pushing — it compiles every
+module, syntax-checks the frontend JS + service worker, and runs the `tests/`
+suite (a throwaway DB, the LLM stubbed, ~0.5s).
 
 Open <http://localhost:8000/> (or `http://<machine>:8000/` on the LAN).
 

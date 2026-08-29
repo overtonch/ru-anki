@@ -42,6 +42,11 @@ import ytdlp  # noqa: E402
 
 store.init_db()
 
+# RU_TEST=1 (set by the test suite) skips every boot-time background job —
+# git snapshots, network metadata backfill, LLM prewarm — so importing the app
+# is fast and side-effect-free.
+_TESTING = os.environ.get("RU_TEST") == "1"
+
 
 def _startup_backup():
     try:
@@ -50,8 +55,9 @@ def _startup_backup():
         print(f"[backup] startup snapshot failed: {e}")
 
 
-threading.Thread(target=_startup_backup, daemon=True).start()  # never block boot
-backup.start_scheduler()
+if not _TESTING:
+    threading.Thread(target=_startup_backup, daemon=True).start()  # never block boot
+    backup.start_scheduler()
 
 
 def _startup_maintenance():
@@ -77,9 +83,10 @@ def _startup_maintenance():
             print(f"[reindex] video {v['id']} failed: {e}")
 
 
-threading.Thread(target=_startup_maintenance, daemon=True).start()
-threading.Thread(target=llm.prewarm, daemon=True).start()
-heartbeat.start()  # no-op unless RU_HEARTBEAT_URL is set
+if not _TESTING:
+    threading.Thread(target=_startup_maintenance, daemon=True).start()
+    threading.Thread(target=llm.prewarm, daemon=True).start()
+    heartbeat.start()  # no-op unless RU_HEARTBEAT_URL is set
 
 app = FastAPI(title="ru-anki pipeline")
 app.add_middleware(GZipMiddleware, minimum_size=1000)
@@ -209,7 +216,8 @@ def _backfill_families(delay=0):
     print("[family] backfill done")
 
 
-threading.Thread(target=_backfill_families, kwargs={"delay": 20}, daemon=True).start()
+if not _TESTING:
+    threading.Thread(target=_backfill_families, kwargs={"delay": 20}, daemon=True).start()
 
 
 # ------------------------------------------------------------------ models

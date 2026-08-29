@@ -34,7 +34,7 @@ def parse_artist_title(video_title, uploader=None):
     'Земфира — Искала (Official Video)'. Falls back to the uploader as artist."""
     t = (video_title or "").strip()
     t = _NOISE.sub("", t)
-    t = _FEAT.sub("", t).strip(" \t-–—|·•\"'«»")
+    t = _FEAT.sub("", t).strip(" \t-–—|·•\"'")
     for sep in _SEPS:
         if sep in t:
             a, b = t.split(sep, 1)

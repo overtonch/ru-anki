@@ -52,6 +52,21 @@ def _scheduler():
     return _SCHED
 
 
+_PREVIEW_SCHED = None
+
+
+def _preview_scheduler():
+    """Fuzzing off — the "Again / Good / Easy" intervals shown on the card must
+    be stable between renders (real reviews still fuzz, via _scheduler())."""
+    global _PREVIEW_SCHED
+    if _PREVIEW_SCHED is None:
+        from fsrs import Scheduler
+        _PREVIEW_SCHED = Scheduler(learning_steps=LEARNING_STEPS,
+                                   relearning_steps=RELEARNING_STEPS,
+                                   enable_fuzzing=False)
+    return _PREVIEW_SCHED
+
+
 # ---------------------------------------------------------------- time helpers
 
 def _utc():
@@ -301,7 +316,7 @@ def preview(card):
     row = card if isinstance(card, dict) else _raw(card)
     if not row:
         return {}
-    sched = _scheduler()
+    sched = _preview_scheduler()
     from fsrs import Rating
     now = _utc()
     out = {}

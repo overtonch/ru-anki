@@ -21,3 +21,6 @@ faster-whisper==1.1.0
 
 # In-app spaced repetition (FSRS scheduler)
 fsrs==6.3.2
+
+# Tests only (./check.sh). No runtime dependency.
+pytest==9.1.1
