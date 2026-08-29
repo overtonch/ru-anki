@@ -508,6 +508,11 @@
   #studyBanner .sb-m { font-size:.8rem; opacity:.8; }
   #studyBanner .sb-go { font-size:1.3rem; font-weight:700; }
   #studyBanner[hidden] { display:none; }
+  .home-links { display:flex; gap:.5rem; margin:-.2rem 0 .7rem; }
+  .home-links[hidden] { display:none; }
+  .home-links button { flex:1; background:var(--card-2); border:1px solid var(--line-soft);
+                       color:var(--fg-dim); border-radius:var(--r-sm); padding:.5rem; font-size:.85rem; cursor:pointer; }
+  .home-links button:active { background:var(--line-soft); }
 
   #studyView { position:fixed; inset:0; z-index:14; background:var(--bg); flex-direction:column;
                padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
@@ -545,10 +550,19 @@
   .cl-tools { display:flex; gap:.5rem; padding:.5rem .9rem; flex:none; border-bottom:1px solid var(--line-soft); }
   .cl-tools input { flex:1; background:var(--card-2); border:1px solid var(--line); color:var(--fg);
                     border-radius:var(--r-sm); padding:.45rem .7rem; font-size:.9rem; }
-  .cl-body { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:.3rem 0 3rem; }
+  .cl-body { flex:1; overflow-y:auto; overflow-x:hidden; -webkit-overflow-scrolling:touch; padding:.3rem 0 3rem; }
   .cl-count { color:var(--muted); font-size:.78rem; padding:.5rem .9rem .2rem; }
-  .cl-row { border-bottom:1px solid var(--line-soft); padding:.6rem .9rem; cursor:pointer; }
-  .cl-row:active { background:var(--card-2); }
+  .cl-row { position:relative; overflow:hidden; border-bottom:1px solid var(--line-soft); }
+  .cl-del-rail { position:absolute; inset:0 0 0 auto; width:96px; background:var(--no);
+                 color:#fff; display:flex; align-items:center; justify-content:center;
+                 font-weight:600; font-size:.85rem; }
+  .cl-inner { position:relative; background:var(--bg); padding:.6rem .9rem; cursor:pointer;
+              transition:transform .18s ease; touch-action:pan-y; }
+  .cl-inner.dragging { transition:none; }
+  .cl-inner:active { background:var(--card-2); }
+  .cl-row.swiped .cl-inner { transform:translateX(-96px); }
+  .cl-inner.will-del ~ *, .cl-row:has(.will-del) .cl-del-rail { font-size:.95rem; }
+  .cl-row.deleting { transition:height .18s ease, opacity .18s ease; opacity:0; overflow:hidden; }
   .cl-row .cl-top { display:flex; align-items:baseline; gap:.5rem; }
   .cl-row .cl-w { font-size:1rem; font-weight:650; }
   .cl-row .cl-w.sus { opacity:.5; text-decoration:line-through; }
@@ -760,6 +774,10 @@
         <span class="sb-m" id="studyBannerM"></span></span>
       <span class="sb-go">→</span>
     </button>
+    <div class="home-links" id="homeLinks" hidden>
+      <button onclick="openCardList('all','All cards')">🗂 all cards</button>
+      <button onclick="openStats()">📊 stats</button>
+    </div>
     <div id="videoList"></div>
   </div>
 
@@ -2008,6 +2026,7 @@ async function refreshStudyBanner() {
   const pend = (await idbAll('srsOut').catch(() => [])).length;
   if (pend) s = { ...s, due: Math.max(0, (s.due || 0) - pend) };
   const n = (s.due || 0) + (s.new || 0);
+  const hl = $('#homeLinks'); if (hl) hl.hidden = !s.total;
   if (!n && !s.total) { b.hidden = true; return; }
   b.hidden = false;
   if (n) {
@@ -2317,23 +2336,27 @@ function renderCardList(d) {
     const sent = c.sentence ? boldSpan(c.sentence, c.span_text) : '';
     const jump = c.seconds != null && c.video_id != null
       ? `<button class="cl-jump" onclick="event.stopPropagation();clJump(${c.video_id},${c.seconds})">▶ watch</button>` : '';
-    return `<div class="cl-row" data-id="${c.id}" onclick="this.classList.toggle('open')">
-      <div class="cl-top">
-        <span class="cl-w${c.suspended ? ' sus' : ''}">${escapeHtml(c.span_text)}</span>
-        <span class="cl-tr">${escapeHtml(c.translation || '')}</span>${badge}
-      </div>
-      <div class="cl-exp">
-        <div class="cl-sent">${sent}</div>
-        ${c.accented ? `<div style="color:var(--muted);font-size:.8rem;margin-top:.2rem">${escapeHtml(c.accented)}</div>` : ''}
-        <div class="cl-acts">
-          ${jump}
-          <button onclick="event.stopPropagation();clSuspend(${c.id},${c.suspended ? 0 : 1})">${c.suspended ? 'unsuspend' : 'suspend'}</button>
-          <button class="cl-del" onclick="event.stopPropagation();clDelete(${c.id},'${encodeURIComponent(c.span_text)}')">delete</button>
+    return `<div class="cl-row" data-id="${c.id}" data-name="${escapeHtml(c.span_text)}">
+      <div class="cl-del-rail">delete</div>
+      <div class="cl-inner">
+        <div class="cl-top">
+          <span class="cl-w${c.suspended ? ' sus' : ''}">${escapeHtml(c.span_text)}</span>
+          <span class="cl-tr">${escapeHtml(c.translation || '')}</span>${badge}
+        </div>
+        <div class="cl-exp">
+          <div class="cl-sent">${sent}</div>
+          ${c.accented ? `<div style="color:var(--muted);font-size:.8rem;margin-top:.2rem">${escapeHtml(c.accented)}</div>` : ''}
+          <div class="cl-acts">
+            ${jump}
+            <button onclick="event.stopPropagation();clSuspend(${c.id},${c.suspended ? 0 : 1})">${c.suspended ? 'unsuspend' : 'suspend'}</button>
+            <button class="cl-del" onclick="event.stopPropagation();clDelete(${c.id})">delete</button>
+          </div>
         </div>
       </div>
     </div>`;
   }).join('');
   $('#clBody').innerHTML = `<div class="cl-count">${d.shown} of ${d.total}${d.shown < d.total ? ' (refine to see more)' : ''}</div>${rows}`;
+  attachCardListSwipe();
 }
 function boldSpan(sentence, span) {
   const t = rnorm(stripPunct(span)).split(/\s+/)[0].slice(0, 5);
@@ -2349,14 +2372,75 @@ async function clSuspend(id, on) {
   try { await api(`/srs/cards/${id}/suspend?on=${on ? 'true' : 'false'}`, { method: 'POST' }); loadCardList(); }
   catch (e) { toast('couldn’t — ' + e.message, 2500); }
 }
-async function clDelete(id, encName) {
-  if (!confirm(`Delete the card for “${decodeURIComponent(encName)}”? It won’t be suggested again.`)) return;
+async function clDelete(id, needConfirm) {
+  const row = $('#clBody') && $('#clBody').querySelector(`.cl-row[data-id="${id}"]`);
+  const name = row ? row.dataset.name : 'this word';
+  if (needConfirm && !confirm(`Delete the card for “${name}”? It won’t be suggested again.`)) {
+    if (row) row.classList.remove('swiped');
+    return;
+  }
+  if (row) { row.style.height = row.offsetHeight + 'px'; row.classList.add('deleting'); }
   try { await api(`/srs/cards/${id}`, { method: 'DELETE' }); }
-  catch (e) { toast('couldn’t delete — ' + e.message, 2500); return; }
-  const row = $('#clBody').querySelector(`.cl-row[data-id="${id}"]`);
-  if (row) row.remove();
-  toast('deleted', 1400);
+  catch (e) { toast('couldn’t delete — ' + e.message, 2500);
+    if (row) { row.classList.remove('deleting', 'swiped'); row.style.height = ''; } return; }
+  if (row) { requestAnimationFrame(() => { row.style.height = '0'; }); setTimeout(() => row.remove(), 200); }
+  toast(`deleted “${name}”`, 1600);
   refreshStudyBanner();
+}
+function attachCardListSwipe() {
+  const box = $('#clBody');
+  if (!box || box._clw) return;
+  box._clw = true;
+  let row, inner, x0, y0, dx, mode, r_full = false;   // mode: null | 'h' | 'v'
+  const closeAll = except => box.querySelectorAll('.cl-row.swiped').forEach(r => {
+    if (r !== except) r.classList.remove('swiped');
+  });
+  box.addEventListener('pointerdown', e => {
+    if (e.target.closest('button, .cl-del-rail, .cl-exp')) { row = null; return; }
+    inner = e.target.closest('.cl-inner');
+    row = inner && inner.closest('.cl-row');
+    if (!row) return;
+    x0 = e.clientX; y0 = e.clientY; dx = 0; mode = null;
+  });
+  box.addEventListener('pointermove', e => {
+    if (!row) return;
+    const ax = e.clientX - x0, ay = e.clientY - y0;
+    if (!mode) {
+      if (Math.abs(ax) < 6 && Math.abs(ay) < 6) return;
+      mode = Math.abs(ax) > Math.abs(ay) ? 'h' : 'v';
+      if (mode === 'h') { inner.classList.add('dragging'); try { box.setPointerCapture(e.pointerId); } catch {} closeAll(row); }
+    }
+    if (mode !== 'h') return;
+    e.preventDefault();
+    dx = Math.min(0, ax);                       // only leftward (raw)
+    let shown = dx;
+    if (shown < -96) shown = -96 + (shown + 96) * 0.4;   // rubber-band past the rail
+    inner.style.transform = `translateX(${shown}px)`;
+    r_full = dx < -innerWidth * 0.5;            // far enough = delete on release
+    inner.classList.toggle('will-del', r_full);
+  });
+  const end = e => {
+    if (!row) return;
+    const r = row, inn = inner; row = null;
+    inn.classList.remove('dragging', 'will-del');
+    inn.style.transform = '';
+    try { box.releasePointerCapture(e.pointerId); } catch {}
+    if (mode === 'h') {
+      if (r_full) { r.classList.add('swiped'); clDelete(+r.dataset.id, false); }
+      else if (dx < -52) r.classList.add('swiped');   // settle open, rail showing
+      else r.classList.remove('swiped');
+      r_full = false;
+    } else if (mode === null) {                   // a tap
+      if (r.classList.contains('swiped')) r.classList.remove('swiped');
+      else r.classList.toggle('open');
+    }
+  };
+  box.addEventListener('pointerup', end);
+  box.addEventListener('pointercancel', end);
+  box.addEventListener('click', e => {           // tap the revealed rail = delete
+    const rail = e.target.closest('.cl-del-rail');
+    if (rail) { const r = rail.closest('.cl-row'); if (r) clDelete(+r.dataset.id, false); }
+  });
 }
 
 /* ---- resume where you left off (per video, this device) ---- */
