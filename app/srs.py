@@ -31,12 +31,19 @@ RATINGS = {1: "Again", 2: "Hard", 3: "Good", 4: "Easy"}
 
 _SCHED = None
 
+# One 1-minute learning step instead of FSRS's default (1 min, 10 min): a card
+# you rate "Good" as new graduates straight to a multi-day interval rather than
+# reappearing ~10 min later. "Again" still brings it back in a minute.
+LEARNING_STEPS = (_dt.timedelta(minutes=1),)
+RELEARNING_STEPS = (_dt.timedelta(minutes=10),)
+
 
 def _scheduler():
     global _SCHED
     if _SCHED is None:
         from fsrs import Scheduler
-        _SCHED = Scheduler()
+        _SCHED = Scheduler(learning_steps=LEARNING_STEPS,
+                           relearning_steps=RELEARNING_STEPS)
     return _SCHED
 
 
