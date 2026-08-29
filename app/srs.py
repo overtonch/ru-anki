@@ -512,10 +512,23 @@ def stats():
         "AND due > ?", (now,)).fetchone()["d"]
     orphans = c.execute(
         "SELECT COUNT(*) n FROM srs_cards WHERE video_id IS NULL").fetchone()["n"]
+    # typical seconds per review, from the last 200 graded — median, so one card
+    # left open for 3 minutes doesn't blow up the estimate. Clamped to a sane
+    # band and defaulted to 6s before there's history.
+    els = [r["elapsed_ms"] for r in c.execute(
+        "SELECT elapsed_ms FROM srs_reviews WHERE elapsed_ms IS NOT NULL "
+        "AND elapsed_ms > 0 ORDER BY id DESC LIMIT 200")]
     c.close()
+    if els:
+        els.sort()
+        med = els[len(els) // 2] / 1000.0
+        pace = max(1.5, min(30.0, med))
+    else:
+        pace = 6.0
     return {"due": due, "new": min(new_total, new_left),
             "new_total": new_total, "total": total,
             "reviewed_today": reviewed_today, "orphans": orphans,
+            "review_pace_s": round(pace, 1),
             "next_due": _human_delta(nd) if nd else None}
 
 

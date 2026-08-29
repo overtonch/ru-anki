@@ -90,6 +90,13 @@
   .rvtoggle { background:none; border:none; color:var(--fg); font-size:.95rem; font-weight:700;
               padding:.1rem .1rem; cursor:pointer; letter-spacing:.01em; }
   #reviewPanel.collapsed #cards { display:none; }
+  /* a book's "detail" page is just the suggested-words review — no "type a word
+     you heard" box, no player rows */
+  #detailView.text-mode #lookupPanel,
+  #detailView.text-mode #watchBtn,
+  #detailView.text-mode #offlineRow,
+  #detailView.text-mode #mediaRow,
+  #detailView.text-mode #transcribeRow { display:none; }
   @media (prefers-reduced-motion: reduce) { .spin { animation-duration:1.2s; } }
 
   /* progress bar */
@@ -775,6 +782,11 @@
   .ricon { background:none; border:0; color:var(--muted); padding:.25rem .35rem; cursor:pointer;
            display:inline-flex; align-items:baseline; gap:.05rem; }
   .ricon svg { width:1.15rem; height:1.15rem; fill:none; }
+  #rReviewBtn { position:relative; font-size:1rem; }
+  .rbadge { position:absolute; top:-2px; right:-4px; background:var(--accent); color:#0b1016;
+            font-size:.6rem; font-weight:700; line-height:1; padding:.12rem .22rem;
+            border-radius:.5rem; min-width:.9rem; text-align:center; }
+  .rbadge:empty { display:none; }
   #fontBtn span:first-child { font-size:1rem; font-weight:700; }
   #fontBtn span:last-child { font-size:.7rem; }
   .rprogress { height:2px; background:var(--line-soft); flex:none; }
@@ -906,7 +918,7 @@
     <div id="transcribeRow" class="status"></div>
     <div id="progressPanel"></div>
 
-    <div class="panel">
+    <div class="panel" id="lookupPanel">
       <h3>Look up a word</h3>
       <input type="search" id="q" placeholder="Type part of a word you heard"
              autocapitalize="off" autocomplete="off" spellcheck="false"
@@ -1074,6 +1086,7 @@
     <div class="readbar">
       <button class="backlink" onclick="history.back()">← library</button>
       <div class="rtitle" id="rTitle"></div>
+      <button class="ricon" id="rReviewBtn" hidden onclick="openReaderReview()" aria-label="review suggested words">✨<span class="rbadge" id="rReviewN"></span></button>
       <button class="ricon" id="fontBtn" onclick="cycleReadFont()" aria-label="text size">
         <span>A</span><span>a</span>
       </button>
@@ -1362,7 +1375,7 @@ function readCard(v) {
       <div class="m">${escapeHtml(bits.join(' · '))}${pos ? ` · ${pos}% read` : ''}</div>
       ${pos ? `<div class="rbar"><i style="width:${pos}%"></i></div>` : ''}
     </div>`;
-  el.onclick = () => openDetail(v.id);
+  el.onclick = () => openReader(v.id);       // straight into the text
   return el;
 }
 
@@ -2404,6 +2417,14 @@ function hmsToSec(hms) {
 /* ================= in-app SRS (Study) ================= */
 let STUDY = null;   // { queue:[cardview], i, revealed, shownAt, history:[id], done }
 
+function etaText(seconds) {
+  const m = Math.round(seconds / 60);
+  if (m < 1) return 'under a min';
+  if (m < 60) return m + ' min';
+  const h = Math.floor(m / 60);
+  return h + 'h' + (m % 60 ? ' ' + (m % 60) + 'm' : '');
+}
+
 async function refreshStudyBanner() {
   const b = $('#studyBanner');
   if (!b) return;
@@ -2427,6 +2448,8 @@ async function refreshStudyBanner() {
     const bits = [];
     if (s.due) bits.push(s.due + ' due');
     if (s.new) bits.push(s.new + ' new');
+    const eta = etaText(n * (s.review_pace_s || 6));
+    if (eta) bits.push('~' + eta);
     $('#studyBannerM').textContent = bits.join(' · ');
   } else {
     $('#studyBannerT').textContent = 'All caught up';
@@ -2438,7 +2461,8 @@ async function refreshStudyBanner() {
 async function openStudy() {
   $('#studyView').hidden = false;
   $('#studyBody').innerHTML = SPINNER;
-  STUDY = { queue: [], i: 0, revealed: false, shownAt: 0, history: [], done: 0 };
+  STUDY = { queue: [], i: 0, revealed: false, shownAt: 0, history: [], done: 0,
+            startedAt: 0, paceS: 6 };
   await loadStudyQueue();
 }
 function closeStudy() { $('#studyView').hidden = true; STUDY = null; refreshStudyBanner(); }
@@ -2449,6 +2473,7 @@ async function loadStudyQueue() {
   try {
     d = await api('/srs/queue');
     idbPut('srsCache', 'queue', d).catch(() => {});
+    if (d.review_pace_s) STUDY.paceS = d.review_pace_s;
     syncOfflineSRS();                          // refresh the offline bundle + clips
   } catch (e) {
     offline = true;
@@ -2548,7 +2573,12 @@ function renderStudyCard() {
   STUDY.revealed = false;
   STUDY.shownAt = Date.now();
   const left = STUDY.queue.length - STUDY.i;
-  $('#studyProg').innerHTML = `<b>${STUDY.done}</b> done · ${left} left${STUDY.offline ? ' · <span style="color:var(--muted)">offline</span>' : ''}`;
+  // pace: this session's real rate once there's enough of it, else the rolling median
+  const pace = (STUDY.done >= 5 && STUDY.startedAt)
+    ? (Date.now() - STUDY.startedAt) / 1000 / STUDY.done
+    : (STUDY.paceS || 6);
+  const eta = left > 1 ? ` · ~${etaText(left * pace)} left` : '';
+  $('#studyProg').innerHTML = `<b>${STUDY.done}</b> done · ${left} left${eta}${STUDY.offline ? ' · <span style="color:var(--muted)">offline</span>' : ''}`;
   const cu = clipUrl(c);
   const audioFirst = STUDY_AUDIO_FIRST && cu;
   const q = audioFirst
@@ -2621,6 +2651,7 @@ async function studyRate(rating) {
     STUDY.offline = true;
   }
   STUDY.history.push({ card: c, rating, offline: queuedOffline });
+  if (!STUDY.startedAt) STUDY.startedAt = STUDY.shownAt || Date.now();
   STUDY.done++;
   STUDY.queue.splice(STUDY.i, 1);
   if (rating === 1) STUDY.queue.push(c);   // "Again" — see it again later this session
@@ -3967,6 +3998,7 @@ async function openReader(id) {
   applyReadFont();
   renderReaderBody();
   renderReaderToc();
+  updateReaderReviewBtn();
   const b = $('#readBody');
   let sc = 0; try { sc = +localStorage.getItem('rdscroll:' + id) || 0; } catch {}
   requestAnimationFrame(() => { b.scrollTop = sc * (b.scrollHeight - b.clientHeight); updateReadProg(); });
@@ -3986,6 +4018,7 @@ async function refreshReader() {
     : { words: bl.w, text: (bl.w || []).map(x => x.t).join(' '), lineId: bl.line_id });
   renderReaderBody();
   renderReaderToc();
+  updateReaderReviewBtn();
   requestAnimationFrame(() => { b.scrollTop = frac * (b.scrollHeight - b.clientHeight); updateReadProg(); });
 }
 function renderReaderBody() {
@@ -4047,11 +4080,22 @@ function saveReadScroll() {
 }
 function closeReaderNew() {
   saveReadScroll();
-  const id = READER_ID;
   READER_MODE = false; WCUES = []; WCANDS = {}; READER_ID = null;
   $('#readView').hidden = true; $('#tocPanel').hidden = true;
-  if (id) openDetail(id);          // back to the text's page (suggestions / review)
-  else { $('#listView').hidden = false; loadVideos(); }
+  $('#detailView').hidden = true;
+  showList();                                        // back to the library
+}
+function updateReaderReviewBtn() {
+  const n = Object.keys(WCANDS || {}).length;
+  const b = $('#rReviewBtn');
+  b.hidden = !n;
+  $('#rReviewN').textContent = n || '';
+}
+function openReaderReview() {
+  const id = READER_ID;
+  saveReadScroll();
+  READER_MODE = false; $('#readView').hidden = true; $('#tocPanel').hidden = true;
+  openDetail(id);                                    // text-mode detail = just the review list
 }
 
 /* --- legacy paste/epub reader --- */
