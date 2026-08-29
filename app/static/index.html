@@ -843,11 +843,16 @@
   #tocList button.on { color:var(--accent); background:var(--accent-soft); }
   #tocList button:active { background:var(--card-2); }
 
-  #pasteWrap { position:fixed; inset:0; background:rgba(6,8,11,.6); z-index:20;
+  #pasteWrap, #shareWrap { position:fixed; inset:0; background:rgba(6,8,11,.6); z-index:20;
                align-items:center; justify-content:center; padding:1rem;
                -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px); }
-  #pasteWrap[hidden] { display:none; }
-  #pasteWrap:not([hidden]) { display:flex; }
+  #pasteWrap[hidden], #shareWrap[hidden] { display:none; }
+  #pasteWrap:not([hidden]), #shareWrap:not([hidden]) { display:flex; }
+  #shareWrap .modal { max-height:82vh; overflow-y:auto; }
+  .share-steps { margin:.4rem 0 .2rem; padding-left:1.2rem; font-size:.86rem; line-height:1.6; color:var(--fg-dim); }
+  .share-steps li { margin-bottom:.5rem; }
+  .share-steps code, #shareBody code { background:var(--card-2); border:1px solid var(--line);
+      border-radius:.3rem; padding:.06rem .3rem; font-size:.82em; word-break:break-all; }
   #pasteWrap textarea { width:100%; margin-top:.5rem; padding:.7rem .8rem; font-size:.95rem;
                         border:1px solid var(--line); border-radius:var(--r-sm);
                         background:var(--card); color:var(--fg); resize:vertical;
@@ -892,6 +897,7 @@
         <option value="sonnet">Sonnet 5</option>
         <option value="haiku">Haiku 4.5</option>
       </select>
+      <button class="backlink" onclick="openShareHelp()">· share &amp; import ↗</button>
       <span id="addStatus"></span>
     </div>
     <!-- reading feature — kept, hidden behind READING_ENABLED -->
@@ -1116,6 +1122,17 @@
     </div>
   </div>
 </main>
+
+<!-- SHARE-TO-IMPORT HELP -->
+<div id="shareWrap" hidden onclick="if(event.target===this)closeShareHelp()">
+  <div class="modal">
+    <h3>Import from the Share sheet</h3>
+    <div id="shareBody"></div>
+    <div class="modalbtns">
+      <button class="btn sm" onclick="closeShareHelp()">Got it</button>
+    </div>
+  </div>
+</div>
 
 <!-- PASTE TEXT MODAL -->
 <div id="pasteWrap" hidden onclick="if(event.target===this)closePaste()">
@@ -1481,6 +1498,25 @@ async function addVideo() {
   } catch (e) {
     $('#addStatus').textContent = 'error: ' + e.message;
   } finally { setBusy($('#addBtn'), false); }
+}
+
+/* Launched from the OS share sheet (PWA share_target, or an iOS Shortcut that
+   opens <origin>/?u=<link>). Pull the link out and import it. */
+function handleShareLaunch() {
+  const q = new URLSearchParams(location.search);
+  let url = (q.get('u') || q.get('url') || q.get('shared_url') || '').trim();
+  if (!url) {
+    const blob = (q.get('t') || q.get('text') || '') + ' ' + (q.get('n') || q.get('title') || '');
+    const m = blob.match(/https?:\/\/[^\s"']+/);
+    if (m) url = m[0];
+  }
+  if (!url || !/^https?:\/\//i.test(url)) return false;
+  try { history.replaceState({}, '', location.pathname); } catch {}   // don't re-import on reload
+  showList();
+  $('#url').value = url;
+  toast('importing shared link…', 3000);
+  (MUSIC_HOSTS.test(url) ? addSong() : addVideo());
+  return true;
 }
 
 async function addSong() {
@@ -3991,6 +4027,32 @@ function cycleReadFont() {
 /* --- import --- */
 function openPaste() { $('#pasteBody').value = ''; $('#pasteTitle').value = ''; $('#pasteWrap').hidden = false; $('#pasteBody').focus(); }
 function closePaste() { $('#pasteWrap').hidden = true; }
+
+function copyText(t) {
+  (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject())
+    .then(() => toast('copied'), () => toast(t, 5000));
+}
+const IS_IOS = /iP(hone|ad|od)/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+function openShareHelp() {
+  const base = location.origin + '/?u=';
+  $('#shareBody').innerHTML = IS_IOS ? `
+    <p class="modalhint">iOS won't let a web app join the Share sheet on its own — set up a one-time Shortcut:</p>
+    <ol class="share-steps">
+      <li>Open <b>Shortcuts</b> → <b>+</b> → name it <b>“Add to ru-anki”</b>.</li>
+      <li>Add <b>Receive input from Share Sheet</b>; accept <b>URLs</b> and <b>Text</b>.</li>
+      <li>Add <b>URL Encode</b> (input = Shortcut Input).</li>
+      <li>Add <b>Text</b>: type <code>${escapeHtml(base)}</code> then insert the <b>Encoded Text</b> variable right after.</li>
+      <li>Add <b>Open URLs</b> (input = that Text).</li>
+      <li>In the shortcut's ⓘ settings, turn on <b>Show in Share Sheet</b>.</li>
+    </ol>
+    <p class="modalhint">Then “Add to ru-anki” appears when you Share a YouTube video, an Apple Music song, or any web page — it opens here and imports. (It may open in Safari rather than the app — that's fine, the import still runs.)</p>
+    <button class="backlink" onclick="copyText('${escapeHtml(base)}')">copy the base URL</button>`
+    : `
+    <p class="modalhint">Install this app to your home screen (browser menu → <b>Install app</b> / <b>Add to Home screen</b>). After that <b>ru-anki</b> appears in the system Share sheet — share a YouTube video, song or web page to it and it imports automatically.</p>`;
+  $('#shareWrap').hidden = false;
+}
+function closeShareHelp() { $('#shareWrap').hidden = true; }
 async function submitPaste() {
   const body = $('#pasteBody').value.trim();
   if (body.length < 20) { toast('paste a bit more text'); return; }
@@ -4762,6 +4824,7 @@ function navBack() {
   if (!$('#transSheet').hidden) { closeTransSheet(); return true; }
   if (!$('#inlineDecide').hidden) { closeInline(true); return true; }
   if (!$('#wordView').hidden) { closeWord(); return true; }
+  if (!$('#shareWrap').hidden) { closeShareHelp(); return true; }
   if (!$('#pasteWrap').hidden) { closePaste(); return true; }
   if (!$('#modalWrap').hidden) { closeCardModal(); return true; }
   if (!$('#tocPanel').hidden) { $('#tocPanel').hidden = true; return true; }
@@ -4810,7 +4873,7 @@ addEventListener('popstate', () => { navBack(); try { history.pushState({ ru: 1 
 
 /* ---------------- boot ---------------- */
 // belt-and-suspenders: full-screen overlays must never be left showing
-['#studyView', '#statsView', '#cardsView', '#vidDelView', '#readView', '#pasteWrap', '#tocPanel', '#transSheet', '#lyricSheet']
+['#studyView', '#statsView', '#cardsView', '#vidDelView', '#readView', '#pasteWrap', '#shareWrap', '#tocPanel', '#transSheet', '#lyricSheet']
   .forEach(s => { const e = $(s); if (e) e.hidden = true; });
 
 if ('serviceWorker' in navigator) {
@@ -4871,6 +4934,7 @@ probeHealth();
 refreshQueuePill();
 flushQueue();
 loadVideos();
+handleShareLaunch();                                 // ?u=<link> from the share sheet
 setTimeout(() => syncOfflineSRS(), 4000);            // warm the offline review cache
 setInterval(() => { if (!document.hidden) syncOfflineSRS(); }, 30 * 60 * 1000);
 setTimeout(pruneOfflineCache, 8000);                 // keep the offline blob store bounded
