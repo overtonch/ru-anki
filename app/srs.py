@@ -166,26 +166,33 @@ def card_for_candidate(candidate_id):
     return _card_dict(r) if r else None
 
 
+def _strip_stress(s):
+    return (s or "").replace("́", "").replace("̀", "")
+
+
 def create_card(sentence, span_text, normalized_text, is_phrase, translation,
-                *, candidate_id=None, accented=None, video_id=None,
-                timestamp=None, anki_note_id=None):
-    """Idempotent on candidate_id. Returns the card dict."""
+                *, candidate_id=None, accented=None, dict_accented=None,
+                video_id=None, timestamp=None, anki_note_id=None):
+    """Idempotent on candidate_id. Returns the card dict.
+    `accented` = target word stressed as it appears on the card;
+    `dict_accented` = the stressed dictionary/citation form."""
     if candidate_id is not None:
         existing = card_for_candidate(candidate_id)
         if existing:
             return existing
+    sentence = _strip_stress(sentence)          # front is read without marks
     timestamp = _snap_ts(video_id, sentence, normalized_text, timestamp)
     f = _fresh_card_fields()
     c = store.connect()
     cur = c.execute(
         """INSERT INTO srs_cards
              (candidate_id, sentence, translation, span_text, normalized_text,
-              is_phrase, accented, video_id, timestamp,
+              is_phrase, accented, dict_accented, video_id, timestamp,
               fsrs_state, fsrs_step, stability, difficulty, due, last_review,
               anki_note_id)
-           VALUES (?,?,?,?,?, ?,?,?,?, ?,?,?,?,?,?, ?)""",
+           VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?, ?)""",
         (candidate_id, sentence, translation, span_text, store.norm(normalized_text),
-         int(bool(is_phrase)), accented, video_id, timestamp,
+         int(bool(is_phrase)), accented, dict_accented, video_id, timestamp,
          f["fsrs_state"], f["fsrs_step"], f["stability"], f["difficulty"],
          f["due"], f["last_review"], anki_note_id))
     c.commit()
@@ -248,7 +255,7 @@ def update_card(card_id, *, sentence=None, span_text=None, translation=None,
     """Edit a card's content (not its schedule). Returns the updated card dict."""
     sets, args = [], []
     if sentence is not None:
-        sets += ["sentence=?"]; args += [sentence.strip()]
+        sets += ["sentence=?"]; args += [_strip_stress(sentence.strip())]
     if span_text is not None:
         sp = span_text.strip()
         sets += ["span_text=?", "normalized_text=?", "is_phrase=?"]
@@ -274,29 +281,52 @@ def set_accent_for_lemma(normalized_text, accented, force=False):
     if not normalized_text or not acc:
         return 0
     c = store.connect()
-    q = "UPDATE srs_cards SET accented=? WHERE normalized_text=? AND is_phrase=0"
+    q = "UPDATE srs_cards SET dict_accented=? WHERE normalized_text=? AND is_phrase=0"
     if not force:
-        q += " AND (accented IS NULL OR accented='')"
+        q += " AND (dict_accented IS NULL OR dict_accented='')"
     n = c.execute(q, (acc, normalized_text)).rowcount
     c.commit()
     c.close()
     return n
 
 
+def set_accents_for_lemma(normalized_text, surface, dict_form, force=False):
+    """Write both stressed forms (surface as-on-card, dict) onto a lemma's cards.
+    Without `force`, only fills columns that are still empty. Rows touched."""
+    surf, df = (surface or "").strip(), (dict_form or "").strip()
+    if not normalized_text or not (surf or df):
+        return 0
+    sets, cond = [], []
+    if surf:
+        sets.append(("accented", surf)); cond.append("accented")
+    if df:
+        sets.append(("dict_accented", df)); cond.append("dict_accented")
+    q = "UPDATE srs_cards SET " + ", ".join(f"{k}=?" for k, _ in sets)
+    q += " WHERE normalized_text=? AND is_phrase=0"
+    if not force:
+        q += " AND (" + " OR ".join(f"{k} IS NULL OR {k}=''" for k in cond) + ")"
+    c = store.connect()
+    n = c.execute(q, tuple(v for _, v in sets) + (normalized_text,)).rowcount
+    c.commit()
+    c.close()
+    return n
+
+
 def accent_backfill_rows():
-    """One row per distinct single-word card lemma: (normalized_text, span_text,
-    sentence) — newest card's sentence as context for the dict-form call."""
+    """One row per distinct single-word card lemma (normalized_text, span_text,
+    sentence, translation) — the newest card's context for the stress call."""
     c = store.connect()
     rows = [dict(r) for r in c.execute(
-        "SELECT normalized_text, span_text, sentence, MAX(id) mid FROM srs_cards "
-        "WHERE is_phrase=0 AND span_text NOT LIKE '% %' "
+        "SELECT normalized_text, span_text, sentence, translation, MAX(id) mid "
+        "FROM srs_cards WHERE is_phrase=0 AND span_text NOT LIKE '% %' "
         "GROUP BY normalized_text ORDER BY mid DESC")]
     c.close()
     return rows
 
 
 _MISSING_ACCENT_WHERE = (
-    "is_phrase=0 AND (accented IS NULL OR accented='') "
+    "is_phrase=0 AND (accented IS NULL OR accented='' "
+    "OR dict_accented IS NULL OR dict_accented='') "
     "AND span_text NOT LIKE '% %'")
 
 
@@ -619,7 +649,8 @@ def list_cards(filt="all", sort="added", q="", limit=1000, video=None):
             "id": d["id"], "span_text": d["span_text"], "front_html": front,
             "bolded": bolded,
             "normalized_text": d["normalized_text"], "translation": d["translation"],
-            "accented": d["accented"], "is_phrase": bool(d["is_phrase"]),
+            "accented": d["accented"], "dict_accented": d["dict_accented"],
+            "is_phrase": bool(d["is_phrase"]),
             "sentence": d["sentence"], "video_id": d["video_id"],
             "seconds": store._to_secs(d["timestamp"]) if d["timestamp"] else None,
             "is_new": d["last_review"] is None, "suspended": bool(d["suspended"]),

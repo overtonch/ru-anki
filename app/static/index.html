@@ -760,6 +760,7 @@
   .study-a .a-tr { font-size:1.5rem; font-weight:650; }
   .study-a .a-acc { color:var(--fg-dim); font-size:1.15rem; font-weight:600; margin-top:.35rem;
                     letter-spacing:.01em; }
+  .study-a .a-acc .a-dict { color:var(--muted); font-weight:400; font-size:.95rem; }
   .study-a .a-clip { display:block; margin:1rem auto 0; max-width:15rem; width:100%;
                      border-radius:.5rem; overflow:hidden; border:1px solid var(--line);
                      background:var(--card-2); cursor:pointer; position:relative; }
@@ -2283,12 +2284,11 @@ function pvHtml(p) {
   const norm = s => (s || '').toLowerCase().replace(/[́ё]/g, m => m === 'ё' ? 'е' : '');
   const df = (p.dict_form || '').trim(), sf = (p.stressed || '').trim();
   let acc = '';
-  if (df) {
-    const surf = sf && norm(sf) !== norm(df)
-      ? ` <span class="pv-surf">as used: ${escapeHtml(sf)}</span>` : '';
-    acc = `<div class="pv-acc">${escapeHtml(df)}${surf}</div>`;
-  } else if (sf && norm(sf) !== norm(p.translation)) {
-    acc = `<div class="pv-acc">${escapeHtml(sf)}</div>`;
+  if (sf || df) {
+    const main = sf || df;
+    const dict = df && norm(df) !== norm(main)
+      ? ` <span class="pv-surf">· dict ${escapeHtml(df)}</span>` : '';
+    acc = `<div class="pv-acc">${escapeHtml(main)}${dict}</div>`;
   }
   const g = p.gloss && norm(p.gloss) !== norm(p.translation)
     ? `<div class="pv-quick">${escapeHtml(p.gloss)} <span class="qtag">dict</span></div>` : '';
@@ -2737,6 +2737,16 @@ function renderStudyCard() {
   prefetchStudyNext();
 }
 
+/* card back: the target word stressed as it appears, and its dictionary form */
+function accLine(c) {
+  const sf = (c.accented || '').trim(), df = (c.dict_accented || '').trim();
+  if (!sf && !df) return '';
+  const bare = s => s.toLowerCase().replace(/[́]/g, '');
+  const main = sf || df;
+  const dict = df && bare(df) !== bare(main)
+    ? ` <span class="a-dict">→ ${escapeHtml(df)}</span>` : '';
+  return `<div class="a-acc">${escapeHtml(main)}${dict}</div>`;
+}
 function studyReveal() {
   const c = studyCard();
   if (!c) return;
@@ -2761,7 +2771,7 @@ function studyReveal() {
         ${cu ? `<audio id="studyAudio" src="${cu}" preload="auto"></audio>
                 <button class="a-replay" onclick="playStudyAudio()">🔊 ${c.seconds != null ? 'replay line' : 'listen'}</button>` : ''}
         <div class="a-tr">${escapeHtml(c.translation || '—')}</div>
-        ${c.accented ? `<div class="a-acc">${escapeHtml(c.accented)}</div>` : ''}
+        ${accLine(c)}
         ${clip}
         <div class="a-links"><button onclick="studyOpenWord('${encodeURIComponent(c.normalized_text)}')">all places “${escapeHtml(c.span_text)}” is said →</button></div>
       </div>
@@ -2985,7 +2995,7 @@ function renderCardList(d) {
         </div>
         <div class="cl-exp">
           <div class="cl-sent">${c.front_html || ''}</div>
-          ${c.accented ? `<div class="cl-acc">${escapeHtml(c.accented)}</div>` : ''}
+          ${(c.accented || c.dict_accented) ? `<div class="cl-acc">${escapeHtml(c.accented || c.dict_accented)}${c.dict_accented && c.dict_accented !== c.accented ? ' → ' + escapeHtml(c.dict_accented) : ''}</div>` : ''}
           <div class="cl-acts">
             ${jump}
             <button onclick="event.stopPropagation();clEdit(${c.id})">✏️ edit</button>

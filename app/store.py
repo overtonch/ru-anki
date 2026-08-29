@@ -50,6 +50,10 @@ def init_db():
         c.execute("ALTER TABLE candidates ADD COLUMN source TEXT NOT NULL DEFAULT 'batch'")
     if not _has_column(c, "candidates", "anki_note_id"):
         c.execute("ALTER TABLE candidates ADD COLUMN anki_note_id INTEGER")
+    # srs_cards.accented holds the target word stressed AS IT APPEARS on the card;
+    # dict_accented holds the stressed dictionary/citation form.
+    if not _has_column(c, "srs_cards", "dict_accented"):
+        c.execute("ALTER TABLE srs_cards ADD COLUMN dict_accented TEXT")
     # channel / thumbnail metadata for the video picker (nullable, backfilled).
     for col in ("channel TEXT", "channel_url TEXT", "thumbnail_url TEXT",
                 "duration INTEGER",

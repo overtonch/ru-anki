@@ -68,6 +68,9 @@ def stub_llm(monkeypatch):
     monkeypatch.setattr(llm, "dict_form", lambda w, s="", model=None: (w or "") + "́")
     monkeypatch.setattr(llm, "dict_forms",
                         lambda items, model=None: [(w or "") + "́" for w, _ in items])
+    monkeypatch.setattr(llm, "stress_forms",
+                        lambda items, model=None: [((w or "") + "́", (w or "") + "́")
+                                                   for w, _ in items])
     monkeypatch.setattr(llm, "word_family", lambda w, model=None: (w, [w]))
     monkeypatch.setattr(llm, "extract_candidates",
                         lambda *a, **k: ([], [], {"calls": 0, "in": 0, "out": 0,

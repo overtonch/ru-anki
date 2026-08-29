@@ -566,3 +566,50 @@ def dict_forms(items, model=None):
 
 def dict_form(word, sentence="", model=None):
     return (dict_forms([(word, sentence)], model=model) or [""])[0]
+
+
+_STRESS_FORMS_SYSTEM = """For each numbered line "WORD — sentence" output "N. SURFACE | DICT".
+
+SURFACE = WORD in the EXACT inflected form it takes in the sentence.
+DICT     = its dictionary / citation form (infinitive for verbs incl. participles
+           and gerunds; nominative singular for nouns; nominative masculine
+           singular for adjectives incl. short forms and comparatives; headword
+           form for everything else). For a fixed phrase, the phrase's dict form.
+
+Write BOTH with a combining acute accent (U+0301) right after the stressed vowel
+and ё spelled with its dots. A one-syllable form and ё take no added mark. If
+SURFACE already is the dictionary form, repeat it.
+
+Use the sentence to place mobile stress (голова́ → го́ловы) and to disambiguate
+homographs / short-adjective-vs-noun (зол → зол | злой, NOT зло). When a line
+ends with "[means: …]", that gloss is authoritative for which word it is
+(косой [means: scythe] → косо́й | коса́, NOT the adjective). Output only the
+numbered lines, "SURFACE | DICT" separated by a pipe."""
+
+
+def stress_forms(items, model=None):
+    """items: [(word, sentence)] or [(word, sentence, gloss)] ->
+    [(surface_stressed, dict_stressed), …] aligned to items. The optional gloss
+    disambiguates homographs (косо́й «slanting» vs коса́ «scythe»). Unparsable
+    entries come back as ('', '')."""
+    if not items:
+        return []
+    lines = []
+    for i, it in enumerate(items):
+        w, s = it[0], it[1] if len(it) > 1 else ""
+        g = it[2] if len(it) > 2 else ""
+        ln = f"{i + 1}. {w} — {(s or '').strip()}".rstrip(" —")
+        if g:
+            ln += f"   [means: {g.strip()}]"
+        lines.append(ln)
+    numbered = "\n".join(lines)
+    text = _warm_or_oneshot(numbered, _STRESS_FORMS_SYSTEM, model or TRANSLATE_MODEL,
+                            timeout=50)
+    by_num = {}
+    for ln in text.splitlines():
+        m = re.match(r"\s*(\d+)[.)]\s*(.+)", ln.strip())
+        if not m:
+            continue
+        parts = [p.strip().strip('"') for p in m.group(2).split("|")]
+        by_num[int(m.group(1))] = (parts[0], parts[1] if len(parts) > 1 else parts[0])
+    return [by_num.get(i + 1, ("", "")) for i in range(len(items))]

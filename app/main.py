@@ -116,37 +116,35 @@ def _do_sync():
         print(f"[sync] {err}")
 
 
-def _dict_form(span_text, sentence=""):
-    """The stressed dictionary/citation form for a word (e.g. 'зол'/'печале́н' →
-    'злой'/'печа́льный'). Cached by the surface form; a miss is one warm LLM
-    call. Returns '' for phrases or on failure."""
+def _stress_forms(span_text, sentence=""):
+    """(surface_stressed, dict_stressed) for a word — the form as it appears in
+    the sentence, and its stressed dictionary/citation form. One warm LLM call
+    (the dict form is cached in word_accent). ('', '') for phrases / failure."""
     st = (span_text or "").strip()
     if not st or " " in st:
-        return ""
-    df = store.accent_for(st)
-    if df:
-        return df
+        return "", ""
     try:
-        df = (llm.dict_form(st, sentence) or "").strip()
+        surf, df = llm.stress_forms([(st, sentence)])[0]
     except Exception as e:  # noqa: BLE001
-        print(f"[dictform] {st}: {e}")
-        return ""
+        print(f"[stress] {st}: {e}")
+        return "", store.accent_for(st) or ""
+    surf, df = (surf or "").strip(), (df or "").strip()
     if df:
         store.set_accent(st, df)
         store.set_accent(df, df)          # also findable under the dict form itself
-    return df
+    return surf, df
 
 
 def _learn_accent(span_text, sentence=""):
-    """Async: compute the dictionary form for a freshly carded word and write it
-    onto its card(s) (create_card leaves accented=None on a cache miss)."""
-    df = _dict_form(span_text, sentence)
-    if not df:
+    """Async: compute both stressed forms for a freshly carded word and write
+    them onto its card(s) (create_card leaves them NULL on the fast path)."""
+    surf, df = _stress_forms(span_text, sentence)
+    if not (surf or df):
         return
     try:
-        srs.set_accent_for_lemma(store.norm(span_text), df)
+        srs.set_accents_for_lemma(store.norm(span_text), surf, df)
     except Exception as e:  # noqa: BLE001
-        print(f"[dictform] card backfill {span_text}: {e}")
+        print(f"[stress] card backfill {span_text}: {e}")
 
 
 def _learn_accent_async(span_text, sentence=""):
@@ -156,7 +154,7 @@ def _learn_accent_async(span_text, sentence=""):
 
 def _commit_card(*, sentence, span_text, normalized_text, is_phrase, translation,
                  source_html, candidate_id=None, video_id=None, timestamp=None,
-                 accented=None, tags=None):
+                 accented=None, dict_accented=None, tags=None):
     """Create the in-app SRS card, and — only if the Anki dual-write setting is
     on — the Anki note too. Returns (srs_card_dict, anki_result_or_None)."""
     anki_result = None
@@ -164,23 +162,24 @@ def _commit_card(*, sentence, span_text, normalized_text, is_phrase, translation
         try:
             anki_result = anki.add_card(sentence, span_text, is_phrase, translation,
                                         source_html, tags=tags or ["ru-anki"],
-                                        accented=accented)
+                                        accented=dict_accented or accented)
         except anki.AnkiError as e:
             raise HTTPException(502, f"Anki: {e}")
         _sync_soon()
     card = srs.create_card(
         sentence, span_text, normalized_text, is_phrase, translation,
-        candidate_id=candidate_id, accented=accented, video_id=video_id,
-        timestamp=timestamp, anki_note_id=(anki_result or {}).get("note_id"))
+        candidate_id=candidate_id, accented=accented, dict_accented=dict_accented,
+        video_id=video_id, timestamp=timestamp,
+        anki_note_id=(anki_result or {}).get("note_id"))
     return card, anki_result
 
 
 def _accent_sync(span_text, sentence, is_phrase):
-    """Stressed dictionary form for a card being made right now (deliberate,
-    latency-OK). Cache hit is instant; a miss is one warm call. Phrases: None."""
+    """(surface_stressed, dict_stressed) for a card being made right now
+    (deliberate, latency-OK — one warm call). ('', '') for phrases."""
     if is_phrase:
-        return None
-    return _dict_form(span_text, sentence) or None
+        return "", ""
+    return _stress_forms(span_text, sentence)
 
 
 def _learn_family(lemma):
@@ -1117,7 +1116,7 @@ def decide(cand_id: int, body: DecisionIn):
             normalized_text=cand["normalized_text"], is_phrase=cand["is_phrase"],
             translation=cand["translation"], source_html=src, candidate_id=cand_id,
             video_id=cand["video_id"], timestamp=cand["timestamp_start"],
-            accented=store.accent_for(cand["normalized_text"]),
+            dict_accented=store.accent_for(cand["normalized_text"]),
             tags=["ru-anki", "batch"])
 
     updated = store.resolve_candidate(
@@ -1125,7 +1124,8 @@ def decide(cand_id: int, body: DecisionIn):
         note_id=(anki_result or {}).get("note_id") if body.decision == "yes" else None)
     if body.decision == "yes":
         _learn_family_async(cand["normalized_text"])
-        _learn_accent_async(cand["span_text"], sent)
+        if not cand["is_phrase"]:
+            _learn_accent_async(cand["span_text"], sent)
     backup.snapshot_async("decision")
     return {"candidate": updated, "anki": anki_result, "srs_card": card}
 
@@ -1339,6 +1339,7 @@ def _study_card_view(card, with_preview=True, titles=None):
         "id": card["id"], "front_html": card["front_html"],
         "translation": card["translation"], "span_text": card["span_text"],
         "normalized_text": card["normalized_text"], "accented": card["accented"],
+        "dict_accented": card["dict_accented"],
         "is_new": card["is_new"], "reps": card["reps"], "lapses": card["lapses"],
         "video_id": vid,
         "video_title": title,
@@ -1572,32 +1573,31 @@ def srs_backfill(video_id: int | None = None, limit: int | None = None):
 
 
 def _backfill_accents(limit=None, force=False):
-    """Put the stressed dictionary form on srs_cards.accented. `force` re-derives
-    every single-word card; otherwise only ones still missing it. Batched LLM
-    calls. Runs in a background thread."""
+    """Fill srs_cards.accented (surface) + dict_accented (citation form) with
+    their stress marks. `force` re-derives every single-word card; otherwise only
+    ones still missing a form. Batched LLM calls, background thread."""
     rows = (srs.accent_backfill_rows() if force
             else srs.cards_missing_accent(limit=limit))
     if limit:
         rows = rows[:limit]
-    print(f"[dictform] backfilling {len(rows)} card lemmas (force={force})…")
+    print(f"[stress] backfilling {len(rows)} card lemmas (force={force})…", flush=True)
     done = 0
-    BATCH = 25
+    BATCH = 20
     for i in range(0, len(rows), BATCH):
         chunk = rows[i:i + BATCH]
         try:
-            forms = llm.dict_forms([(r["span_text"], r.get("sentence") or "")
-                                    for r in chunk])
+            pairs = llm.stress_forms([(r["span_text"], r.get("sentence") or "",
+                                       r.get("translation") or "") for r in chunk])
         except Exception as e:  # noqa: BLE001
-            print(f"[dictform] batch {i}: {e}")
+            print(f"[stress] batch {i}: {e}", flush=True)
             continue
-        for r, df in zip(chunk, forms):
-            df = (df or "").strip()
-            if not df:
-                continue
-            store.set_accent(r["span_text"], df)
-            store.set_accent(df, df)
-            done += srs.set_accent_for_lemma(r["normalized_text"], df, force=force)
-    print(f"[dictform] backfill done: {done} cards updated")
+        for r, (surf, df) in zip(chunk, pairs):
+            surf, df = (surf or "").strip(), (df or "").strip()
+            if df:
+                store.set_accent(r["span_text"], df)
+                store.set_accent(df, df)
+            done += srs.set_accents_for_lemma(r["normalized_text"], surf, df, force=force)
+    print(f"[stress] backfill done: {done} cards updated", flush=True)
 
 
 @app.post("/srs/backfill-accents")
@@ -1846,6 +1846,7 @@ def _translate_preview(video_id, span, subtitle_line_id=None, timestamp=None,
     sent = (g.get("sentence") or "").strip() or ctx
     if "\x00" not in store.bold(sent, span_text, is_phrase, "\x00"):
         sent = ctx
+    sent = sent.replace("\N{COMBINING ACUTE ACCENT}", "").replace("\N{COMBINING GRAVE ACCENT}", "")
     front, bolded = anki.front_html(sent, span_text, is_phrase)
     df = _pv_dict_form(g, span_text, is_phrase)
     return {"span_text": span_text, "is_phrase": is_phrase, "translation": translation,
@@ -1862,6 +1863,7 @@ def _make_one_card(video_id, subtitle_line_id, span, timestamp=None, sentence=No
     if not v:
         raise HTTPException(404, "no such video")
 
+    acc = dacc = None
     if span_text and translation is not None:
         # already translated in the modal — skip the LLM, just build the card
         ts = _resolve_ts(video_id, subtitle_line_id, timestamp)
@@ -1874,15 +1876,18 @@ def _make_one_card(video_id, subtitle_line_id, span, timestamp=None, sentence=No
             raise HTTPException(502, f"translation failed: {e}")
         span_text, translation, ph, sent, ts = (
             p["span_text"], p["translation"], p["is_phrase"], p["sentence"], p["ts"])
+        acc, dacc = p.get("stressed"), p.get("dict_form")
 
     cid = store.create_candidate(video_id, span_text, ph, sent, ts,
                                  translation, source="live")
-    accented = _accent_sync(span_text, sent, ph)
+    if not ph and not (acc and dacc):
+        acc, dacc = _accent_sync(span_text, sent, ph)
     src = anki.source_html(v["title"], v.get("channel"), v["url"], ts)
     card, anki_result = _commit_card(
         sentence=sent, span_text=span_text, normalized_text=span_text,
         is_phrase=ph, translation=translation, source_html=src, candidate_id=cid,
-        video_id=video_id, timestamp=ts, accented=accented, tags=["ru-anki", "live"])
+        video_id=video_id, timestamp=ts, accented=acc, dict_accented=dacc,
+        tags=["ru-anki", "live"])
     if anki_result is not None:
         anki_result["sync_error"] = None
     store.resolve_candidate(cid, "yes",
@@ -1928,6 +1933,7 @@ def _translate_ctx(span, ctx):
     sent = (g.get("sentence") or "").strip() or ctx
     if "\x00" not in store.bold(sent, span_text, is_phrase, "\x00"):
         sent = ctx
+    sent = sent.replace("\N{COMBINING ACUTE ACCENT}", "").replace("\N{COMBINING GRAVE ACCENT}", "")
     front, bolded = anki.front_html(sent, span_text, is_phrase)
     return {"span_text": span_text, "is_phrase": is_phrase, "translation": translation,
             "sentence": sent, "front_html": front, "bolded": bolded,
@@ -2054,6 +2060,7 @@ def text_card(text_id: int, body: TextCardIn):
     t = store.get_text(text_id)
     if not t:
         raise HTTPException(404, "no such text")
+    acc = dacc = None
     if body.span_text and body.translation is not None:
         span_text = body.span_text.strip()
         translation = body.translation
@@ -2068,12 +2075,14 @@ def text_card(text_id: int, body: TextCardIn):
             raise HTTPException(502, f"translation failed: {e}")
         span_text, translation, ph, sent = (
             p["span_text"], p["translation"], p["is_phrase"], p["sentence"])
-    accented = _accent_sync(span_text, sent, ph)
+        acc, dacc = p.get("stressed"), p.get("dict_form")
+    if not ph and not (acc and dacc):
+        acc, dacc = _accent_sync(span_text, sent, ph)
     src = anki.source_html_text(t["title"], t.get("author"), body.chapter)
     card, res = _commit_card(
         sentence=sent, span_text=span_text, normalized_text=span_text,
         is_phrase=ph, translation=translation, source_html=src,
-        accented=accented, tags=["ru-anki", "reading"])
+        accented=acc, dict_accented=dacc, tags=["ru-anki", "reading"])
     store.mark_carded(span_text)
     _learn_family_async(store.lemma_key(span_text))
     backup.snapshot_async("text-card")
