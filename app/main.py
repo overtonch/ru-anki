@@ -69,8 +69,8 @@ def _startup_maintenance():
         if v.get("lines"):
             continue
         try:
-            full = store.get_video(v["id"])
-            store.replace_subtitle_lines(v["id"], ytdlp.subtitle_lines(full["raw_subs"]))
+            store.replace_subtitle_lines(
+                v["id"], ytdlp.subtitle_lines(store.raw_subs(v["id"])))
             print(f"[reindex] video {v['id']}: indexed")
         except Exception as e:  # noqa: BLE001
             print(f"[reindex] video {v['id']} failed: {e}")
@@ -912,7 +912,7 @@ def _run_extraction(video_id, model):
                 elapsed=0.0, detail="reading transcript")
     try:
         v = store.get_video(video_id)
-        transcript = ytdlp.transcript_block(v["raw_subs"])
+        transcript = ytdlp.transcript_block(store.raw_subs(video_id))
         decided = store.resolved_words_list()
         discards = store.recent_discards()
         recurring = store.notable_recurring(video_id)
@@ -1280,21 +1280,27 @@ def _hms_secs(hms):
                  + float(m.group(3)), 2)
 
 
-def _study_card_view(card, with_preview=True):
-    """Trim an srs card dict to what the review screen needs."""
+def _study_card_view(card, with_preview=True, titles=None):
+    """Trim an srs card dict to what the review screen needs. Pass `titles`
+    (a {video_id: title} map) when rendering many cards to avoid a query each."""
     if not card:
         return None
-    v = store.get_video(card["video_id"]) if card.get("video_id") else None
+    vid = card.get("video_id")
+    if titles is not None:
+        title = titles.get(vid)
+    else:
+        v = store.get_video(vid) if vid else None
+        title = v["title"] if v else None
     return {
         "id": card["id"], "front_html": card["front_html"],
         "translation": card["translation"], "span_text": card["span_text"],
         "normalized_text": card["normalized_text"], "accented": card["accented"],
         "is_new": card["is_new"], "reps": card["reps"], "lapses": card["lapses"],
-        "video_id": card["video_id"],
-        "video_title": v["title"] if v else None,
+        "video_id": vid,
+        "video_title": title,
         "timestamp": card["timestamp"],
         "seconds": _hms_secs(card["timestamp"]) if card.get("timestamp") else None,
-        "preview": srs.preview(card["id"]) if with_preview else None,
+        "preview": srs.preview(card) if with_preview else None,
     }
 
 
@@ -1364,7 +1370,9 @@ def srs_edit_card(card_id: int, body: CardEditIn):
 @app.get("/srs/queue")
 def srs_queue(limit: int = 60):
     cards = srs.queue(limit=limit)
-    return {"cards": [_study_card_view(c) for c in cards], **srs.stats()}
+    titles = store.video_titles()
+    return {"cards": [_study_card_view(c, titles=titles) for c in cards],
+            **srs.stats()}
 
 
 @app.get("/srs/offline")
@@ -1373,9 +1381,10 @@ def srs_offline(days: int = 2):
     the next `days`: the cards (with per-card `due` / `due_now`) and the list of
     audio-clip + frame URLs to pre-download."""
     b = srs.offline_bundle(days=max(0, min(14, days)))
+    titles = store.video_titles()
     cards, media = [], []
     for c in b["cards"]:
-        v = _study_card_view(c)
+        v = _study_card_view(c, titles=titles)
         v["due"] = c.get("due")
         v["due_now"] = bool(c.get("due_now"))
         if v.get("seconds") is not None and v.get("video_id") is not None:
@@ -1554,7 +1563,7 @@ def explain_lyric_line(video_id: int, body: LyricIn):
     v = store.get_video(video_id)
     if not v:
         raise HTTPException(404, "no such song")
-    cues = subs.caption_cues(v["raw_subs"])          # same list the player indexes
+    cues = subs.caption_cues(store.raw_subs(video_id))   # same list the player indexes
     lines = [c["text"] for c in cues]
     if not (0 <= body.index < len(lines)):
         raise HTTPException(422, "line index out of range")
@@ -1637,7 +1646,7 @@ def watch(video_id: int):
     v = store.get_video(video_id)
     if not v:
         raise HTTPException(404, "no such video")
-    cues = subs.caption_cues(v["raw_subs"])
+    cues = subs.caption_cues(store.raw_subs(video_id))
     flag, pend_rows = _word_flagger(video_id)
     out = []
     card_count = 0

@@ -294,9 +294,11 @@ def cards_missing_accent(limit=None):
 
 # ---------------------------------------------------------------- review
 
-def preview(card_id):
-    """{rating: human-interval} for all four buttons, without persisting."""
-    row = _raw(card_id)
+def preview(card):
+    """{rating: human-interval} for all four buttons, without persisting.
+    `card` is a card id or an already-fetched row/dict (avoids a re-query when
+    rendering a whole queue)."""
+    row = card if isinstance(card, dict) else _raw(card)
     if not row:
         return {}
     sched = _scheduler()

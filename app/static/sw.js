@@ -19,6 +19,14 @@ self.addEventListener('activate', e => {
   );
 });
 
+// Keep a cache from growing without bound — drop the oldest entries (insertion
+// order) once it exceeds `max`.
+async function trimCache(cache, max) {
+  const keys = await cache.keys();
+  if (keys.length <= max) return;
+  for (const k of keys.slice(0, keys.length - max)) await cache.delete(k);
+}
+
 // SRS review clips + frames: cache-first from 'ru-anki-srs-media' (the page
 // pre-downloads them via /srs/offline). We always store the full 200; if the
 // media element asks for a byte range we slice the cached copy ourselves so an
@@ -93,8 +101,10 @@ self.addEventListener('fetch', e => {
     e.respondWith(
       caches.open('ru-anki-thumbs').then(c =>
         c.match(e.request).then(hit => hit ||
-          fetch(e.request).then(res => { c.put(e.request, res.clone()); return res; })
-            .catch(() => hit))
+          fetch(e.request).then(res => {
+            c.put(e.request, res.clone()).then(() => trimCache(c, 160));
+            return res;
+          }).catch(() => hit))
       )
     );
   }

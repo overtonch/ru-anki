@@ -130,11 +130,36 @@ def _enrich(d):
     return d
 
 
+# everything the app needs about a video EXCEPT the raw_subs blob, which for a
+# feature-length transcript is ~100 KB — never pulled just to read the title.
+_VIDEO_COLS = ("id, url, title, subs_kind, subs_lang, fetched_at, channel, "
+               "channel_url, thumbnail_url, duration, media_path, media_bytes, "
+               "media_quality, media_status, kind, hidden")
+
+
 def get_video(video_id):
     c = connect()
-    r = c.execute("SELECT * FROM videos WHERE id=?", (video_id,)).fetchone()
+    r = c.execute(f"SELECT {_VIDEO_COLS} FROM videos WHERE id=?",
+                  (video_id,)).fetchone()
     c.close()
     return _enrich(dict(r)) if r else None
+
+
+def video_titles():
+    """{video_id: title} for every video — one query, for batch card rendering."""
+    c = connect()
+    rows = c.execute("SELECT id, title FROM videos").fetchall()
+    c.close()
+    return {r["id"]: r["title"] for r in rows}
+
+
+def raw_subs(video_id):
+    """The full subtitle/lyric text for a video (VTT). Its own call so the common
+    get_video() path stays cheap."""
+    c = connect()
+    r = c.execute("SELECT raw_subs FROM videos WHERE id=?", (video_id,)).fetchone()
+    c.close()
+    return r["raw_subs"] if r else None
 
 
 def list_videos(include_hidden=False):

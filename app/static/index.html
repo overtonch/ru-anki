@@ -2305,7 +2305,7 @@ async function openWatch(id, seekTo) {
   watchEphemeral = seekTo != null;
   const haveLocal = await opfsHas(id);
   let data;
-  try { data = await api(`/videos/${id}/watch`); idbPut('offline', 'w' + id, data).catch(() => {}); }
+  try { data = await api(`/videos/${id}/watch`); idbPut('offline', 'w' + id, data).catch(() => {}); touchOfflineLRU('w' + id); }
   catch { data = await idbGet('offline', 'w' + id); }
   if (!haveLocal && !navigator.onLine) { toast('download this video to watch it offline'); return; }
   if (!haveLocal && !data) { toast('couldn’t load this video'); return; }
@@ -3510,6 +3510,7 @@ function renderTranscript() {
   if (READER_MODE) return renderReaderBody();
   const box = $('#transcript');
   box.innerHTML = '';
+  const frag = document.createDocumentFragment();   // one reflow, not one per line
   WCUES.forEach((cue, i) => {
     const line = document.createElement('div');
     line.className = 'cue'; line.dataset.i = i;
@@ -3537,8 +3538,9 @@ function renderTranscript() {
       ex.onclick = e => { e.stopPropagation(); openLyricSheet(i); };
       line.appendChild(ex);
     }
-    box.appendChild(line);
+    frag.appendChild(line);
   });
+  box.appendChild(frag);
   box.onscroll = () => { wUserScroll = Date.now(); };
   attachTranscriptSelect();
 }
@@ -3952,7 +3954,7 @@ async function openReader(id) {
   $('#readBody').innerHTML = SPINNER;
   $('#readNav').hidden = true;
   let d;
-  try { d = await api(`/videos/${id}/read`); idbPut('offline', 'r' + id, d).catch(() => {}); }
+  try { d = await api(`/videos/${id}/read`); idbPut('offline', 'r' + id, d).catch(() => {}); touchOfflineLRU('r' + id); }
   catch { d = await idbGet('offline', 'r' + id).catch(() => null); }
   if (!d) { $('#readBody').innerHTML = '<div class="empty">couldn’t load this text</div>'; return; }
   $('#rTitle').textContent = d.video.title || 'Reading';
@@ -3989,11 +3991,12 @@ async function refreshReader() {
 function renderReaderBody() {
   const box = $('#readBody');
   box.innerHTML = '';
+  const frag = document.createDocumentFragment();
   WCUES.forEach((blk, i) => {
     if (blk.heading != null) {
       const h = document.createElement('h3');
       h.className = 'rh'; h.dataset.ci = i; h.textContent = blk.heading;
-      box.appendChild(h); return;
+      frag.appendChild(h); return;
     }
     const p = document.createElement('p'); p.className = 'rp';
     (blk.words || []).forEach((w, wi) => {
@@ -4005,8 +4008,9 @@ function renderReaderBody() {
       sp.onclick = () => { if (Date.now() - _phraseDoneAt < 350) return; wordAction(w, sp, i, wi); };
       p.append(sp, document.createTextNode(' '));
     });
-    box.appendChild(p);
+    frag.appendChild(p);
   });
+  box.appendChild(frag);
   box.onscroll = () => { updateReadProg(); saveReadScrollSoon(); };
   attachTranscriptSelect(box);
 }
@@ -4586,6 +4590,28 @@ async function idbGet(store, key) { return _p((await _tx(store, 'readonly')).get
 async function idbPut(store, key, val) { return _p((await _tx(store, 'readwrite')).put(val, key)); }
 async function idbDel(store, key) { return _p((await _tx(store, 'readwrite')).delete(key)); }
 async function idbAll(store) { return _p((await _tx(store, 'readonly')).getAll()); }
+async function idbKeys(store) { return _p((await _tx(store, 'readonly')).getAllKeys()); }
+/* cached watch/read payloads pile up in 'offline' (one per video ever opened, up
+   to ~1 MB each). Keep only the most-recently-touched `keep`. */
+async function pruneOfflineCache(keep = 24) {
+  try {
+    const keys = (await idbKeys('offline')).filter(k => typeof k === 'string' &&
+      (k.startsWith('w') || k.startsWith('r')));
+    if (keys.length <= keep) return;
+    let seen = [];
+    try { seen = JSON.parse(localStorage.getItem('offlineLRU') || '[]'); } catch {}
+    const order = new Map(seen.map((k, i) => [k, i]));
+    keys.sort((a, b) => (order.has(a) ? order.get(a) : 1e9) - (order.has(b) ? order.get(b) : 1e9));
+    for (const k of keys.slice(keep)) await idbDel('offline', k);
+  } catch {}
+}
+function touchOfflineLRU(key) {
+  try {
+    let seen = JSON.parse(localStorage.getItem('offlineLRU') || '[]');
+    seen = [key, ...seen.filter(k => k !== key)].slice(0, 60);
+    localStorage.setItem('offlineLRU', JSON.stringify(seen));
+  } catch {}
+}
 
 /* ---------------- connectivity ---------------- */
 // NET: 'ok' | 'anki' (server ok, Anki down) | 'noserver' (online but can't reach Mac)
@@ -4762,6 +4788,7 @@ flushQueue();
 loadVideos();
 setTimeout(() => syncOfflineSRS(), 4000);            // warm the offline review cache
 setInterval(() => { if (!document.hidden) syncOfflineSRS(); }, 30 * 60 * 1000);
+setTimeout(pruneOfflineCache, 8000);                 // keep the offline blob store bounded
 </script>
 </body>
 </html>
