@@ -812,6 +812,11 @@
   .readbody .rw.pending { background:rgba(230,185,60,.22); box-shadow:inset 0 -2px 0 rgba(230,185,60,.8);
                           border-radius:3px; }
   .readbody .rw.sel { background:var(--accent); color:#0b1016; box-shadow:none; }
+  /* highlight mode: hold a word to enter it, then drag to select across lines */
+  .readbody.selecting, #transcript.selecting { touch-action:none; cursor:text;
+      -webkit-user-select:none; user-select:none; }
+  .readbody.selecting .rw:active, #transcript.selecting .cw:active { background:none; }
+  .readbody .rw.sel, .transcript .cw.sel { transition:background .06s; }
   .readbody .rh { font-weight:750; font-size:1.05em; margin:1.4em 0 .7em; display:block; color:var(--muted);
                   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
                   letter-spacing:.02em; }
@@ -3589,6 +3594,9 @@ function renderTranscript() {
 let _phraseSel = null, _phraseDoneAt = 0;
 function _selWC() { return READER_MODE ? '.rw' : '.cw'; }
 function _selBoxEl() { return $(READER_MODE ? '#readBody' : '#transcript'); }
+/* Hold a word for ~380 ms to start a highlight, then drag anywhere (across
+   lines too) to extend it; release to translate / card the phrase. A move
+   before the hold completes is a normal scroll and cancels it. */
 function attachTranscriptSelect(box) {
   box = box || $('#transcript');
   if (!box || box._selWired) return;
@@ -3598,48 +3606,72 @@ function attachTranscriptSelect(box) {
     const el = document.elementFromPoint(x, y);
     return el && el.closest ? el.closest(wc) : null;
   };
-  const reader = box.id === 'readBody';
+  let lpTimer = null;
+  const dropPending = () => {
+    clearTimeout(lpTimer); lpTimer = null;
+    if (_phraseSel && !_phraseSel.active) _phraseSel = null;
+  };
+  const stop = () => {
+    clearTimeout(lpTimer); lpTimer = null;
+    box.classList.remove('selecting');
+    clearPhraseSel();
+    _phraseSel = null;
+  };
+
   box.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     const sp = e.target.closest && e.target.closest(wc);
-    if (!sp) return;
-    _phraseSel = { a: sp, b: sp, x0: e.clientX, y0: e.clientY, t0: Date.now(),
+    if (!sp) { dropPending(); return; }
+    _phraseSel = { a: sp, b: sp, x0: e.clientX, y0: e.clientY,
                    active: false, pid: e.pointerId };
-  });
-  box.addEventListener('pointermove', e => {
-    if (!_phraseSel) return;
-    const dx = e.clientX - _phraseSel.x0, dy = e.clientY - _phraseSel.y0;
-    if (!_phraseSel.active) {
-      const dt = Date.now() - _phraseSel.t0;
-      const fastVert = dt < 160 && Math.abs(dy) > 22 && Math.abs(dy) > Math.abs(dx) * 1.4;
-      // reader: only a quick vertical flick is "scroll" (so you can drag-select
-      // down across lines); transcript: any early-vertical move is scroll
-      if (reader ? fastVert : (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx))) {
-        _phraseSel = null; return;
-      }
-      if (Math.abs(dx) < 10 && Math.abs(dy) < 12) return;
+    clearTimeout(lpTimer);
+    lpTimer = setTimeout(() => {
+      if (!_phraseSel || _phraseSel.pid !== e.pointerId) return;
       _phraseSel.active = true;
       try { box.setPointerCapture(e.pointerId); } catch {}
+      box.classList.add('selecting');
+      try { navigator.vibrate && navigator.vibrate(12); } catch {}
+      paintPhraseSel();
+    }, 380);
+  });
+
+  box.addEventListener('pointermove', e => {
+    if (!_phraseSel) return;
+    if (!_phraseSel.active) {
+      if (Math.abs(e.clientX - _phraseSel.x0) > 9 ||
+          Math.abs(e.clientY - _phraseSel.y0) > 9) dropPending();   // it's a scroll
+      return;
     }
     e.preventDefault();
     const sp = wordAt(e.clientX, e.clientY);
-    if (sp) { _phraseSel.b = sp; paintPhraseSel(); }
-  });
-  const end = e => {
+    if (sp && sp !== _phraseSel.b) { _phraseSel.b = sp; paintPhraseSel(); }
+  }, { passive: false });
+
+  const end = () => {
+    clearTimeout(lpTimer); lpTimer = null;
     if (!_phraseSel) return;
-    const wasActive = _phraseSel.active;
-    try { box.releasePointerCapture(_phraseSel.pid); } catch {}
-    if (wasActive) {
-      const range = phraseSelRange();
-      clearPhraseSel();
-      _phraseSel = null;
-      _phraseDoneAt = Date.now();       // swallow the trailing click
-      if (range && range.words.length >= 2) openPhraseCard(range);
-      return;
-    }
+    const wasActive = _phraseSel.active, pid = _phraseSel.pid;
+    try { box.releasePointerCapture(pid); } catch {}
+    box.classList.remove('selecting');
+    if (!wasActive) { _phraseSel = null; return; }
+    const range = phraseSelRange();
+    clearPhraseSel();
     _phraseSel = null;
+    _phraseDoneAt = Date.now();          // swallow the trailing click
+    if (!range || !range.words.length) return;
+    if (range.words.length >= 2) { openPhraseCard(range); return; }
+    const { ci, wi } = range.words[0];   // single word held → same as tapping it
+    const w = (WCUES[ci] && WCUES[ci].words || [])[wi];
+    const el = _selBoxEl().querySelector(`${_selWC()}[data-ci="${ci}"][data-wi="${wi}"]`);
+    if (w && el) wordAction(w, el, ci, wi);
   };
   box.addEventListener('pointerup', end);
-  box.addEventListener('pointercancel', () => { clearPhraseSel(); _phraseSel = null; });
+  box.addEventListener('pointercancel', stop);
+  // iOS derives pointer events from touch events and won't always honour
+  // preventDefault on pointermove — block the scroll at the touch level too.
+  box.addEventListener('touchmove', e => {
+    if (_phraseSel && _phraseSel.active && e.cancelable) e.preventDefault();
+  }, { passive: false });
 }
 function _spanKey(sp) { return [+sp.dataset.ci, +sp.dataset.wi]; }
 function phraseSelRange() {
