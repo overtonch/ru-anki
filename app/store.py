@@ -53,7 +53,11 @@ def init_db():
                 "duration INTEGER",
                 # downloaded media for offline watching
                 "media_path TEXT", "media_bytes INTEGER", "media_quality INTEGER",
-                "media_status TEXT"):
+                "media_status TEXT",
+                # 'video' (default) | 'text' — content that lives in the same
+                # pipeline (extraction / cards / word pages) but opens in a
+                # reader instead of a player
+                "kind TEXT NOT NULL DEFAULT 'video'"):
         if not _has_column(c, "videos", col.split()[0]):
             c.execute(f"ALTER TABLE videos ADD COLUMN {col}")
     # Fold any legacy known_lexicon rows into resolved_words.
@@ -129,7 +133,7 @@ def list_videos():
     c = connect()
     rows = c.execute(
         """SELECT v.id, v.url, v.title, v.channel, v.channel_url, v.thumbnail_url,
-                  v.duration, v.subs_kind, v.subs_lang, v.fetched_at,
+                  v.duration, v.subs_kind, v.subs_lang, v.fetched_at, v.kind,
                   v.media_status, v.media_bytes, v.media_quality,
                   (SELECT count(*) FROM subtitle_lines s WHERE s.video_id=v.id) AS lines,
                   (SELECT count(*) FROM candidates k WHERE k.video_id=v.id) AS candidates,
@@ -447,8 +451,8 @@ def _lemma_index(video_id):
         return got
     c = connect()
     rows = c.execute(
-        "SELECT start_time, text FROM subtitle_lines WHERE video_id=? ORDER BY id",
-        (video_id,)).fetchall()
+        "SELECT start_time, text FROM subtitle_lines WHERE video_id=? "
+        "AND text NOT LIKE '## %' ORDER BY id", (video_id,)).fetchall()
     c.close()
     texts = [r["text"] or "" for r in rows]
     times = [(r["start_time"] or "") for r in rows]
@@ -1088,6 +1092,43 @@ def add_text(title, author, kind, chapters):
     c.commit()
     c.close()
     return tid
+
+
+def add_reading_text(url, title, author, chapters):
+    """Store an imported reading text as a kind='text' video so the whole
+    pipeline (extraction / cards / word pages / highlighting) applies. Each
+    paragraph is one subtitle_line; chapter headings are '## …' lines.
+    `chapters`: [{title, paragraphs: [str]}]. -> video id."""
+    lines, vtt, t = [], ["WEBVTT", ""], 0.0
+    for ci, ch in enumerate(chapters, 1):
+        if ch.get("title"):
+            lines.append((f"{ci}:00:00", "## " + ch["title"]))
+        for pi, para in enumerate(ch.get("paragraphs") or [], 1):
+            lines.append((f"{ci}:{pi // 60:02d}:{pi % 60:02d}", para))
+            vtt += [f"{secs_to_hms(t)} --> {secs_to_hms(t + 4)}", para, ""]
+            t += 5
+    vid = upsert_video(url, title, "text", "ru", "\n".join(vtt), channel=author)
+    c = connect()
+    c.execute("UPDATE videos SET kind='text' WHERE id=?", (vid,))
+    c.commit()
+    c.close()
+    replace_subtitle_lines(vid, lines)
+    return vid
+
+
+def reading_chapters(video_id):
+    """[{n, title, first_line_id}] from the '## …' lines — the reader's TOC."""
+    c = connect()
+    rows = c.execute(
+        "SELECT id, start_time, text FROM subtitle_lines WHERE video_id=? ORDER BY id",
+        (video_id,)).fetchall()
+    c.close()
+    out, n = [], 0
+    for r in rows:
+        if (r["text"] or "").startswith("## "):
+            n += 1
+            out.append({"n": n, "title": r["text"][3:].strip(), "line_id": r["id"]})
+    return out
 
 
 def list_texts():

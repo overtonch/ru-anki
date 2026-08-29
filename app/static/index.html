@@ -701,16 +701,23 @@
   #readView[data-fs="m"]  { --rfs:1.12rem; }
   #readView[data-fs="l"]  { --rfs:1.28rem; }
   #readView[data-fs="xl"] { --rfs:1.46rem; }
-  .readbody p { margin:0 0 1.05em; }
-  .readbody .rw { cursor:pointer; border-radius:3px; padding:0 .02em;
+  .readbody p, .readbody .rp { margin:0 0 1.05em; }
+  .readbody .rw { cursor:pointer; border-radius:3px; padding:0 .04em;
+                  -webkit-user-select:none; user-select:none; -webkit-touch-callout:none;
                   -webkit-tap-highlight-color:transparent; }
   .readbody .rw:active { background:var(--accent); color:#0b1016; }
-  .readbody .rw.carded { color:var(--ok); }
-  .readbody .rh { font-weight:700; font-size:1.15em; margin:.2em 0 .8em; display:block;
-                  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  .readbody .rw.carded, .readbody .rw.has-card { color:#8fe6b3; font-weight:600; }
+  .readbody .rw.pending { background:rgba(230,185,60,.22); box-shadow:inset 0 -2px 0 rgba(230,185,60,.8);
+                          border-radius:3px; }
+  .readbody .rw.sel { background:var(--accent); color:#0b1016; box-shadow:none; }
+  .readbody .rh { font-weight:750; font-size:1.05em; margin:1.4em 0 .7em; display:block; color:var(--muted);
+                  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+                  letter-spacing:.02em; }
+  .readbody .rh:first-child { margin-top:0; }
   .readnav { display:flex; align-items:center; justify-content:space-between;
              padding:.5rem 1rem; border-top:1px solid var(--line-soft); flex:none;
              font-size:.8rem; color:var(--muted); }
+  .readnav[hidden] { display:none; }
   .readnav .backlink { font-size:.82rem; }
   .readnav .backlink[disabled] { opacity:.3; pointer-events:none; }
   #tocPanel { position:absolute; top:0; right:0; bottom:0; width:min(80vw,320px);
@@ -766,7 +773,7 @@
   <!-- LIST VIEW -->
   <div id="listView">
     <div class="addbar">
-      <input type="text" id="url" placeholder="Paste a YouTube link to add"
+      <input type="text" id="url" placeholder="Paste a video or article/book link"
              autocapitalize="off" autocomplete="off" spellcheck="false"
              onkeydown="if(event.key==='Enter')addVideo()">
       <button class="btn" id="addBtn" onclick="addVideo()">Add</button>
@@ -801,9 +808,10 @@
 
   <!-- DETAIL VIEW -->
   <div id="detailView" hidden>
-    <button class="backlink" onclick="history.back()">← all videos</button>
+    <button class="backlink" onclick="history.back()">← back</button>
     <div class="vhead" id="vhead"></div>
     <button class="btn watch-cta" id="watchBtn" onclick="openWatch(CURRENT)">▶ Watch with captions</button>
+    <button class="btn watch-cta" id="readBtn" hidden onclick="openReader(CURRENT)">📖 Read</button>
     <div id="offlineRow" class="status"></div>
     <div id="mediaRow" class="status"></div>
     <div id="transcribeRow" class="status"></div>
@@ -1001,10 +1009,11 @@
 
 <script>
 const $ = s => document.querySelector(s);
-const READING_ENABLED = false;   // reading feature is built but off for now
+const READING_ENABLED = true;   // reading: URL/paste/EPUB import + tap-to-card reader
 let VIDEOS = [];
 let TEXTS = [];
-let READ = null;             // { id, meta, ch, carded:Set }
+let READ = null;             // legacy paste/epub reader
+let READER_MODE = false, READER_ID = null, READER_CH = [];
 let CURRENT = null;          // video id in detail view
 let DETAIL_V = null;
 let listTimer = null, sse = null, tickTimer = null, searchTimer = null;
@@ -1129,29 +1138,50 @@ function extractLine(ex) {
 
 function renderList() {
   const box = $('#videoList');
-  if (!VIDEOS.length && !TEXTS.length) {
-    box.innerHTML = READING_ENABLED
-      ? '<div class="empty">Nothing yet. Paste a YouTube link, or import a book / text above.</div>'
-      : '<div class="empty">No videos yet. Paste a link above to start.</div>';
+  const vids = VIDEOS.filter(v => v.kind !== 'text');
+  const texts = VIDEOS.filter(v => v.kind === 'text');
+  if (!vids.length && !texts.length && !TEXTS.length) {
+    box.innerHTML = '<div class="empty">Nothing yet. Paste a video link, or a book / article link, above.</div>';
     return;
   }
   box.innerHTML = '';
   const head = t => { const h = document.createElement('div'); h.className = 'chan'; h.textContent = t; box.appendChild(h); };
 
-  if (VIDEOS.length) {
-    head('Most recent');
-    box.appendChild(videoCard(VIDEOS[0], true));
+  if (vids.length) {
+    head('Videos');
+    box.appendChild(videoCard(vids[0], true));
     const groups = {};
-    for (const v of VIDEOS.slice(1)) (groups[v.channel || 'Unknown channel'] ||= []).push(v);
+    for (const v of vids.slice(1)) (groups[v.channel || 'Unknown channel'] ||= []).push(v);
     for (const chan of Object.keys(groups).sort((a,b) => a.localeCompare(b))) {
       head(chan);
       for (const v of groups[chan]) box.appendChild(videoCard(v));
     }
   }
-  if (TEXTS.length) {
+  if (texts.length || TEXTS.length) {
     head('Reading');
+    for (const v of texts) box.appendChild(readCard(v));
     for (const t of TEXTS) box.appendChild(textCard(t));
   }
+}
+
+function readCard(v) {
+  const el = document.createElement('div');
+  el.className = 'lib-card';
+  const ex = v.extract || { state: 'idle' };
+  let pos = 0;
+  try { pos = Math.max(0, Math.min(100, +localStorage.getItem('rdpos:' + v.id) || 0)); } catch {}
+  const bits = [v.channel,
+    ex.state === 'running' || ex.state === 'queued' ? 'finding words…'
+      : v.pending ? `${v.pending} to review` : null].filter(Boolean);
+  el.innerHTML = `
+    <div class="bk">📖</div>
+    <div class="body">
+      <div class="t">${escapeHtml(v.title || 'Untitled')}</div>
+      <div class="m">${escapeHtml(bits.join(' · '))}${pos ? ` · ${pos}% read` : ''}</div>
+      ${pos ? `<div class="rbar"><i style="width:${pos}%"></i></div>` : ''}
+    </div>`;
+  el.onclick = () => openDetail(v.id);
+  return el;
 }
 
 function textCard(t) {
@@ -1213,21 +1243,36 @@ function videoCard(v, feat) {
   return el;
 }
 
+const VIDEO_HOSTS = /(youtube\.com|youtu\.be|vk(?:video)?\.(?:com|ru)|m\.vkvideo\.ru|rutube\.ru|dzen\.ru|ok\.ru)/i;
 async function addVideo() {
   const url = $('#url').value.trim();
   if (!url) return;
   setBusy($('#addBtn'), true);
   $('#addStatus').textContent = '';
+  const isText = /^https?:\/\//.test(url) && !VIDEO_HOSTS.test(url);
   try {
-    const r = await api('/videos', {
-      method:'POST', headers:{'content-type':'application/json'},
-      body: JSON.stringify({url})
-    });
-    $('#url').value = '';
-    const m = $('#model') ? $('#model').value : 'haiku';
-    await api(`/videos/${r.video_id}/extract?model=${m}`, {method:'POST'});
-    await openDetail(r.video_id);   // straight into the progress view
-    loadVideosQuiet();              // refresh the list in the background
+    if (isText) {
+      $('#addStatus').textContent = 'fetching text…';
+      const r = await api('/texts/from-url', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ url, chapters: 5 }),
+      });
+      $('#url').value = '';
+      const m = $('#model') ? $('#model').value : 'sonnet';
+      await api(`/videos/${r.id}/extract?model=${m}`, { method: 'POST' });
+      await openDetail(r.id);
+      loadVideosQuiet();
+    } else {
+      const r = await api('/videos', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      $('#url').value = '';
+      const m = $('#model') ? $('#model').value : 'haiku';
+      await api(`/videos/${r.video_id}/extract?model=${m}`, { method: 'POST' });
+      await openDetail(r.video_id);
+      loadVideosQuiet();
+    }
   } catch (e) {
     $('#addStatus').textContent = 'error: ' + e.message;
   } finally { setBusy($('#addBtn'), false); }
@@ -1253,16 +1298,23 @@ async function openDetail(id) {
   let v = VIDEOS.find(x => x.id === id);
   if (!v) { try { v = await api(`/videos/${id}`); } catch { v = await offlineVideoMeta(id); } }
   DETAIL_V = v || {id};
+  const isText = DETAIL_V.kind === 'text';
+  $('#detailView').classList.toggle('text-mode', isText);
   renderVHead(DETAIL_V);
-  const localOK = await opfsHas(id);
-  $('#watchBtn').hidden = !navigator.onLine && !localOK;
-  $('#watchBtn').textContent = (DETAIL_V.youtube_id || localOK)
-    ? '▶ Watch with captions'
-    : (navigator.onLine ? '▶ Stream with captions' : '▶ Watch with captions');
+  $('#readBtn').hidden = !isText;
+  if (isText) {
+    $('#watchBtn').hidden = true;
+  } else {
+    const localOK = await opfsHas(id);
+    $('#watchBtn').hidden = !navigator.onLine && !localOK;
+    $('#watchBtn').textContent = (DETAIL_V.youtube_id || localOK)
+      ? '▶ Watch with captions'
+      : (navigator.onLine ? '▶ Stream with captions' : '▶ Watch with captions');
+    await renderOfflineRow(id);
+    renderMediaRow(id);
+    renderTranscribeRow(id);
+  }
   try { $('#reviewPanel').classList.toggle('collapsed', localStorage.getItem('reviewCollapsed') === '1'); } catch {}
-  await renderOfflineRow(id);
-  renderMediaRow(id);
-  renderTranscribeRow(id);
   const ex = (v && v.extract) || {state:'idle'};
   if (['queued','running'].includes(ex.state) && navigator.onLine) startProgress(v, ex);
   else renderProgressDone(ex);
@@ -1270,12 +1322,15 @@ async function openDetail(id) {
 }
 
 function renderVHead(v) {
+  const isText = v.kind === 'text';
   $('#vhead').innerHTML = `
-    ${v.thumbnail_url ? `<img src="${escapeHtml(v.thumbnail_url)}" alt="">` : ''}
+    ${!isText && v.thumbnail_url ? `<img src="${escapeHtml(v.thumbnail_url)}" alt="">` : ''}
     <div style="flex:1;min-width:0">
       <div class="vtitle">${escapeHtml(v.title || '')}</div>
-      <div class="vmeta">${channelLink(v)} · ${v.lines || 0} lines
-        · <a href="${escapeHtml(v.url)}" target="_blank" rel="noopener">YouTube ↗</a></div>
+      <div class="vmeta">${isText
+        ? `${escapeHtml(v.channel || '')} · ${v.lines || 0} paragraphs`
+        : `${channelLink(v)} · ${v.lines || 0} lines`}
+        · <a href="${escapeHtml(v.url)}" target="_blank" rel="noopener">source ↗</a></div>
     </div>`;
 }
 
@@ -1908,7 +1963,10 @@ async function confirmCard() {
            : (navigator.onLine ? 'card queued' : 'saved — translates when online'));
   flushQueue();
 
-  if (watchCue != null && WP) {
+  if (READER_MODE) {
+    markWordCarded(pv ? pv.span_text : span);   // sets w.c in WCUES
+    renderReaderBody();                         // repaint highlights
+  } else if (watchCue != null && WP) {
     // replay the line you just carded
     wPausedForModal = false;
     markWordCarded(span);
@@ -3065,6 +3123,7 @@ function tick() {
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 function renderTranscript() {
+  if (READER_MODE) return renderReaderBody();
   const box = $('#transcript');
   box.innerHTML = '';
   WCUES.forEach((cue, i) => {
@@ -3091,16 +3150,19 @@ function renderTranscript() {
 
 /* drag across words in the transcript → highlight the phrase, translate + card it */
 let _phraseSel = null, _phraseDoneAt = 0;
-function attachTranscriptSelect() {
-  const box = $('#transcript');
+function _selWC() { return READER_MODE ? '.rw' : '.cw'; }
+function _selBoxEl() { return $(READER_MODE ? '#readBody' : '#transcript'); }
+function attachTranscriptSelect(box) {
+  box = box || $('#transcript');
   if (!box || box._selWired) return;
   box._selWired = true;
+  const wc = box.id === 'readBody' ? '.rw' : '.cw';
   const wordAt = (x, y) => {
     const el = document.elementFromPoint(x, y);
-    return el && el.closest ? el.closest('.cw') : null;
+    return el && el.closest ? el.closest(wc) : null;
   };
   box.addEventListener('pointerdown', e => {
-    const sp = e.target.closest && e.target.closest('.cw');
+    const sp = e.target.closest && e.target.closest(wc);
     if (!sp) return;
     _phraseSel = { a: sp, b: sp, x0: e.clientX, y0: e.clientY, active: false, pid: e.pointerId };
   });
@@ -3141,34 +3203,43 @@ function phraseSelRange() {
   if (aci > bci || (aci === bci && awi > bwi)) { [aci, awi, bci, bwi] = [bci, bwi, aci, awi]; }
   const words = [];
   for (let ci = aci; ci <= bci; ci++) {
-    const cue = WCUES[ci]; if (!cue) continue;
+    const cue = WCUES[ci]; const cw = (cue && cue.words) || []; if (!cw.length) continue;
     const lo = ci === aci ? awi : 0;
-    const hi = ci === bci ? bwi : (cue.words.length - 1);
-    for (let wi = lo; wi <= hi; wi++) if (cue.words[wi]) words.push({ ci, wi, t: cue.words[wi].t });
+    const hi = ci === bci ? bwi : (cw.length - 1);
+    for (let wi = lo; wi <= hi; wi++) if (cw[wi]) words.push({ ci, wi, t: cw[wi].t });
   }
   return { startCi: aci, startWi: awi, endCi: bci, endWi: bwi, words };
 }
 function paintPhraseSel() {
   const r = phraseSelRange();
   const inSet = new Set((r ? r.words : []).map(w => w.ci + ':' + w.wi));
-  $('#transcript').querySelectorAll('.cw').forEach(sp => {
+  _selBoxEl().querySelectorAll(_selWC()).forEach(sp => {
     sp.classList.toggle('sel', inSet.has(sp.dataset.ci + ':' + sp.dataset.wi));
   });
 }
 function clearPhraseSel() {
-  $('#transcript').querySelectorAll('.cw.sel').forEach(sp => sp.classList.remove('sel'));
+  _selBoxEl().querySelectorAll(_selWC() + '.sel').forEach(sp => sp.classList.remove('sel'));
 }
 function openPhraseCard(range) {
   const phrase = stripPunct(range.words.map(w => w.t).join(' ')).replace(/\s+/g, ' ').trim();
   if (!phrase || phrase.split(' ').length > 8) { if (phrase) toast('that’s a lot of words — pick a shorter phrase', 2600); return; }
-  if (WP) { WP.pause(); wPausedForModal = true; }
+  if (WP && !READER_MODE) { WP.pause(); wPausedForModal = true; }
   const cs = range.startCi, ce = range.endCi;
   const around = [WCUES[cs - 1], ...WCUES.slice(cs, ce + 1), WCUES[ce + 1]]
-    .filter(Boolean).map(c => c.text).join(' ');
-  openCardModal({ id: null, text: around, start_time: hms(WCUES[cs].s) }, phrase);
-  if (MODAL) MODAL.watchCue = cs;   // openCardModal already seeds the phrase + fires the preview
+    .filter(c => c && c.text).map(c => c.text).join(' ');
+  openCardModal({ id: READER_MODE ? (WCUES[cs].lineId || null) : null, text: around,
+                  start_time: READER_MODE ? null : hms(WCUES[cs].s) }, phrase);
+  if (MODAL) MODAL.watchCue = cs;
 }
 function watchTapWord(ci, wi) {
+  if (READER_MODE) {
+    const around = [WCUES[ci - 1], WCUES[ci], WCUES[ci + 1]]
+      .filter(c => c && c.text).map(c => c.text).join(' ');
+    openCardModal({ id: WCUES[ci].lineId || null, text: around, start_time: null },
+                  WCUES[ci].words[wi].t);
+    if (MODAL) MODAL.watchCue = ci;
+    return;
+  }
   if (WP) { WP.pause(); wPausedForModal = true; }
   const around = [WCUES[ci - 1], WCUES[ci], WCUES[ci + 1]].filter(Boolean).map(c => c.text).join(' ');
   openCardModal({ id: null, text: around, start_time: hms(WCUES[ci].s) }, WCUES[ci].words[wi].t);
@@ -3178,7 +3249,7 @@ function markWordCarded(span) {
   const t = rnorm(stripPunct(span));
   const parts = new Set(t.split(/\s+/));
   const hit = txt => { const w = rnorm(stripPunct(txt)); return w === t || parts.has(w); };
-  document.querySelectorAll('#transcript .cw, #capOverlay .capw').forEach(sp => {
+  document.querySelectorAll('#transcript .cw, #capOverlay .capw, #readBody .rw').forEach(sp => {
     if (hit(sp.textContent)) sp.classList.add('has-card');
   });
   WCUES.forEach(c => (c.words || []).forEach(w => { if (hit(w.t)) w.c = true; }));
@@ -3393,7 +3464,96 @@ async function importFile(file) {
   } catch (e) { $('#addStatus').textContent = 'import failed: ' + e.message; }
 }
 
-/* --- reader --- */
+/* ================= reader (video-of-kind-text) ================= */
+async function openReader(id) {
+  READER_ID = id; CURRENT = id;
+  $('#listView').hidden = true; $('#detailView').hidden = true;
+  $('#readView').hidden = false; $('#tocPanel').hidden = true;
+  $('#readBody').innerHTML = SPINNER;
+  $('#readNav').hidden = true;
+  let d;
+  try { d = await api(`/videos/${id}/read`); idbPut('offline', 'r' + id, d).catch(() => {}); }
+  catch { d = await idbGet('offline', 'r' + id).catch(() => null); }
+  if (!d) { $('#readBody').innerHTML = '<div class="empty">couldn’t load this text</div>'; return; }
+  $('#rTitle').textContent = d.video.title || 'Reading';
+  READER_MODE = true;
+  READER_CH = d.chapters || [];
+  WCANDS = d.cands || {};
+  WCUES = (d.blocks || []).map(b => b.h != null
+    ? { heading: b.h }
+    : { words: b.w, text: (b.w || []).map(x => x.t).join(' '), lineId: b.line_id });
+  applyReadFont();
+  renderReaderBody();
+  renderReaderToc();
+  const b = $('#readBody');
+  let sc = 0; try { sc = +localStorage.getItem('rdscroll:' + id) || 0; } catch {}
+  requestAnimationFrame(() => { b.scrollTop = sc * (b.scrollHeight - b.clientHeight); updateReadProg(); });
+}
+function renderReaderBody() {
+  const box = $('#readBody');
+  box.innerHTML = '';
+  WCUES.forEach((blk, i) => {
+    if (blk.heading != null) {
+      const h = document.createElement('h3');
+      h.className = 'rh'; h.dataset.ci = i; h.textContent = blk.heading;
+      box.appendChild(h); return;
+    }
+    const p = document.createElement('p'); p.className = 'rp';
+    (blk.words || []).forEach((w, wi) => {
+      const sp = document.createElement('span');
+      sp.className = 'rw' + (w.c ? ' has-card' : (w.p ? ' pending' : ''));
+      if (w.p) sp.dataset.cand = w.p;
+      sp.dataset.ci = i; sp.dataset.wi = wi;
+      sp.textContent = w.t;
+      sp.onclick = () => { if (Date.now() - _phraseDoneAt < 350) return; wordAction(w, sp, i, wi); };
+      p.append(sp, document.createTextNode(' '));
+    });
+    box.appendChild(p);
+  });
+  box.onscroll = () => { updateReadProg(); saveReadScrollSoon(); };
+  attachTranscriptSelect(box);
+}
+function renderReaderToc() {
+  const list = $('#tocList');
+  list.innerHTML = '';
+  if (!READER_CH.length) { $('#tocPanel').querySelector('.toc-head').textContent = 'Chapters'; return; }
+  READER_CH.forEach(c => {
+    const b = document.createElement('button');
+    b.textContent = c.title;
+    b.onclick = () => {
+      $('#tocPanel').hidden = true;
+      const el = $('#readBody').querySelector(`.rh[data-ci="${c.block}"]`);
+      if (el) el.scrollIntoView({ block: 'start' });
+    };
+    list.appendChild(b);
+  });
+}
+function updateReadProg() {
+  const b = $('#readBody');
+  const max = b.scrollHeight - b.clientHeight;
+  $('#rFill').style.width = (max > 0 ? (b.scrollTop / max * 100) : 0).toFixed(1) + '%';
+}
+let _rdScrollT = null;
+function saveReadScrollSoon() { clearTimeout(_rdScrollT); _rdScrollT = setTimeout(saveReadScroll, 400); }
+function saveReadScroll() {
+  if (!READER_MODE || !READER_ID) return;
+  const b = $('#readBody'); const max = b.scrollHeight - b.clientHeight;
+  const frac = max > 0 ? b.scrollTop / max : 0;
+  try {
+    localStorage.setItem('rdscroll:' + READER_ID, String(frac));
+    localStorage.setItem('rdpos:' + READER_ID, String(Math.round(frac * 100)));
+  } catch {}
+}
+function closeReaderNew() {
+  saveReadScroll();
+  const id = READER_ID;
+  READER_MODE = false; WCUES = []; WCANDS = {}; READER_ID = null;
+  $('#readView').hidden = true; $('#tocPanel').hidden = true;
+  if (id) openDetail(id);          // back to the text's page (suggestions / review)
+  else { $('#listView').hidden = false; loadVideos(); }
+}
+
+/* --- legacy paste/epub reader --- */
 async function openText(id) {
   let meta;
   try { meta = await api('/texts/' + id); }
@@ -3403,12 +3563,13 @@ async function openText(id) {
            restore: rp.frac || 0 };
   $('#listView').hidden = true; $('#detailView').hidden = true;
   $('#readView').hidden = false;
-  $('#tocPanel').hidden = true;
+  $('#tocPanel').hidden = true; $('#readNav').hidden = false;
   $('#rTitle').textContent = meta.title || 'Reading';
   applyReadFont();
   await gotoChapter(READ.ch, true);
 }
 function closeReader() {
+  if (READER_MODE) return closeReaderNew();
   readSaveProgress();
   READ = null;
   $('#readView').hidden = true;
@@ -3496,7 +3657,7 @@ function readSaveProgress() {
 function toggleToc() {
   const p = $('#tocPanel');
   p.hidden = !p.hidden;
-  if (!p.hidden) renderToc();
+  if (!p.hidden) (READER_MODE ? renderReaderToc : renderToc)();
 }
 function renderToc() {
   if (!READ) return;
@@ -3527,6 +3688,16 @@ function markReadCarded(spanText) {
   });
 }
 async function deleteText() {
+  if (READER_MODE) {
+    if (!confirm(`Remove “${$('#rTitle').textContent}” from your library?\n\nStudy cards you already made are kept.`)) return;
+    const id = READER_ID;
+    try { await api('/videos/' + id, { method: 'DELETE' }); } catch (e) { toast('couldn’t remove: ' + e.message); return; }
+    try { localStorage.removeItem('rdscroll:' + id); localStorage.removeItem('rdpos:' + id); } catch {}
+    READER_MODE = false; READER_ID = null; WCUES = []; CURRENT = null;
+    $('#tocPanel').hidden = true; $('#readView').hidden = true; $('#listView').hidden = false;
+    loadVideos();
+    return;
+  }
   if (!READ) return;
   if (!confirm(`Remove “${READ.meta.title}” from your library?\n\nCards you already made stay in Anki.`)) return;
   const id = READ.id;
@@ -4030,8 +4201,8 @@ addEventListener('popstate', () => { navBack(); try { history.pushState({ ru: 1 
 
 /* ---------------- boot ---------------- */
 // belt-and-suspenders: full-screen overlays must never be left showing
-['#studyView', '#statsView', '#cardsView'].forEach(s => { const e = $(s); if (e) e.hidden = true; });
-if (!READING_ENABLED) ['#readView', '#pasteWrap', '#tocPanel'].forEach(s => { const e = $(s); if (e) e.hidden = true; });
+['#studyView', '#statsView', '#cardsView', '#readView', '#pasteWrap', '#tocPanel']
+  .forEach(s => { const e = $(s); if (e) e.hidden = true; });
 
 if ('serviceWorker' in navigator) {
   let reloading = false;

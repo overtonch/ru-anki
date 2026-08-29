@@ -34,6 +34,7 @@ import srs  # noqa: E402
 import whisper_rt  # noqa: E402
 import store  # noqa: E402
 import subs  # noqa: E402
+import web  # noqa: E402
 import ytdlp  # noqa: E402
 
 store.init_db()
@@ -1312,25 +1313,16 @@ def search(video_id: int, q: str, limit: int = 40):
 _CYR = _re.compile(r"[А-Яа-яЁё]")
 
 
-@app.get("/videos/{video_id}/watch")
-def watch(video_id: int):
-    """Cues with real start/end seconds + per-word "do I have a card for this"
-    flags (lemmatised server-side). Feeds the in-app player."""
-    v = store.get_video(video_id)
-    if not v:
-        raise HTTPException(404, "no such video")
-    cues = subs.caption_cues(v["raw_subs"])
+def _word_flagger(video_id):
+    """-> (flag(text) -> [word dict], pend_rows). Shared by /watch and /read."""
     have = store.card_lemmas() | store.known_family_lemmas()
-    glosses = store.carded_glosses()                 # {lemma: translation}
+    glosses = store.carded_glosses()
     pend_rows = store.list_candidates(video_id, status="pending")
     pending = {r["normalized_text"]: r["id"]
                for r in pend_rows if r.get("normalized_text")}
-    decided = store.video_decided_lemmas(video_id)   # {lemma: {id,status,note_id}}
-    out = []
-    for cue in cues:
-        # ё -> е in the displayed transcript: reading practice happens without
-        # accent marks. The real spelling lives on the card + word page.
-        text = cue["text"].replace("ё", "е").replace("Ё", "Е")
+    decided = store.video_decided_lemmas(video_id)
+
+    def flag(text):
         words = []
         for tok in text.split():
             core = tok.strip(".,!?;:—–()«»\"'…-")
@@ -1345,10 +1337,31 @@ def watch(video_id: int):
                     w["p"] = pending[lem]
                 d = decided.get(lem)
                 if d and d["status"] == "card_created":
-                    w["cc"] = d["id"]        # carded via this candidate — undoable
+                    w["cc"] = d["id"]
                 elif d and d["status"] == "discarded":
-                    w["dd"] = d["id"]        # skipped — restorable
+                    w["dd"] = d["id"]
             words.append(w)
+        return words, len(have)
+
+    return flag, pend_rows
+
+
+@app.get("/videos/{video_id}/watch")
+def watch(video_id: int):
+    """Cues with real start/end seconds + per-word "do I have a card for this"
+    flags (lemmatised server-side). Feeds the in-app player."""
+    v = store.get_video(video_id)
+    if not v:
+        raise HTTPException(404, "no such video")
+    cues = subs.caption_cues(v["raw_subs"])
+    flag, pend_rows = _word_flagger(video_id)
+    out = []
+    card_count = 0
+    for cue in cues:
+        # ё -> е in the displayed transcript: reading practice happens without
+        # accent marks. The real spelling lives on the card + word page.
+        text = cue["text"].replace("ё", "е").replace("Ё", "Е")
+        words, card_count = flag(text)
         out.append({"s": cue["s"], "e": cue["e"], "re": cue.get("re", cue["e"]),
                     "text": text, "words": words})
     return {
@@ -1356,7 +1369,40 @@ def watch(video_id: int):
                   ("id", "title", "channel", "url", "youtube_id", "duration",
                    "thumbnail_url")},
         "cues": out,
-        "card_count": len(have),
+        "card_count": card_count,
+        "cands": {r["id"]: {"span": r["span_text"], "tr": r["translation"],
+                            "freq": store.freq_hint(r["normalized_text"], r["is_phrase"])}
+                  for r in pend_rows},
+    }
+
+
+@app.get("/videos/{video_id}/read")
+def read_text(video_id: int):
+    """A kind='text' item as blocks for the reader: chapter headings + paragraphs
+    of per-word tap-to-card spans (same flags as /watch)."""
+    v = store.get_video(video_id)
+    if not v:
+        raise HTTPException(404, "no such video")
+    c = store.connect()
+    rows = c.execute("SELECT id, text FROM subtitle_lines WHERE video_id=? ORDER BY id",
+                     (video_id,)).fetchall()
+    c.close()
+    flag, pend_rows = _word_flagger(video_id)
+    blocks, chapters, cn = [], [], 0
+    for r in rows:
+        txt = (r["text"] or "")
+        if txt.startswith("## "):
+            cn += 1
+            title = txt[3:].strip()
+            chapters.append({"n": cn, "title": title, "block": len(blocks)})
+            blocks.append({"h": title})
+        else:
+            disp = txt.replace("ё", "е").replace("Ё", "Е")
+            words, _ = flag(disp)
+            blocks.append({"w": words, "line_id": r["id"]})
+    return {
+        "video": {k: v.get(k) for k in ("id", "title", "channel", "url")},
+        "chapters": chapters, "blocks": blocks,
         "cands": {r["id"]: {"span": r["span_text"], "tr": r["translation"],
                             "freq": store.freq_hint(r["normalized_text"], r["is_phrase"])}
                   for r in pend_rows},
@@ -1510,6 +1556,35 @@ def text_create(body: TextIn):
                          parsed["chapters"])
     backup.snapshot_async("add-text")
     return {"id": tid, "title": parsed["title"], "chapters": len(parsed["chapters"])}
+
+
+class UrlIn(BaseModel):
+    url: str
+    chapters: int | None = 5
+
+
+@app.post("/texts/from-url")
+def text_from_url(body: UrlIn):
+    """Import a web page (an online book chapter, an article) as a reading text.
+    Stored as a kind='text' video so extraction / cards / word pages apply."""
+    url = (body.url or "").strip()
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(422, "give a full http(s) URL")
+    try:
+        parsed = web.import_url(url, body.chapters or 5)
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"couldn’t fetch that page: {str(e)[:150]}")
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    if not any(ch.get("paragraphs") for ch in parsed["chapters"]):
+        raise HTTPException(422, "no readable text found on that page")
+    vid = store.add_reading_text(url, parsed["title"], parsed.get("author"),
+                                 parsed["chapters"])
+    backup.snapshot_async("import-text")
+    return {"id": vid, "kind": "text", "title": parsed["title"],
+            "author": parsed.get("author"),
+            "chapters": len(parsed["chapters"]),
+            "paragraphs": sum(len(ch.get("paragraphs") or []) for ch in parsed["chapters"])}
 
 
 @app.post("/texts/upload")
