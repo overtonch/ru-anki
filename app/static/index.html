@@ -2414,10 +2414,19 @@ function closeStudy() { $('#studyView').hidden = true; STUDY = null; refreshStud
 async function loadStudyQueue() {
   await flushSrs();
   let d, offline = false;
-  try { d = await api('/srs/queue'); idbPut('srsCache', 'queue', d).catch(() => {}); }
-  catch (e) {
-    d = await idbGet('srsCache', 'queue').catch(() => null);
+  try {
+    d = await api('/srs/queue');
+    idbPut('srsCache', 'queue', d).catch(() => {});
+    syncOfflineSRS();                          // refresh the offline bundle + clips
+  } catch (e) {
     offline = true;
+    const b = await idbGet('srsCache', 'bundle').catch(() => null);
+    if (b && b.cards) {
+      const now = new Date().toISOString();
+      d = { cards: b.cards.filter(c => c.is_new || (c.due && c.due <= now)) };
+    } else {
+      d = await idbGet('srsCache', 'queue').catch(() => null);
+    }
     if (!d) { $('#studyBody').innerHTML = `<div class="study-done"><div class="big">📡</div><div class="msg">offline</div><div class="sub">connect once to download your review queue</div></div>`; return; }
   }
   STUDY.offline = offline;
@@ -2426,6 +2435,39 @@ async function loadStudyQueue() {
   STUDY.i = 0;
   STUDY.total = STUDY.queue.length + STUDY.done;
   renderStudyCard();
+}
+
+const SRS_MEDIA_CACHE = 'ru-anki-srs-media';
+let _bundleSyncAt = 0, _bundleSyncing = false;
+/* Pull the next few days of due cards + their audio clips onto the device so a
+   review session runs with no connection. Safe to call often — throttled. */
+async function syncOfflineSRS(force) {
+  if (_bundleSyncing || !navigator.onLine) return;
+  if (!force && Date.now() - _bundleSyncAt < 15 * 60 * 1000) return;
+  _bundleSyncing = true;
+  try {
+    const b = await api('/srs/offline?days=2');
+    _bundleSyncAt = Date.now();
+    await idbPut('srsCache', 'bundle', b).catch(() => {});
+    const { cards: _c, media: _m, ...st } = b;
+    await idbPut('srsCache', 'stats', st).catch(() => {});
+    if (!('caches' in window)) return;
+    const cache = await caches.open(SRS_MEDIA_CACHE);
+    const want = new Set((b.media || []).slice(0, 200));   // ~100 cards, earliest-due first
+    const existing = await cache.keys();
+    const have = new Set(existing.map(r => { const u = new URL(r.url); return u.pathname + u.search; }));
+    for (const r of existing) {                 // drop clips we no longer need
+      const u = new URL(r.url); const k = u.pathname + u.search;
+      if (!want.has(k)) cache.delete(r);
+    }
+    let n = 0;
+    for (const u of want) {
+      if (have.has(u)) continue;
+      try { await cache.add(u); } catch {}
+      if (++n % 6 === 0) await sleep(120);
+    }
+  } catch { /* offline or server down — try again later */ }
+  finally { _bundleSyncing = false; }
 }
 
 async function flushSrs() {
@@ -2443,8 +2485,12 @@ async function flushSrs() {
 }
 
 function studyCard() { return STUDY && STUDY.queue[STUDY.i]; }
-function clipUrl(c) { return c && c.seconds != null && c.video_id != null
-  ? `/videos/${c.video_id}/clip?t=${Math.round(c.seconds)}&w=${encodeURIComponent(c.normalized_text || '')}` : null; }
+function clipUrl(c) {
+  if (!c) return null;
+  if (c.clip) return c.clip;                    // exact string the offline bundle pre-cached
+  return c.seconds != null && c.video_id != null
+    ? `/videos/${c.video_id}/clip?t=${Math.round(c.seconds)}&w=${encodeURIComponent(c.normalized_text || '')}` : null;
+}
 let STUDY_AUDIO_FIRST = (() => { try { return localStorage.getItem('studyAudioFirst') === '1'; } catch { return false; } })();
 function setAudioFirst(on) {
   STUDY_AUDIO_FIRST = on;
@@ -4486,7 +4532,7 @@ function paintNet() { probeHealth(); }
 
 function onReconnect() {
   flushQueue();
-  flushSrs().then(() => { refreshQueuePill(); refreshStudyBanner();
+  flushSrs().then(() => { refreshQueuePill(); refreshStudyBanner(); syncOfflineSRS(true);
     if (STUDY && !$('#studyView').hidden && STUDY.offline) loadStudyQueue(); });
   if (CURRENT && !$('#detailView').hidden) { renderOfflineRow(CURRENT); loadCandidates(true); }
 }
@@ -4623,6 +4669,8 @@ probeHealth();
 refreshQueuePill();
 flushQueue();
 loadVideos();
+setTimeout(() => syncOfflineSRS(), 4000);            // warm the offline review cache
+setInterval(() => { if (!document.hidden) syncOfflineSRS(); }, 30 * 60 * 1000);
 </script>
 </body>
 </html>

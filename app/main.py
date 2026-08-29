@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import traceback
+import urllib.parse as _urlparse
 
 import re as _re
 
@@ -1364,6 +1365,28 @@ def srs_edit_card(card_id: int, body: CardEditIn):
 def srs_queue(limit: int = 60):
     cards = srs.queue(limit=limit)
     return {"cards": [_study_card_view(c) for c in cards], **srs.stats()}
+
+
+@app.get("/srs/offline")
+def srs_offline(days: int = 2):
+    """Everything the phone needs to run review sessions with no connection for
+    the next `days`: the cards (with per-card `due` / `due_now`) and the list of
+    audio-clip + frame URLs to pre-download."""
+    b = srs.offline_bundle(days=max(0, min(14, days)))
+    cards, media = [], []
+    for c in b["cards"]:
+        v = _study_card_view(c)
+        v["due"] = c.get("due")
+        v["due_now"] = bool(c.get("due_now"))
+        if v.get("seconds") is not None and v.get("video_id") is not None:
+            t = round(v["seconds"])
+            w = _urlparse.quote(c.get("normalized_text") or "")
+            v["clip"] = f"/videos/{v['video_id']}/clip?t={t}&w={w}"
+            v["frame"] = f"/videos/{v['video_id']}/frame?t={t}"
+            media += [v["clip"], v["frame"]]
+        cards.append(v)
+    return {"generated_at": b["generated_at"], "days": b["days"],
+            "cards": cards, "media": media, **srs.stats()}
 
 
 @app.get("/srs/cards/{card_id}")

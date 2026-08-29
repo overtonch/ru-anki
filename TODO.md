@@ -36,6 +36,14 @@
   Constraint: the audio and the subtitles must be the SAME translation, not a
   dub script vs. a separately-made caption file.
 - (done) Local RU→EN dict (build_dict.py / WikDict) for instant glosses
+- (done 2026-08-29) **Offline SRS review — full, with audio** — `GET /srs/offline?days=2`
+  bundles the next 2 days of due cards (each with `due` / `due_now`) + the clip/
+  frame URLs. `syncOfflineSRS()` caches the bundle in idb and pre-downloads the
+  clips into a `ru-anki-srs-media` Cache (on boot, on Study open, on reconnect,
+  every 30 min). SW serves `/videos/*/clip` + `/videos/*/frame` cache-first and
+  slices byte ranges for offline `<audio>`. `loadStudyQueue` offline now uses the
+  bundle (filtered to actually-due) instead of the last plain queue snapshot.
+  Reviews still queue in `srsOut` → `/srs/reviews/flush` on reconnect.
 - (done 2026-08-29) **Delete video = choose keep-or-delete cards** — `videos.hidden`
   soft-delete. `DELETE /videos/{id}?cards=keep` archives (row + transcript stay,
   media freed, cards keep video_id/timestamp so jump/clip/occurrences work);

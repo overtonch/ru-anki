@@ -619,6 +619,36 @@ def _card_dict_from_plain(d):
     return d
 
 
+def offline_bundle(days=3):
+    """Every card that is due — or will come due within `days` — plus this
+    session's fresh-card budget, so the phone can run a full review session with
+    no connection. Each card carries its own `due` ISO + `due_now` so the client
+    can keep the not-yet-due ones cached (clips and all) and only surface them
+    when their time comes."""
+    c = store.connect()
+    now = _utc()
+    horizon = _iso(now + _dt.timedelta(days=max(0, days)))
+    now_i = _iso(now)
+    rows = [dict(r) for r in c.execute(
+        """SELECT * FROM srs_cards
+           WHERE suspended=0 AND last_review IS NOT NULL AND due <= :h
+           ORDER BY due ASC""", {"h": horizon})]
+    budget = max(0, new_per_day() - _new_introduced_today(c))
+    if budget:
+        rows += [dict(r) for r in c.execute(
+            """SELECT * FROM srs_cards
+               WHERE suspended=0 AND last_review IS NULL
+               ORDER BY created_at ASC, id ASC LIMIT ?""", (budget,))]
+    c.close()
+    out = []
+    for r in rows:
+        d = _card_dict_from_plain(r)
+        d["due_now"] = (d["last_review"] is None) or (d["due"] is not None
+                                                      and d["due"] <= now_i)
+        out.append(d)
+    return {"generated_at": now_i, "days": days, "cards": out}
+
+
 # ---------------------------------------------------------------- analytics
 
 def analytics(days=30):
