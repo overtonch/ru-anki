@@ -413,10 +413,10 @@
                         text-align:center; text-shadow:none; margin-top:.5rem; }
   #watchView.song-mode .watchhint { display:none; }
   #watchView.song-mode .transcript { padding:1rem 1.1rem 40vh; text-align:center; scroll-behavior:smooth; }
-  #watchView.song-mode .transcript .cue { font-size:1.16rem; line-height:1.7; color:var(--muted);
-                        padding:.5rem 2rem; opacity:.5; position:relative; }
+  #watchView.song-mode .transcript .cue { font-size:1.12rem; line-height:1.5; color:var(--muted);
+                        padding:.4rem 2rem; opacity:.5; position:relative; }
   #watchView.song-mode .transcript .cue.on { opacity:1; color:var(--fg); background:transparent;
-                        box-shadow:none; font-weight:650; font-size:1.32rem; }
+                        box-shadow:none; font-weight:650; font-size:1.24rem; }
   #watchView.song-mode .transcript .cue-ts { display:flex; align-items:center; justify-content:center;
                         position:absolute; left:.15rem; top:.2rem; bottom:.2rem; width:1.7rem;
                         padding:0; font-size:.62rem; color:var(--muted); opacity:.3;
@@ -783,12 +783,22 @@
   .study-rate button.good { border-color:rgba(67,176,114,.45); }
   .study-rate button.good .rl { color:var(--ok); }
   .study-rate button:active { background:var(--line-soft); }
-  .study-done { text-align:center; margin:auto; padding:2rem 1rem; }
+  .study-done { text-align:center; margin:auto; padding:2rem 1.1rem; max-width:22rem; }
   .study-done .big { font-size:2.4rem; }
   .study-done .msg { font-size:1.1rem; font-weight:600; margin-top:.6rem; }
   .study-done .sub { color:var(--muted); font-size:.85rem; margin-top:.4rem; }
-  .study-done .study-set { display:block; margin-top:1.1rem; font-size:.85rem; color:var(--fg-dim);
-                           text-decoration:none; }
+  .study-done .sd-stats { display:inline-block; margin-top:1.2rem; font-size:.86rem; color:var(--accent);
+                          background:none; border:0; cursor:pointer; text-decoration:underline; }
+  .sd-settings { margin-top:1.4rem; border:1px solid var(--line-soft); border-radius:var(--r);
+                 background:var(--card); overflow:hidden; text-align:left; }
+  .sd-row { display:flex; align-items:center; justify-content:space-between; gap:1rem;
+            padding:.7rem .9rem; font-size:.86rem; color:var(--fg-dim);
+            border-bottom:1px solid var(--line-soft); text-decoration:none; }
+  .sd-row:last-child { border-bottom:0; }
+  .sd-row input[type=number] { width:3.4rem; background:var(--card-2); border:1px solid var(--line);
+                 color:var(--fg); border-radius:.3rem; padding:.2rem .35rem; font:inherit; text-align:right; }
+  .sd-row input[type=checkbox] { width:1.1rem; height:1.1rem; accent-color:var(--accent); }
+  .sd-export { color:var(--accent); justify-content:center; }
   .study-done .study-set input { vertical-align:-.1em; margin-right:.4rem; }
   .wordbody { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:1rem 1.1rem 3rem; }
   .wordbody .w-hd { font-size:1.6rem; font-weight:750; }
@@ -2660,9 +2670,9 @@ function prefetchStudyNext() {
 
 function renderStudyCard() {
   const c = studyCard();
-  $('#studyUndo').disabled = !STUDY.history.length;
-  $('#studyDelete').disabled = !c;
-  $('#studyEdit').disabled = !c;
+  $('#studyUndo').hidden = false; $('#studyUndo').disabled = !STUDY.history.length;
+  $('#studyDelete').hidden = false; $('#studyDelete').disabled = !c;
+  $('#studyEdit').hidden = false; $('#studyEdit').disabled = !c;
   if (!c) return renderStudyDone();
   STUDY.revealed = false;
   STUDY.shownAt = Date.now();
@@ -2816,6 +2826,9 @@ function studyJump(videoId, secs) {
 function studyOpenWord(enc) { openWord(decodeURIComponent(enc)); }
 
 function renderStudyDone() {
+  $('#studyEdit').hidden = true;
+  $('#studyDelete').hidden = true;
+  $('#studyUndo').hidden = !(STUDY && STUDY.history.length);
   api('/srs/stats').then(s => {
     $('#studyProg').innerHTML = '';
     $('#studyBody').innerHTML = `
@@ -2823,16 +2836,17 @@ function renderStudyDone() {
         <div class="big">${STUDY.done ? '✅' : '🎉'}</div>
         <div class="msg">${STUDY.done ? STUDY.done + ' review' + (STUDY.done === 1 ? '' : 's') + ' done' : 'All caught up'}</div>
         <div class="sub">${s.due || 0} due · ${s.new || 0} new left today · ${s.total} cards total</div>
-        <button class="study-set" onclick="openStats()" style="background:none;border:0;cursor:pointer;text-decoration:underline;padding:0">📊 progress &amp; stats</button>
-        <label class="study-set">new cards per day
-          <input type="number" min="0" max="999" value="${s.new_per_day ?? 20}" id="npdInput"
-                 style="width:3.5rem;background:var(--card-2);border:1px solid var(--line);color:var(--fg);border-radius:.3rem;padding:.15rem .3rem"
-                 onchange="setNewPerDay(this.value)"></label>
-        <label class="study-set"><input type="checkbox" ${STUDY_AUDIO_FIRST ? 'checked' : ''}
-          onchange="setAudioFirst(this.checked)"> audio-first review (hide the sentence, play the line)</label>
-        <label class="study-set"><input type="checkbox" ${s.anki_dual_write ? 'checked' : ''}
-          onchange="setDualWrite(this.checked)"> also save new cards to Anki</label>
-        <a class="study-set" href="/srs/export" download>⬇ export .apkg</a>
+        <button class="sd-stats" onclick="openStats()">📊 progress &amp; stats</button>
+        <div class="sd-settings">
+          <label class="sd-row">new cards per day
+            <input type="number" min="0" max="999" value="${s.new_per_day ?? 20}"
+                   onchange="setNewPerDay(this.value)"></label>
+          <label class="sd-row"><span>audio-first review</span>
+            <input type="checkbox" ${STUDY_AUDIO_FIRST ? 'checked' : ''} onchange="setAudioFirst(this.checked)"></label>
+          <label class="sd-row"><span>also save new cards to Anki</span>
+            <input type="checkbox" ${s.anki_dual_write ? 'checked' : ''} onchange="setDualWrite(this.checked)"></label>
+          <a class="sd-row sd-export" href="/srs/export" download>⬇ export .apkg</a>
+        </div>
       </div>`;
   }).catch(() => { $('#studyBody').innerHTML = '<div class="study-done"><div class="big">✅</div></div>'; });
 }
