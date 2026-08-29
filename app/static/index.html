@@ -302,7 +302,7 @@
   .watch-cta { width:100%; margin:.4rem 0 .2rem; }
   #watchView { position:fixed; inset:0; background:var(--bg); z-index:15;
                display:flex; flex-direction:column; overflow:hidden; overscroll-behavior:none;
-               padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+               padding:0 0 env(safe-area-inset-bottom);
                touch-action:manipulation; }   /* no double-tap zoom in the player */
   html.watching, html.watching body { overflow:hidden; overscroll-behavior:none; }
   html.fs-black, html.fs-black body { background:#000; }
@@ -313,7 +313,7 @@
   #watchView .wctrls svg { fill:currentColor; }
   #watchView[hidden] { display:none; }
   .watchbar { display:flex; align-items:center; justify-content:space-between;
-              padding:.4rem .8rem; flex:none; }
+              padding:max(env(safe-area-inset-top), .5rem) .8rem .45rem; flex:none; }
   .speeds button { background:none; border:1px solid var(--line); color:var(--muted);
                    border-radius:.45rem; padding:.22rem .5rem; font-size:.76rem; margin-left:.3rem;
                    cursor:pointer; transition:border-color .15s, color .15s; }
@@ -390,9 +390,24 @@
   #watchView.song-mode #loopBtn { display:inline-flex; }
   #watchView.song-mode #audioBtn, #watchView.song-mode #fsBtn { display:none; }
   #loopBtn.on { background:var(--accent-soft); border-color:var(--accent); color:var(--fg); }
-  #watchView.song-mode .player-wrap { aspect-ratio:auto; height:min(34vh, 300px); }
-  #watchView.song-mode.audiomode #audioStage { gap:.6rem; }
-  #watchView.song-mode #audioStage img { width:min(46%, 190px); box-shadow:0 8px 30px rgba(0,0,0,.5); }
+  /* a clean "now playing" panel: art, then title/artist, then a live scrubber */
+  #watchView.song-mode .player-wrap { aspect-ratio:auto; height:auto; background:var(--bg);
+                        padding-bottom:3.4rem; }
+  #watchView.song-mode .cap-overlay, #watchView.song-mode .fs-exit,
+  #watchView.song-mode #seekFlash { display:none; }
+  #watchView.song-mode.audiomode #audioStage { position:relative; inset:auto; background:transparent;
+                        justify-content:flex-start; gap:.65rem; padding:.9rem 1.4rem .3rem; }
+  #watchView.song-mode #audioStage img { width:min(40vw, 158px); box-shadow:0 10px 34px rgba(0,0,0,.5);
+                        border-radius:.7rem; }
+  #watchView.song-mode #audioLabel { gap:.15rem; max-width:100%; }
+  #watchView.song-mode #audioTitle { font-size:1rem; font-weight:650; color:#fff;
+                        display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  #watchView.song-mode #audioSub { font-size:.82rem; color:var(--muted); }
+  #watchView.song-mode .scrubber { opacity:1; pointer-events:auto; background:transparent;
+                        padding:.5rem 1.4rem calc(.4rem + env(safe-area-inset-bottom)); }
+  #watchView.song-mode .scrub-track { background:rgba(255,255,255,.16); }
+  #watchView.song-mode .scrub-time { opacity:1; height:auto; color:var(--muted);
+                        text-align:center; text-shadow:none; margin-top:.5rem; }
   #watchView.song-mode .watchhint { display:none; }
   #watchView.song-mode .transcript { padding:1rem 1.1rem 40vh; text-align:center; scroll-behavior:smooth; }
   #watchView.song-mode .transcript .cue { font-size:1.16rem; line-height:1.7; color:var(--muted);
@@ -1001,7 +1016,10 @@
       <div id="seekFlash"></div>
       <div id="audioStage">
         <img id="audioArt" alt="">
-        <div class="audiolabel">🎧 background audio<span>lock the screen — it keeps playing</span></div>
+        <div class="audiolabel" id="audioLabel">
+          <b id="audioTitle">🎧 background audio</b>
+          <span id="audioSub">lock the screen — it keeps playing</span>
+        </div>
       </div>
       <button class="fs-exit" onclick="exitFs()" aria-label="exit full screen">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4v3a2 2 0 0 1-2 2H4M20 9h-3a2 2 0 0 1-2-2V4M4 15h3a2 2 0 0 1 2 2v3M15 20v-3a2 2 0 0 1 2-2h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -3252,8 +3270,18 @@ function mountAudio(src, at, isBlob) {
   clearInterval(capTimer); capTimer = setInterval(tick, 120);
   audioMode = true;
   $('#watchView').classList.add('audiomode');
-  const art = (WDATA && WDATA.video && WDATA.video.thumbnail_url) || '';
+  const v = (WDATA && WDATA.video) || {};
+  const art = v.thumbnail_url || '';
   if (art) $('#audioArt').src = art; else $('#audioArt').removeAttribute('src');
+  if (SONG_MODE) {
+    const full = v.title || '';
+    const dash = full.search(/\s[—–-]\s/);
+    $('#audioTitle').textContent = dash > 0 ? full.slice(dash).replace(/^\s[—–-]\s/, '') : full;
+    $('#audioSub').textContent = v.channel || (dash > 0 ? full.slice(0, dash) : '');
+  } else {
+    $('#audioTitle').textContent = '🎧 background audio';
+    $('#audioSub').textContent = 'lock the screen — it keeps playing';
+  }
   $('#capOverlay').textContent = '';
   if (WDATA) setupMediaSession(WDATA.video);
   bgAudio.play().catch(() => { onPlayState(false); });
@@ -3573,7 +3601,7 @@ function attachScrubber() {
   const down = e => {
     if (!WP || !WP.dur()) return;
     const onKnob = e.target === knob || (e.target.closest && e.target.closest('.scrub-knob'));
-    if (!onKnob && !scrubArmed) return;        // track only responds once armed
+    if (!onKnob && !scrubArmed && !SONG_MODE) return;   // video: track responds only once armed; song: always
     x0 = e.clientX; y0 = e.clientY; go = false;
     armScrub(true);
     scrubDragging = true; sc.classList.add('dragging');
@@ -3598,7 +3626,7 @@ function tick() {
   // fade the caption overlay out during a silent gap instead of leaving a line
   // hanging until the next one: real reading time + 1s grace, capped at 5.5s
   const cur = wActive >= 0 && WCUES[wActive];
-  if (cur && $('#capOverlay').textContent !== 'tap to play') {
+  if (cur && !SONG_MODE && $('#capOverlay').textContent !== 'tap to play') {
     const hold = Math.min(5.5, Math.max(2, (cur.re || cur.e) - cur.s + 1));
     const past = WP.time() > cur.s + hold;
     if (past && !capHidden) { renderCaption(-1); capHidden = true; }
@@ -3610,7 +3638,7 @@ function tick() {
   wActive = idx;
   capHidden = false;
   const c = $('#capOverlay');
-  if (c.textContent !== 'tap to play') renderCaption(idx);
+  if (!SONG_MODE && c.textContent !== 'tap to play') renderCaption(idx);
   const box = $('#transcript');
   box.querySelectorAll('.cue.on').forEach(e => e.classList.remove('on'));
   if (idx < 0) return;
