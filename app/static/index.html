@@ -1957,24 +1957,25 @@ async function confirmCard() {
 
   const watchCue = MODAL.watchCue;
 
-  // reader: post directly + refetch so the server's lemma-aware green is exact
+  // reader: green the tapped word NOW (class add on the span, no rebuild),
+  // then post + refetch so every inflected form catches up
   if (READER_MODE) {
     if (!navigator.onLine) { toast('connect to make cards while reading'); return; }
     const vid = READER_ID, lineId = MODAL.lineId ?? null;
     const sentence = pv ? pv.sentence : MODAL.sentence;
+    const tappedSpan = span;
     closeCardModal(false);
-    markWordCarded(pv ? pv.span_text : span); renderReaderBody();   // optimistic
-    try {
-      const r = await api(`/videos/${vid}/make-card`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ span, subtitle_line_id: lineId, sentence,
-          span_text: pv ? pv.span_text : null,
-          translation: pv ? pv.translation : null,
-          is_phrase: pv ? pv.is_phrase : null }) });
-      toast(`✓ ${r.span_text} — ${r.translation || ''}`);
-    } catch (e) { toast('couldn’t make card — ' + e.message, 3500); }
-    refreshReader();
-    refreshStudyBanner();
+    markWordCarded(tappedSpan);                       // instant, surface match
+    if (pv && pv.span_text) markWordCarded(pv.span_text);
+    api(`/videos/${vid}/make-card`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ span: tappedSpan, subtitle_line_id: lineId, sentence,
+        span_text: pv ? pv.span_text : null,
+        translation: pv ? pv.translation : null,
+        is_phrase: pv ? pv.is_phrase : null }),
+    }).then(r => { toast(`✓ ${r.span_text} — ${r.translation || ''}`);
+      refreshReader(); refreshStudyBanner(); })
+      .catch(e => toast('couldn’t make card — ' + e.message, 3500));
     return;
   }
 
