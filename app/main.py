@@ -1930,6 +1930,22 @@ def _translate_preview(video_id, span, subtitle_line_id=None, timestamp=None,
             "freq": store.freq_hint(store.lemma_key(span_text), is_phrase)}
 
 
+def _also_card_surface_lemma(tapped, span_text, is_phrase):
+    """The word as it sits in the text can lemmatise differently than the LLM's
+    citation form — archaic spelling (сбирался -> сбираться, not собираться),
+    a fused clitic, an OCR quirk. Record the surface form's lemma as carded too
+    so the reader / watch view actually turns it green (otherwise it reverts on
+    refresh and you card it again and again)."""
+    if is_phrase or not tapped:
+        return
+    try:
+        a, b = store.lemma_key(tapped.strip()), store.lemma_key((span_text or "").strip())
+        if a and a != b:
+            store.mark_carded(tapped)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _make_one_card(video_id, subtitle_line_id, span, timestamp=None, sentence=None,
                    span_text=None, translation=None, is_phrase=None):
     v = store.get_video(video_id)
@@ -1965,6 +1981,7 @@ def _make_one_card(video_id, subtitle_line_id, span, timestamp=None, sentence=No
         anki_result["sync_error"] = None
     store.resolve_candidate(cid, "yes",
                             note_id=(anki_result or {}).get("note_id"))
+    _also_card_surface_lemma(span, span_text, ph)
     _learn_family_async(store.lemma_key(span_text))
     return {"candidate_id": cid, "span_text": span_text, "is_phrase": ph,
             "translation": translation, "anki": anki_result, "srs_card": card,
@@ -2157,6 +2174,7 @@ def text_card(text_id: int, body: TextCardIn):
         is_phrase=ph, translation=translation, source_html=src,
         accented=acc, dict_accented=dacc, tags=["ru-anki", "reading"])
     store.mark_carded(span_text)
+    _also_card_surface_lemma(body.span, span_text, ph)
     _learn_family_async(store.lemma_key(span_text))
     backup.snapshot_async("text-card")
     return {"span_text": span_text, "translation": translation, "is_phrase": ph,
