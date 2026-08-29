@@ -449,6 +449,15 @@ def clean_sentences(word, excerpts, model=None):
     return [by_num.get(i + 1, "") for i in range(len(excerpts))]
 
 
+_PASSAGE_SYSTEM = """Translate the Russian passage into natural, fluent English. Output ONLY the English translation — no preamble, no notes, no the original text, no quotation marks."""
+
+
+def translate_passage(text, model=None):
+    """Straight RU->EN translation of a sentence / paragraph (comprehension check)."""
+    return _warm_or_oneshot(text.strip(), _PASSAGE_SYSTEM,
+                            model or TRANSLATE_MODEL, timeout=60).strip().strip('"')
+
+
 # ------------------------------------------------------------------ stress marks
 
 _ACCENT_SYSTEM = """You mark Russian lexical stress for a learner's flashcard hint.

@@ -379,6 +379,24 @@
   .transcript .cw.sel { background:var(--accent); color:#0b1016; box-shadow:none; }
 
   /* inline approve/deny popover for a suggested card, shown over the watch view */
+  #transSheet { position:fixed; inset:0; z-index:42; background:rgba(6,8,11,.55);
+                display:flex; align-items:flex-end; justify-content:center;
+                -webkit-backdrop-filter:blur(2px); backdrop-filter:blur(2px); }
+  #transSheet[hidden] { display:none; }
+  #transSheet .ts-card { width:100%; max-width:40rem; background:var(--card);
+                border:1px solid var(--line); border-bottom:0;
+                border-radius:1rem 1rem 0 0; padding:1.1rem 1.1rem calc(1.1rem + env(safe-area-inset-bottom));
+                animation:tsIn .2s ease; max-height:75vh; overflow-y:auto; }
+  @keyframes tsIn { from { transform:translateY(100%); } }
+  #transSheet .ts-ru { font-size:.95rem; line-height:1.6; color:var(--muted);
+                       border-left:2px solid var(--line); padding-left:.7rem; margin-bottom:.9rem; }
+  #transSheet .ts-en { font-size:1.12rem; line-height:1.6; color:var(--fg); min-height:1.4em;
+                       display:flex; gap:.5rem; align-items:baseline; flex-wrap:wrap; }
+  #transSheet .ts-btns { display:flex; gap:.5rem; margin-top:1.1rem; }
+  #transSheet .ts-btns button { flex:1; padding:.65rem; border-radius:var(--r-sm);
+                border:1px solid var(--line); background:var(--card-2); color:var(--fg-dim);
+                font-size:.9rem; cursor:pointer; }
+  #transSheet .ts-btns .ts-card-btn { color:var(--accent); border-color:rgba(90,150,220,.4); }
   #inlineDecide { position:fixed; z-index:40; max-width:min(78vw,300px);
                   background:var(--card); border:1px solid var(--line); border-radius:var(--r-sm);
                   box-shadow:var(--sh); padding:.65rem .7rem; }
@@ -885,6 +903,17 @@
     </div>
     <div class="watchhint">tap a word to card it · <span class="dot"></span> carded · <span class="dot y"></span> suggested · tap video to pause</div>
     <div id="transcript" class="transcript"></div>
+  </div>
+
+  <!-- passage translation sheet (drag-select a sentence to check understanding) -->
+  <div id="transSheet" hidden onclick="if(event.target===this)closeTransSheet()">
+    <div class="ts-card">
+      <div class="ts-ru" id="tsRu"></div>
+      <div class="ts-en" id="tsEn"><span class="spin"></span> translating…</div>
+      <div class="ts-btns">
+        <button class="ts-close" onclick="closeTransSheet()">done</button>
+      </div>
+    </div>
   </div>
 
   <!-- inline decide popover — top-level so it can float over the reader too -->
@@ -3192,17 +3221,25 @@ function attachTranscriptSelect(box) {
     const el = document.elementFromPoint(x, y);
     return el && el.closest ? el.closest(wc) : null;
   };
+  const reader = box.id === 'readBody';
   box.addEventListener('pointerdown', e => {
     const sp = e.target.closest && e.target.closest(wc);
     if (!sp) return;
-    _phraseSel = { a: sp, b: sp, x0: e.clientX, y0: e.clientY, active: false, pid: e.pointerId };
+    _phraseSel = { a: sp, b: sp, x0: e.clientX, y0: e.clientY, t0: Date.now(),
+                   active: false, pid: e.pointerId };
   });
   box.addEventListener('pointermove', e => {
     if (!_phraseSel) return;
     const dx = e.clientX - _phraseSel.x0, dy = e.clientY - _phraseSel.y0;
     if (!_phraseSel.active) {
-      if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { _phraseSel = null; return; }  // vertical scroll
-      if (Math.abs(dx) < 12) return;
+      const dt = Date.now() - _phraseSel.t0;
+      const fastVert = dt < 160 && Math.abs(dy) > 22 && Math.abs(dy) > Math.abs(dx) * 1.4;
+      // reader: only a quick vertical flick is "scroll" (so you can drag-select
+      // down across lines); transcript: any early-vertical move is scroll
+      if (reader ? fastVert : (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx))) {
+        _phraseSel = null; return;
+      }
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 12) return;
       _phraseSel.active = true;
       try { box.setPointerCapture(e.pointerId); } catch {}
     }
@@ -3252,8 +3289,13 @@ function clearPhraseSel() {
   _selBoxEl().querySelectorAll(_selWC() + '.sel').forEach(sp => sp.classList.remove('sel'));
 }
 function openPhraseCard(range) {
+  const raw = range.words.map(w => w.t).join(' ').replace(/\s+/g, ' ').trim();
+  if (range.words.length > 6) { openTransSheet(raw, range); return; }   // sentence → check
+  _phraseCard(range);
+}
+function _phraseCard(range) {
   const phrase = stripPunct(range.words.map(w => w.t).join(' ')).replace(/\s+/g, ' ').trim();
-  if (!phrase || phrase.split(' ').length > 8) { if (phrase) toast('that’s a lot of words — pick a shorter phrase', 2600); return; }
+  if (!phrase) return;
   if (WP && !READER_MODE) { WP.pause(); wPausedForModal = true; }
   const cs = range.startCi, ce = range.endCi;
   const around = [WCUES[cs - 1], ...WCUES.slice(cs, ce + 1), WCUES[ce + 1]]
@@ -3261,6 +3303,30 @@ function openPhraseCard(range) {
   openCardModal({ id: READER_MODE ? (WCUES[cs].lineId || null) : null, text: around,
                   start_time: READER_MODE ? null : hms(WCUES[cs].s) }, phrase);
   if (MODAL) MODAL.watchCue = cs;
+}
+
+/* ---- passage translation (comprehension check) ---- */
+let _transRange = null;
+function openTransSheet(ruText, range) {
+  _transRange = range;
+  $('#tsRu').textContent = ruText;
+  $('#tsEn').innerHTML = '<span class="spin"></span> translating…';
+  const btns = $('#transSheet .ts-btns');
+  btns.innerHTML = (range && range.words.length <= 14
+      ? '<button class="ts-card-btn" onclick="transToCard()">✎ card</button>' : '')
+    + '<button class="ts-close" onclick="closeTransSheet()">done</button>';
+  $('#transSheet').hidden = false;
+  api('/translate/passage', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: ruText }),
+  }).then(d => { if (!$('#transSheet').hidden) $('#tsEn').textContent = d.translation || '(none)'; })
+    .catch(e => { if (!$('#transSheet').hidden) $('#tsEn').textContent = 'couldn’t translate — ' + e.message; });
+}
+function closeTransSheet() { $('#transSheet').hidden = true; _transRange = null; }
+function transToCard() {
+  const r = _transRange;
+  closeTransSheet();
+  if (r) _phraseCard({ ...r, words: r.words.slice(0, 10) });
 }
 function watchTapWord(ci, wi) {
   if (READER_MODE) {
@@ -4199,6 +4265,7 @@ async function hardRefresh() {
 
 // step back one level through the app's views; returns true if it did something
 function navBack() {
+  if (!$('#transSheet').hidden) { closeTransSheet(); return true; }
   if (!$('#inlineDecide').hidden) { closeInline(true); return true; }
   if (!$('#wordView').hidden) { closeWord(); return true; }
   if (!$('#pasteWrap').hidden) { closePaste(); return true; }
@@ -4248,7 +4315,7 @@ addEventListener('popstate', () => { navBack(); try { history.pushState({ ru: 1 
 
 /* ---------------- boot ---------------- */
 // belt-and-suspenders: full-screen overlays must never be left showing
-['#studyView', '#statsView', '#cardsView', '#readView', '#pasteWrap', '#tocPanel']
+['#studyView', '#statsView', '#cardsView', '#readView', '#pasteWrap', '#tocPanel', '#transSheet']
   .forEach(s => { const e = $(s); if (e) e.hidden = true; });
 
 if ('serviceWorker' in navigator) {

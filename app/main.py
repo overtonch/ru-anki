@@ -1288,6 +1288,21 @@ def get_settings():
             "new_per_day": srs.new_per_day()}
 
 
+class PassageIn(BaseModel):
+    text: str
+
+
+@app.post("/translate/passage")
+def translate_passage_ep(body: PassageIn):
+    t = (body.text or "").strip()
+    if len(t) < 3:
+        raise HTTPException(422, "nothing to translate")
+    try:
+        return {"translation": llm.translate_passage(t[:4000])}
+    except llm.LLMError as e:
+        raise HTTPException(502, f"translation failed: {e}")
+
+
 @app.post("/settings")
 def post_settings(body: SettingIn):
     if body.key == "anki_dual_write":
