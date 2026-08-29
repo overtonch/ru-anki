@@ -834,6 +834,9 @@
       -webkit-user-select:none; user-select:none; }
   .readbody.selecting .rw:active, #transcript.selecting .cw:active { background:none; }
   .readbody .rw.sel, .transcript .cw.sel { transition:background .06s; }
+  /* while selecting in song mode, un-dim every line so you can see the range */
+  #watchView.song-mode .transcript.selecting .cue { opacity:.9; }
+  #watchView.song-mode .transcript.selecting .cue .cw.sel { color:#0b1016; }
   .readbody .rh { font-weight:750; font-size:1.05em; margin:1.4em 0 .7em; display:block; color:var(--muted);
                   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
                   letter-spacing:.02em; }
@@ -3698,6 +3701,8 @@ function attachTranscriptSelect(box) {
       _phraseSel.active = true;
       try { box.setPointerCapture(e.pointerId); } catch {}
       box.classList.add('selecting');
+      pauseForWordwork();                 // stop the lyrics/video moving under the finger
+      wUserScroll = Date.now();           // and freeze the auto-scroll
       try { navigator.vibrate && navigator.vibrate(12); } catch {}
       paintPhraseSel();
     }, 380);
@@ -3711,6 +3716,7 @@ function attachTranscriptSelect(box) {
       return;
     }
     e.preventDefault();
+    wUserScroll = Date.now();            // keep the list still while dragging
     const sp = wordAt(e.clientX, e.clientY);
     if (sp && sp !== _phraseSel.b) { _phraseSel.b = sp; paintPhraseSel(); }
   }, { passive: false });
@@ -3726,7 +3732,7 @@ function attachTranscriptSelect(box) {
     clearPhraseSel();
     _phraseSel = null;
     _phraseDoneAt = Date.now();          // swallow the trailing click
-    if (!range || !range.words.length) return;
+    if (!range || !range.words.length) { resumeAfterWordwork(); return; }
     if (range.words.length >= 2) { openPhraseCard(range); return; }
     const { ci, wi } = range.words[0];   // single word held → same as tapping it
     const w = (WCUES[ci] && WCUES[ci].words || [])[wi];
@@ -3734,7 +3740,7 @@ function attachTranscriptSelect(box) {
     if (w && el) wordAction(w, el, ci, wi);
   };
   box.addEventListener('pointerup', end);
-  box.addEventListener('pointercancel', stop);
+  box.addEventListener('pointercancel', () => { stop(); resumeAfterWordwork(); });
   // iOS derives pointer events from touch events and won't always honour
   // preventDefault on pointermove — block the scroll at the touch level too.
   box.addEventListener('touchmove', e => {
@@ -3765,6 +3771,16 @@ function paintPhraseSel() {
 function clearPhraseSel() {
   _selBoxEl().querySelectorAll(_selWC() + '.sel').forEach(sp => sp.classList.remove('sel'));
 }
+/* pause the video/song while the user works with a word or phrase — so the
+   lyrics/transcript stop scrolling under the finger. Uses the same flag the
+   card modal / inline popover already resume from. */
+function pauseForWordwork() {
+  if (WP && !READER_MODE && !WP.paused()) { try { WP.pause(); } catch {} wPausedForModal = true; }
+}
+function resumeAfterWordwork() {
+  if (wPausedForModal && WP) { wPausedForModal = false; try { WP.play(); } catch {} }
+}
+
 function openPhraseCard(range) {
   const raw = range.words.map(w => w.t).join(' ').replace(/\s+/g, ' ').trim();
   if (range.words.length > 6) { openTransSheet(raw, range); return; }   // sentence → check
@@ -3789,6 +3805,7 @@ function lyricKey(i) { return `${CURRENT}:${i}`; }
 function lyricCached(i) { return !!LYRIC_NOTES[lyricKey(i)]; }
 async function openLyricSheet(i) {
   _lyIdx = i;
+  pauseForWordwork();                   // stop the song while reading the line
   const cue = WCUES[i] || {};
   const ru = $('#lyRu');
   ru.innerHTML = '';
@@ -3831,18 +3848,18 @@ function renderLyric(d) {
     `<button class="ts-card-btn" onclick="lyricToCard()">✎ card from line</button>` +
     `<button onclick="closeLyricSheet()">done</button>`;
 }
-function closeLyricSheet() { $('#lyricSheet').hidden = true; _lyIdx = null; }
+function closeLyricSheet() { $('#lyricSheet').hidden = true; _lyIdx = null; resumeAfterWordwork(); }
 function lyricToCard() {
   const i = _lyIdx;
-  closeLyricSheet();
+  $('#lyricSheet').hidden = true; _lyIdx = null;
   const cue = WCUES[i];
-  if (!cue || !cue.words) return;
+  if (!cue || !cue.words) { resumeAfterWordwork(); return; }
   _phraseCard({ words: cue.words.slice(0, 12), startCi: i, endCi: i });
 }
 function lyricWordCard(wi) {
   const i = _lyIdx;
-  closeLyricSheet();
-  if (i == null || !WCUES[i] || !(WCUES[i].words || [])[wi]) return;
+  $('#lyricSheet').hidden = true; _lyIdx = null;   // stay paused — the card modal will resume
+  if (i == null || !WCUES[i] || !(WCUES[i].words || [])[wi]) { resumeAfterWordwork(); return; }
   watchTapWord(i, wi);            // same flow as tapping the word in the lyrics
 }
 
@@ -3863,11 +3880,12 @@ function openTransSheet(ruText, range) {
   }).then(d => { if (!$('#transSheet').hidden) $('#tsEn').textContent = d.translation || '(none)'; })
     .catch(e => { if (!$('#transSheet').hidden) $('#tsEn').textContent = 'couldn’t translate — ' + e.message; });
 }
-function closeTransSheet() { $('#transSheet').hidden = true; _transRange = null; }
+function closeTransSheet() { $('#transSheet').hidden = true; _transRange = null; resumeAfterWordwork(); }
 function transToCard() {
   const r = _transRange;
-  closeTransSheet();
+  $('#transSheet').hidden = true; _transRange = null;   // stay paused for the card modal
   if (r) _phraseCard({ ...r, words: r.words.slice(0, 10) });
+  else resumeAfterWordwork();
 }
 function watchTapWord(ci, wi) {
   if (READER_MODE) {
