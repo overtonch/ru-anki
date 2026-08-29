@@ -396,16 +396,21 @@
   #watchView.song-mode .watchhint { display:none; }
   #watchView.song-mode .transcript { padding:1rem 1.1rem 40vh; text-align:center; scroll-behavior:smooth; }
   #watchView.song-mode .transcript .cue { font-size:1.16rem; line-height:1.7; color:var(--muted);
-                        padding:.5rem .4rem; opacity:.5; }
+                        padding:.5rem 2rem; opacity:.5; position:relative; }
   #watchView.song-mode .transcript .cue.on { opacity:1; color:var(--fg); background:transparent;
                         box-shadow:none; font-weight:650; font-size:1.32rem; }
-  #watchView.song-mode .transcript .cue-ts { display:none; }
+  #watchView.song-mode .transcript .cue-ts { display:flex; align-items:center; justify-content:center;
+                        position:absolute; left:.15rem; top:.2rem; bottom:.2rem; width:1.7rem;
+                        padding:0; font-size:.62rem; color:var(--muted); opacity:.3;
+                        transition:opacity .15s, color .15s; }
+  #watchView.song-mode .transcript .cue.on .cue-ts { opacity:.85; color:var(--accent); }
+  #watchView.song-mode .transcript .cue-ts:active { opacity:1; transform:scale(.86); }
   #watchView.song-mode .transcript .cw { padding:.04em .1em; }
-  #watchView.song-mode .transcript .cue { position:relative; }
   .ly-icon { display:none; }
   #watchView.song-mode .transcript .cue .ly-icon {
-      display:inline-block; margin-left:.4rem; font-size:.82rem; opacity:.32;
-      background:none; border:0; cursor:pointer; vertical-align:.06em;
+      display:flex; align-items:center; justify-content:center;
+      position:absolute; right:.1rem; top:.2rem; bottom:.2rem; width:1.7rem;
+      font-size:.82rem; opacity:.28; background:none; border:0; cursor:pointer;
       -webkit-tap-highlight-color:transparent; transition:opacity .15s, transform .1s; }
   #watchView.song-mode .transcript .cue.on .ly-icon { opacity:.7; }
   .ly-icon:active { transform:scale(.85); }
@@ -3596,8 +3601,10 @@ function renderTranscript() {
     const line = document.createElement('div');
     line.className = 'cue'; line.dataset.i = i;
     const ts = document.createElement('button');
-    ts.className = 'cue-ts'; ts.textContent = fmtTime(cue.s);
-    ts.onclick = () => { if (WP) { WP.seek(cue.s); WP.play(); } };
+    ts.className = 'cue-ts';
+    ts.textContent = SONG_MODE ? '▶' : fmtTime(cue.s);
+    if (SONG_MODE) ts.setAttribute('aria-label', 'jump to this line');
+    ts.onclick = e => { e.stopPropagation(); if (WP) { WP.seek(cue.s); WP.play(); } };
     line.appendChild(ts);
     if (SONG_MODE) line.onclick = e => {
       if (e.target === line && WP) { WP.seek(cue.s); WP.play(); }
