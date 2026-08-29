@@ -508,6 +508,7 @@
   #inlineDecide .id-yes { background:var(--yes); border-color:var(--yes); color:#08160d; }
   #inlineDecide .id-no  { background:transparent; border-color:var(--line); color:var(--fg-dim); }
   #inlineDecide .id-no:active { border-color:var(--no); color:var(--no); }
+  #inlineDecide .id-no.danger { border-color:color-mix(in srgb, var(--no) 45%, var(--line)); color:var(--no); }
   #inlineDecide .id-more { display:block; width:100%; margin-top:.5rem; background:none;
                            border:0; color:var(--accent); font-size:.76rem; cursor:pointer; text-align:left; }
 
@@ -616,6 +617,7 @@
   #readView, #wordView { position:fixed; inset:0; z-index:15; background:var(--bg);
               flex-direction:column;
               padding:var(--safe-top) 0 env(safe-area-inset-bottom); }
+  #wordView { z-index:16; }   /* opens on top of the reader (same-z DOM order would hide it) */
   #readView[hidden], #wordView[hidden] { display:none; }
   #readView:not([hidden]), #wordView:not([hidden]) { display:flex; }
 
@@ -4274,6 +4276,24 @@ function _openInlinePop(anchor, span, sub, freqHtml, btns, acc) {
 }
 
 /* ---- inline approve/deny for a suggested (pending) card ---- */
+/* async top-up for the inline popover: put the stressed form on the headword
+   (and a dict form if it differs) + the translation, when the sync data that
+   opened the pop didn't already carry them. No-ops if the pop closed / changed. */
+function _hydrateInlinePop(word, stillOpen, haveTr, haveAcc) {
+  if (haveTr && haveAcc) return;
+  const clean = String(word || '').replace(/^[^А-Яа-яЁёA-Za-z-]+|[^А-Яа-яЁёA-Za-z-]+$/g, '');
+  if (!clean) return;
+  api('/words/' + encodeURIComponent(clean)).then(d => {
+    if (!stillOpen()) return;
+    if (!haveTr) { const t = d && (d.translation || d.gloss); if (t) $('#idTr').textContent = '— ' + t; }
+    if (haveAcc || !d) return;
+    if (d.accented) { $('#idSpan').textContent = d.accented; $('#idDict').hidden = true; return; }
+    api('/words/' + encodeURIComponent(d.lemma || clean) + '/accent', { method: 'POST' })
+      .then(r => { if (r && r.accented && stillOpen()) { $('#idSpan').textContent = r.accented; $('#idDict').hidden = true; } })
+      .catch(() => {});
+  }).catch(() => {});
+}
+
 function inlineDecide(candId, anchor) {
   const cand = WCANDS[candId];
   if (!cand) {
@@ -4286,7 +4306,10 @@ function inlineDecide(candId, anchor) {
   _openInlinePop(anchor, cand.span, cand.tr ? '— ' + cand.tr : '',
     fq && fq.label ? `<span class="fq ${fq.band || ''}">${escapeHtml(fq.label)}</span>` : '',
     `<button class="id-no" onclick="inlineCommit('no')">✕ skip</button>
-     <button class="id-yes" onclick="inlineCommit('yes')">✓ add card</button>`);
+     <button class="id-yes" onclick="inlineCommit('yes')">✓ add card</button>`,
+    { s: cand.acc });
+  _hydrateInlinePop(cand.span, () => !$('#inlineDecide').hidden && $('#inlineDecide').dataset.cand == candId,
+    !!cand.tr, !!cand.acc);
 }
 
 /* ---- undo a card / skip made while watching ---- */
@@ -4294,19 +4317,15 @@ function inlineUndo(candId, anchor, kind, tr, acc) {
   const word = anchor.textContent.replace(/^[^А-Яа-яЁёA-Za-z-]+|[^А-Яа-яЁёA-Za-z-]+$/g, '');
   $('#inlineDecide').dataset.cand = candId;
   const fallback = kind === 'carded' ? '— you have a card for this' : '— you skipped this';
-  _openInlinePop(anchor, word, tr ? '— ' + tr : fallback, '',
-    `<button class="id-no" onclick="closeInline(true)">keep</button>
-     <button class="id-yes" onclick="inlineUndoCommit('${kind}')">${kind === 'carded' ? 'remove card' : 'add back to review'}</button>`,
-    acc);
-  if ((!tr || !(acc && (acc.s || acc.d)))) api('/words/' + encodeURIComponent(word)).then(d => {
-    if ($('#inlineDecide').hidden || $('#inlineDecide').dataset.cand != candId) return;
-    const t = d && (d.translation || d.gloss);
-    if (!tr && t) $('#idTr').textContent = '— ' + t;
-    if (!(acc && (acc.s || acc.d)) && d && d.accented) {
-      $('#idSpan').textContent = d.accented;
-      $('#idDict').hidden = true;
-    }
-  }).catch(() => {});
+  const btns = kind === 'carded'
+    // destructive action stays subdued + left; "keep" is the safe default (primary, right)
+    ? `<button class="id-no danger" onclick="inlineUndoCommit('carded')">remove card</button>
+       <button class="id-yes" onclick="closeInline(true)">keep</button>`
+    : `<button class="id-no" onclick="closeInline(true)">keep skipped</button>
+       <button class="id-yes" onclick="inlineUndoCommit('skipped')">back to review</button>`;
+  _openInlinePop(anchor, word, tr ? '— ' + tr : fallback, '', btns, acc);
+  _hydrateInlinePop(word, () => !$('#inlineDecide').hidden && $('#inlineDecide').dataset.cand == candId,
+    !!tr, !!(acc && (acc.s || acc.d)));
 }
 async function inlineUndoCommit(kind) {
   const id = +$('#inlineDecide').dataset.cand;
@@ -4320,7 +4339,8 @@ async function inlineUndoCommit(kind) {
     if (wPausedForModal && WP) { wPausedForModal = false; try { WP.play(); } catch {} }
     return;
   }
-  WCANDS[id] = { span: cand.span_text, tr: cand.translation, freq: WCANDS[id] && WCANDS[id].freq };
+  WCANDS[id] = { span: cand.span_text, tr: cand.translation,
+                 acc: WCANDS[id] && WCANDS[id].acc, freq: WCANDS[id] && WCANDS[id].freq };
   WCUES.forEach(cue => (cue.words || []).forEach(w => {
     if (w.cc === id || w.dd === id) { delete w.cc; delete w.dd; w.c = false; w.p = id; }
   }));

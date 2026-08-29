@@ -1831,6 +1831,7 @@ def watch(video_id: int):
         "cues": out,
         "card_count": card_count,
         "cands": {r["id"]: {"span": r["span_text"], "tr": r["translation"],
+                            "acc": store.accent_for(r["normalized_text"]),
                             "freq": store.freq_hint(r["normalized_text"], r["is_phrase"])}
                   for r in pend_rows},
     }
@@ -1864,6 +1865,7 @@ def read_text(video_id: int):
         "video": {k: v.get(k) for k in ("id", "title", "channel", "url")},
         "chapters": chapters, "blocks": blocks,
         "cands": {r["id"]: {"span": r["span_text"], "tr": r["translation"],
+                            "acc": store.accent_for(r["normalized_text"]),
                             "freq": store.freq_hint(r["normalized_text"], r["is_phrase"])}
                   for r in pend_rows},
     }
