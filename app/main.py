@@ -1541,6 +1541,37 @@ def translate_passage_ep(body: PassageIn):
         raise HTTPException(502, f"translation failed: {e}")
 
 
+class LyricIn(BaseModel):
+    index: int
+    refresh: bool = False
+
+
+@app.post("/songs/{video_id}/explain")
+def explain_lyric_line(video_id: int, body: LyricIn):
+    """Deep read of one lyric line — translation + what's being expressed +
+    wordplay / entendres / references — in the context of the whole song.
+    Memoised per (song, line)."""
+    v = store.get_video(video_id)
+    if not v:
+        raise HTTPException(404, "no such song")
+    cues = subs.caption_cues(v["raw_subs"])          # same list the player indexes
+    lines = [c["text"] for c in cues]
+    if not (0 <= body.index < len(lines)):
+        raise HTTPException(422, "line index out of range")
+    if not body.refresh:
+        hit = store.lyric_note_get(video_id, body.index)
+        if hit:
+            return {**hit, "index": body.index, "line": lines[body.index], "cached": True}
+    try:
+        out = llm.explain_lyric(lines[body.index], "\n".join(lines),
+                                title=v.get("title") or "", artist=v.get("channel") or "")
+    except llm.LLMError as e:
+        raise HTTPException(502, f"couldn’t explain that line: {e}")
+    if out.get("translation") or out.get("gist"):
+        store.lyric_note_set(video_id, body.index, out)
+    return {**out, "index": body.index, "line": lines[body.index], "cached": False}
+
+
 @app.post("/settings")
 def post_settings(body: SettingIn):
     if body.key == "anki_dual_write":

@@ -58,6 +58,17 @@ CREATE TABLE IF NOT EXISTS word_gloss (
     made_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- Deep line-by-line lyric explanations (POST /songs/{id}/explain): translation +
+-- what's being expressed + wordplay / entendres / references, for one lyric line
+-- in the context of the whole song. Memoised so re-taps are instant and free.
+CREATE TABLE IF NOT EXISTS lyric_notes (
+    video_id   INTEGER NOT NULL,
+    line_index INTEGER NOT NULL,
+    payload    TEXT NOT NULL,
+    made_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (video_id, line_index)
+);
+
 -- Memoised output of the sentence-picker (GET /candidates/{id}/sentences): the
 -- LLM-cleaned + ranked flashcard-sentence options for one candidate. Dropped
 -- when the video's transcript changes or the candidate's sentence is edited.

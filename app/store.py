@@ -204,7 +204,7 @@ def delete_video(video_id):
     c.execute("UPDATE srs_cards SET candidate_id=NULL, video_id=NULL, timestamp=NULL "
               "WHERE video_id=? OR candidate_id IN "
               "(SELECT id FROM candidates WHERE video_id=?)", (video_id, video_id))
-    for tbl in ("candidate_sentences_cache",):
+    for tbl in ("candidate_sentences_cache", "lyric_notes"):
         try:
             c.execute(f"DELETE FROM {tbl} WHERE video_id=?", (video_id,))
         except sqlite3.OperationalError:
@@ -275,6 +275,7 @@ def replace_subtitle_lines(video_id, lines):
     c.close()
     _LEMMA_IDX.pop(video_id, None)          # transcript changed — drop the caches
     drop_sentence_cache(video_id=video_id)
+    drop_lyric_notes(video_id)
     return n
 
 
@@ -1280,6 +1281,40 @@ def drop_sentence_cache(video_id=None, cand_id=None):
         if video_id is not None:
             c.execute("DELETE FROM candidate_sentences_cache WHERE video_id=?",
                       (video_id,))
+        c.commit()
+    except sqlite3.OperationalError:
+        pass
+    c.close()
+
+
+def lyric_note_get(video_id, line_index):
+    c = connect()
+    try:
+        r = c.execute("SELECT payload FROM lyric_notes WHERE video_id=? AND line_index=?",
+                      (video_id, line_index)).fetchone()
+    except sqlite3.OperationalError:
+        r = None
+    c.close()
+    if not r:
+        return None
+    try:
+        return _json.loads(r["payload"])
+    except ValueError:
+        return None
+
+
+def lyric_note_set(video_id, line_index, payload):
+    c = connect()
+    c.execute("INSERT OR REPLACE INTO lyric_notes(video_id, line_index, payload) "
+              "VALUES(?,?,?)", (video_id, line_index, _json.dumps(payload)))
+    c.commit()
+    c.close()
+
+
+def drop_lyric_notes(video_id):
+    c = connect()
+    try:
+        c.execute("DELETE FROM lyric_notes WHERE video_id=?", (video_id,))
         c.commit()
     except sqlite3.OperationalError:
         pass

@@ -458,6 +458,37 @@ def translate_passage(text, model=None):
                             model or TRANSLATE_MODEL, timeout=60).strip().strip('"')
 
 
+_LYRIC_SYSTEM = """You explain ONE line of a Russian song to a B2/C1 learner who is studying the lyrics. You get the whole song for context and one TARGET LINE to explain.
+
+Songs pack meaning tightly and use words in marked, poetic or slangy ways, so go beyond a dictionary translation. Explain what THIS line is really doing.
+
+Output ONE raw JSON object, no code fence, nothing else:
+{
+  "translation": "a natural, faithful English rendering of the target line",
+  "gist": "1-3 sentences: what the speaker is actually saying/feeling here, the register and undertone (bragging, longing, defiance, irony, tenderness, threat, self-pity...), what they're boasting about or lamenting, who 'ты'/'они' refers to if the song makes it clear",
+  "notes": ["each string = ONE concrete callout about THIS line: a double/triple entendre or pun and both readings; an idiom or set phrase and its literal vs real meaning; slang / prison-slang / obscenity and its force; a word used in an unusual or archaic sense; a cultural, historical, literary or musical reference; a grammatical quirk that changes the meaning. Omit anything obvious. Empty list if the line is plain."]
+}
+
+Be specific and concise. Quote the Russian fragment you're discussing inside a note. Never pad. If the line is genuinely plain, give the translation, a one-line gist, and "notes": []."""
+
+
+def explain_lyric(target_line, full_lyrics, title="", artist="", model=None):
+    """Deep read of one lyric line in the context of the whole song ->
+    {"translation","gist","notes":[...]}. One headless call, memoised by caller."""
+    head = " — ".join(x for x in (artist, title) if x)
+    prompt = (f"SONG: {head}\n\nFULL LYRICS:\n{full_lyrics.strip()[:6000]}\n\n"
+              f"TARGET LINE:\n{target_line.strip()}")
+    text = _warm_or_oneshot(prompt, _LYRIC_SYSTEM, model or TRANSLATE_MODEL,
+                            timeout=90)
+    obj = _parse_obj(text)
+    notes = [str(n).strip() for n in (obj.get("notes") or []) if str(n).strip()]
+    return {
+        "translation": (obj.get("translation") or "").strip(),
+        "gist": (obj.get("gist") or "").strip(),
+        "notes": notes,
+    }
+
+
 # ------------------------------------------------------------------ stress marks
 
 _ACCENT_SYSTEM = """You mark Russian lexical stress for a learner's flashcard hint.

@@ -62,6 +62,11 @@
   Follow-ups: A–B loop for drilling a phrase; move LRCLIB-miss subtitle lookup
   off the request path; offline (OPFS) for songs; paste-your-own-lyrics;
   Spotify / Yandex Music links (need the same resolve-to-YouTube step).
+  - (done 2026-08-29) **Line-by-line deep read** — 💬 icon on each lyric line in
+    song mode → `POST /songs/{id}/explain {index}` → `llm.explain_lyric` (whole
+    song as context) → {translation, gist, notes[]} covering undertones / what
+    they're bragging about / double entendres / idioms / references. Memoised in
+    `lyric_notes`. Bottom sheet `#lyricSheet`, "✎ card from line".
 - (done) Reading feature — EPUB/txt/paste import, scroll reader, tap-to-card
 - (done) Non-YouTube video via yt-dlp (VK/RuTube/Dzen) + plain VTT/SRT subs
 - (done) Offline video + audio, OPFS + <video>, Media Session — needs device testing

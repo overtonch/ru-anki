@@ -394,17 +394,40 @@
                         box-shadow:none; font-weight:650; font-size:1.32rem; }
   #watchView.song-mode .transcript .cue-ts { display:none; }
   #watchView.song-mode .transcript .cw { padding:.04em .1em; }
+  #watchView.song-mode .transcript .cue { position:relative; }
+  .ly-icon { display:none; }
+  #watchView.song-mode .transcript .cue .ly-icon {
+      display:inline-block; margin-left:.4rem; font-size:.82rem; opacity:.32;
+      background:none; border:0; cursor:pointer; vertical-align:.06em;
+      -webkit-tap-highlight-color:transparent; transition:opacity .15s, transform .1s; }
+  #watchView.song-mode .transcript .cue.on .ly-icon { opacity:.7; }
+  .ly-icon:active { transform:scale(.85); }
+  .ly-icon.has { opacity:.8 !important; filter:saturate(1.3); }
 
   /* inline approve/deny popover for a suggested card, shown over the watch view */
-  #transSheet { position:fixed; inset:0; z-index:42; background:rgba(6,8,11,.55);
+  #transSheet, #lyricSheet { position:fixed; inset:0; z-index:42; background:rgba(6,8,11,.55);
                 display:flex; align-items:flex-end; justify-content:center;
                 -webkit-backdrop-filter:blur(2px); backdrop-filter:blur(2px); }
-  #transSheet[hidden] { display:none; }
-  #transSheet .ts-card { width:100%; max-width:40rem; background:var(--card);
+  #transSheet[hidden], #lyricSheet[hidden] { display:none; }
+  #transSheet .ts-card, #lyricSheet .ts-card { width:100%; max-width:40rem; background:var(--card);
                 border:1px solid var(--line); border-bottom:0;
                 border-radius:1rem 1rem 0 0; padding:1.1rem 1.1rem calc(1.1rem + env(safe-area-inset-bottom));
-                animation:tsIn .2s ease; max-height:75vh; overflow-y:auto; }
+                animation:tsIn .2s ease; max-height:82vh; overflow-y:auto; }
   @keyframes tsIn { from { transform:translateY(100%); } }
+  #lyricSheet .ly-ru { font-size:1.05rem; line-height:1.55; color:var(--fg); font-weight:600;
+                       border-left:2px solid var(--accent); padding-left:.7rem; margin-bottom:.9rem; }
+  #lyricSheet .ly-tr { font-size:1.12rem; line-height:1.5; color:var(--fg); margin-bottom:.7rem; }
+  #lyricSheet .ly-gist { font-size:.92rem; line-height:1.6; color:var(--fg-dim); margin-bottom:.8rem; }
+  #lyricSheet .ly-notes { list-style:none; display:flex; flex-direction:column; gap:.55rem; }
+  #lyricSheet .ly-notes li { font-size:.88rem; line-height:1.55; color:var(--fg-dim);
+                       background:var(--card-2); border:1px solid var(--line-soft);
+                       border-radius:var(--r-sm); padding:.55rem .65rem; padding-left:1.7rem; position:relative; }
+  #lyricSheet .ly-notes li::before { content:"✦"; position:absolute; left:.6rem; top:.55rem; color:var(--accent); font-size:.8rem; }
+  #lyricSheet .ly-load { display:flex; gap:.5rem; align-items:center; color:var(--muted); font-size:.9rem; padding:.6rem 0; }
+  #lyricSheet .ts-btns { display:flex; gap:.5rem; margin-top:1.1rem; }
+  #lyricSheet .ts-btns button { flex:1; padding:.65rem; border-radius:var(--r-sm);
+                border:1px solid var(--line); background:var(--card-2); color:var(--fg-dim); font-size:.9rem; cursor:pointer; }
+  #lyricSheet .ts-btns .ts-card-btn { color:var(--accent); border-color:rgba(90,150,220,.4); }
   #transSheet .ts-ru { font-size:.95rem; line-height:1.6; color:var(--muted);
                        border-left:2px solid var(--line); padding-left:.7rem; margin-bottom:.9rem; }
   #transSheet .ts-en { font-size:1.12rem; line-height:1.6; color:var(--fg); min-height:1.4em;
@@ -950,6 +973,15 @@
     </div>
     <div class="watchhint">tap a word to card it · <span class="dot"></span> carded · <span class="dot y"></span> suggested · tap video to pause</div>
     <div id="transcript" class="transcript"></div>
+  </div>
+
+  <!-- deep line-by-line lyric read (song mode) -->
+  <div id="lyricSheet" hidden onclick="if(event.target===this)closeLyricSheet()">
+    <div class="ts-card">
+      <div class="ly-ru" id="lyRu"></div>
+      <div id="lyBody"></div>
+      <div class="ts-btns" id="lyBtns"></div>
+    </div>
   </div>
 
   <!-- passage translation sheet (drag-select a sentence to check understanding) -->
@@ -3200,6 +3232,7 @@ function closeWatch() {
   audioSrc = null; audioSrcIsBlob = false; autoSwapped = false;
   WP = null; WDATA = null; audioMode = false;
   SONG_MODE = false; SONG_LOOP = false;
+  $('#lyricSheet').hidden = true;
   $('#watchView').classList.remove('audiomode', 'song-mode');
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = 'none';
   wActive = -1;
@@ -3496,6 +3529,14 @@ function renderTranscript() {
       sp.onclick = () => { if (Date.now() - _phraseDoneAt < 350) return; wordAction(w, sp, i, wi); };
       line.append(sp, document.createTextNode(' '));
     });
+    if (SONG_MODE) {
+      const ex = document.createElement('button');
+      ex.className = 'ly-icon' + (lyricCached(i) ? ' has' : '');
+      ex.textContent = '💬';
+      ex.setAttribute('aria-label', 'explain this line');
+      ex.onclick = e => { e.stopPropagation(); openLyricSheet(i); };
+      line.appendChild(ex);
+    }
     box.appendChild(line);
   });
   box.onscroll = () => { wUserScroll = Date.now(); };
@@ -3597,6 +3638,55 @@ function _phraseCard(range) {
   openCardModal({ id: READER_MODE ? (WCUES[cs].lineId || null) : null, text: around,
                   start_time: READER_MODE ? null : hms(WCUES[cs].s) }, phrase);
   if (MODAL) MODAL.watchCue = cs;
+}
+
+/* ---- deep line-by-line lyric read (song mode) ---- */
+let LYRIC_NOTES = {};          // `${videoId}:${lineIndex}` -> {translation,gist,notes}
+let _lyIdx = null;
+function lyricKey(i) { return `${CURRENT}:${i}`; }
+function lyricCached(i) { return !!LYRIC_NOTES[lyricKey(i)]; }
+async function openLyricSheet(i) {
+  _lyIdx = i;
+  const line = (WCUES[i] && WCUES[i].text) || '';
+  $('#lyRu').textContent = line;
+  $('#lyBtns').innerHTML = `<button onclick="closeLyricSheet()">done</button>`;
+  $('#lyricSheet').hidden = false;
+  const cached = LYRIC_NOTES[lyricKey(i)];
+  if (cached) { renderLyric(cached); return; }
+  $('#lyBody').innerHTML = `<div class="ly-load"><span class="spin"></span> reading the line…</div>`;
+  let d;
+  try {
+    d = await api(`/songs/${CURRENT}/explain`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ index: i }),
+    });
+  } catch (e) {
+    if (_lyIdx === i && !$('#lyricSheet').hidden)
+      $('#lyBody').innerHTML = `<div class="ly-gist">couldn’t explain that line — ${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  LYRIC_NOTES[lyricKey(i)] = d;
+  const ic = $(`#transcript .cue[data-i="${i}"] .ly-icon`); if (ic) ic.classList.add('has');
+  if (_lyIdx === i && !$('#lyricSheet').hidden) renderLyric(d);
+}
+function renderLyric(d) {
+  const notes = (d.notes || []).filter(Boolean);
+  $('#lyBody').innerHTML =
+    (d.translation ? `<div class="ly-tr">${escapeHtml(d.translation)}</div>` : '') +
+    (d.gist ? `<div class="ly-gist">${escapeHtml(d.gist)}</div>` : '') +
+    (notes.length ? `<ul class="ly-notes">${notes.map(n => `<li>${escapeHtml(n)}</li>`).join('')}</ul>`
+                  : `<div class="ly-gist" style="opacity:.6">nothing tricky in this line</div>`);
+  $('#lyBtns').innerHTML =
+    `<button class="ts-card-btn" onclick="lyricToCard()">✎ card from line</button>` +
+    `<button onclick="closeLyricSheet()">done</button>`;
+}
+function closeLyricSheet() { $('#lyricSheet').hidden = true; _lyIdx = null; }
+function lyricToCard() {
+  const i = _lyIdx;
+  closeLyricSheet();
+  const cue = WCUES[i];
+  if (!cue || !cue.words) return;
+  _phraseCard({ words: cue.words.slice(0, 12), startCi: i, endCi: i });
 }
 
 /* ---- passage translation (comprehension check) ---- */
@@ -4557,6 +4647,7 @@ async function hardRefresh() {
 
 // step back one level through the app's views; returns true if it did something
 function navBack() {
+  if (!$('#lyricSheet').hidden) { closeLyricSheet(); return true; }
   if (!$('#transSheet').hidden) { closeTransSheet(); return true; }
   if (!$('#inlineDecide').hidden) { closeInline(true); return true; }
   if (!$('#wordView').hidden) { closeWord(); return true; }
@@ -4608,7 +4699,7 @@ addEventListener('popstate', () => { navBack(); try { history.pushState({ ru: 1 
 
 /* ---------------- boot ---------------- */
 // belt-and-suspenders: full-screen overlays must never be left showing
-['#studyView', '#statsView', '#cardsView', '#vidDelView', '#readView', '#pasteWrap', '#tocPanel', '#transSheet']
+['#studyView', '#statsView', '#cardsView', '#vidDelView', '#readView', '#pasteWrap', '#tocPanel', '#transSheet', '#lyricSheet']
   .forEach(s => { const e = $(s); if (e) e.hidden = true; });
 
 if ('serviceWorker' in navigator) {
