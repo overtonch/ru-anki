@@ -114,6 +114,18 @@
   .chan { font-size:.7rem; font-weight:700; color:var(--muted); text-transform:uppercase;
           letter-spacing:.07em; margin:1.4rem .2rem .45rem; }
   .chan:first-child { margin-top:.4rem; }
+  .sec-head { display:flex; align-items:center; gap:.45rem; width:100%; background:none;
+              border:0; cursor:pointer; font-family:inherit;
+              margin:1.1rem .2rem .3rem; padding:.35rem .2rem .35rem 0; }
+  .sec-head:first-child { margin-top:.3rem; }
+  .sec-head .sec-caret { font-size:.7rem; line-height:1; color:var(--muted);
+              transition:transform .15s; display:inline-block; width:.7rem; }
+  .sec-head.coll .sec-caret { transform:rotate(-90deg); }
+  .sec-head .sec-n { color:var(--muted); font-weight:600; letter-spacing:0; opacity:.65;
+              font-size:.72rem; }
+  .sec-head:active { opacity:.55; }
+  .sec-body[hidden] { display:none; }
+  .chan.sub { margin:1.05rem .2rem .35rem; opacity:.75; font-size:.68rem; }
   .vcard { display:flex; gap:.75rem; align-items:flex-start; background:var(--card);
            border:1px solid var(--line-soft); border-radius:var(--r); padding:.6rem; margin:.5rem 0;
            cursor:pointer; transition: border-color .15s, background .15s, transform .1s;
@@ -591,7 +603,6 @@
   .lib-card .m { font-size:.75rem; color:var(--muted); margin-top:.2rem; }
   .lib-card .rbar { height:3px; background:var(--line); border-radius:2px; margin-top:.4rem; overflow:hidden; }
   .lib-card .rbar i { display:block; height:100%; background:var(--accent); }
-  .chan.arch-head { opacity:.7; font-size:.72rem; margin-top:1.4rem; }
   .lib-card.arch { cursor:default; opacity:.85; }
   .lib-card.arch .bk { background:var(--line); color:var(--muted); }
   .arch-acts { display:flex; gap:.5rem; margin-top:.45rem; }
@@ -1366,33 +1377,51 @@ function renderList() {
     return;
   }
   box.innerHTML = '';
-  const head = t => { const h = document.createElement('div'); h.className = 'chan'; h.textContent = t; box.appendChild(h); };
+  let coll = {};
+  try { coll = JSON.parse(localStorage.getItem('secCollapsed') || '{}'); } catch {}
+  const section = (title, key, count, defOpen = true) => {
+    const shut = key in coll ? coll[key] : !defOpen;
+    const h = document.createElement('button');
+    h.className = 'chan sec-head' + (shut ? ' coll' : '');
+    h.innerHTML = `<span class="sec-caret">▾</span>${escapeHtml(title)}` +
+      (count != null ? ` <span class="sec-n">${count}</span>` : '');
+    const body = document.createElement('div');
+    body.className = 'sec-body';
+    body.hidden = shut;
+    h.onclick = () => {
+      body.hidden = !body.hidden;
+      h.classList.toggle('coll', body.hidden);
+      coll[key] = body.hidden;
+      try { localStorage.setItem('secCollapsed', JSON.stringify(coll)); } catch {}
+    };
+    box.append(h, body);
+    return body;
+  };
 
   if (songs.length) {
-    head('Music');
-    for (const v of songs) box.appendChild(songCard(v));
+    const b = section('Music', 'music', songs.length);
+    for (const v of songs) b.appendChild(songCard(v));
   }
   if (vids.length) {
-    head('Videos');
-    box.appendChild(videoCard(vids[0], true));
+    const b = section('Videos', 'videos', vids.length);
+    b.appendChild(videoCard(vids[0], true));
     const groups = {};
     for (const v of vids.slice(1)) (groups[v.channel || 'Unknown channel'] ||= []).push(v);
     for (const chan of Object.keys(groups).sort((a,b) => a.localeCompare(b))) {
-      head(chan);
-      for (const v of groups[chan]) box.appendChild(videoCard(v));
+      const sub = document.createElement('div');
+      sub.className = 'chan sub'; sub.textContent = chan;
+      b.appendChild(sub);
+      for (const v of groups[chan]) b.appendChild(videoCard(v));
     }
   }
   if (texts.length || TEXTS.length) {
-    head('Reading');
-    for (const v of texts) box.appendChild(readCard(v));
-    for (const t of TEXTS) box.appendChild(textCard(t));
+    const b = section('Reading', 'reading', texts.length + TEXTS.length);
+    for (const v of texts) b.appendChild(readCard(v));
+    for (const t of TEXTS) b.appendChild(textCard(t));
   }
   if (ARCHIVED.length) {
-    const h = document.createElement('div');
-    h.className = 'chan arch-head';
-    h.textContent = `Archived (${ARCHIVED.length}) — cards kept`;
-    box.appendChild(h);
-    for (const v of ARCHIVED) box.appendChild(archivedCard(v));
+    const b = section('Archived · cards kept', 'archived', ARCHIVED.length, false);
+    for (const v of ARCHIVED) b.appendChild(archivedCard(v));
   }
 }
 
