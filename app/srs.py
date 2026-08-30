@@ -5,6 +5,7 @@ a dual-write target (off by default, `app_settings.anki_dual_write`) and an
 `.apkg` export. Every "make card" decision creates an srs_card here.
 """
 import datetime as _dt
+import hashlib as _hashlib
 import json as _json
 import os
 import sys
@@ -609,6 +610,17 @@ def delete_cards_for_lemma(normalized_text):
 
 # ---------------------------------------------------------------- the queue
 
+def _shuffle_new_for_day(rows):
+    """Randomise the presentation order of today's fresh cards while keeping the
+    *selection* by creation order (the SQL LIMIT already did that). The order is
+    a deterministic function of (today's day boundary, card id): stable across
+    queue reloads within the day, and unchanged as cards drop out of the set
+    once reviewed — so a session that's reloaded mid-way doesn't reshuffle."""
+    seed = _day_start_iso()
+    return sorted(rows, key=lambda r: _hashlib.md5(
+        f"{seed}|{r['id']}".encode()).digest())
+
+
 def _new_introduced_today(c):
     row = c.execute(
         """SELECT COUNT(*) n FROM (
@@ -752,6 +764,7 @@ def queue(limit=80):
             """SELECT * FROM srs_cards
                WHERE suspended=0 AND last_review IS NULL
                ORDER BY created_at ASC, id ASC LIMIT ?""", (budget,))]
+        fresh = _shuffle_new_for_day(fresh)   # picked in order, shown shuffled
     c.close()
     return [_card_dict_from_plain(r) for r in (due + fresh)]
 
@@ -779,10 +792,10 @@ def offline_bundle(days=3):
            ORDER BY due ASC""", {"h": horizon})]
     budget = max(0, new_per_day() - _new_introduced_today(c))
     if budget:
-        rows += [dict(r) for r in c.execute(
+        rows += _shuffle_new_for_day([dict(r) for r in c.execute(
             """SELECT * FROM srs_cards
                WHERE suspended=0 AND last_review IS NULL
-               ORDER BY created_at ASC, id ASC LIMIT ?""", (budget,))]
+               ORDER BY created_at ASC, id ASC LIMIT ?""", (budget,))])
     c.close()
     out = []
     for r in rows:

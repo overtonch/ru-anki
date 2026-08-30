@@ -23,6 +23,27 @@ def test_again_keeps_card_in_a_minute(db):
     assert dt.timedelta(seconds=0) < delta < dt.timedelta(minutes=3)
 
 
+def test_new_cards_picked_in_order_shown_shuffled_stably(db):
+    import srs
+    srs.set_setting("new_per_day", 10)
+    ids = [_make_card(srs, span=f"слово{i}")["id"] for i in range(30)]
+
+    q1 = [c["id"] for c in srs.queue(limit=50) if c["is_new"]]
+    q2 = [c["id"] for c in srs.queue(limit=50) if c["is_new"]]
+
+    # selection: the first 10 by creation order (not the later 20)
+    assert set(q1) == set(ids[:10])
+    # order: stable across reloads…
+    assert q1 == q2
+    # …but shuffled, not creation order (30!/(20!) makes a match astronomically unlikely)
+    assert q1 != ids[:10]
+
+    # reviewing one doesn't reshuffle the rest and doesn't pull in card #11
+    srs.review(q1[0], 3)
+    q3 = [c["id"] for c in srs.queue(limit=50) if c["is_new"]]
+    assert q3 == [i for i in q1 if i != q1[0]]
+
+
 def test_preview_accepts_id_or_row(db):
     import srs
     c = _make_card(srs)
