@@ -1,7 +1,17 @@
 // ru-anki service worker — keeps the app shell available offline.
 // Data (transcripts, the outbound card queue) lives in IndexedDB, handled by
 // the page itself; this SW only makes sure the page can load with no network.
-const SHELL = 'ru-anki-shell-v96';
+const SHELL = 'ru-anki-shell-v97';
+
+// fetch that gives up fast so a captive / dead network doesn't hang the app —
+// the caller falls back to cache.
+function fetchQuick(request, ms = 4000) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('timeout')), ms);
+    fetch(request).then(r => { clearTimeout(t); resolve(r); },
+                        e => { clearTimeout(t); reject(e); });
+  });
+}
 const SHELL_URLS = ['/', '/sw.js', '/manifest.json',
   '/icons/icon-192.png', '/icons/apple-touch-icon.png', '/icons/icon.svg'];
 // caches that survive an activate/version bump (managed by the page, not the shell)
@@ -82,12 +92,20 @@ self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== self.location.origin) return;
 
-  // App shell: network-first (so updates land), fall back to cache offline.
+  // App shell: network-first (so updates land) but with a short deadline, then
+  // fall back to cache — a captive/dead network must not hang the launch.
   if (url.pathname === '/' || url.pathname === '/sw.js') {
     e.respondWith(
-      fetch(e.request)
-        .then(res => { caches.open(SHELL).then(c => c.put(e.request, res.clone())); return res; })
-        .catch(() => caches.match(e.request).then(r => r || caches.match('/')))
+      fetchQuick(e.request).then(res => {
+        // a captive portal answers / with its own 200 login page — don't trust
+        // a redirected response or (for the page) a non-HTML one
+        const isRoot = url.pathname === '/';
+        const bad = !res || !res.ok || res.redirected || (isRoot &&
+          !(res.headers.get('content-type') || '').includes('text/html'));
+        if (bad) throw new Error('bad shell response');
+        caches.open(SHELL).then(c => c.put(e.request, res.clone()));
+        return res;
+      }).catch(() => caches.match(e.request).then(r => r || caches.match('/')))
     );
     return;
   }
