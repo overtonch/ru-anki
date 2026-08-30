@@ -54,6 +54,11 @@ def init_db():
     # dict_accented holds the stressed dictionary/citation form.
     if not _has_column(c, "srs_cards", "dict_accented"):
         c.execute("ALTER TABLE srs_cards ADD COLUMN dict_accented TEXT")
+    # front_word: the word in its dictionary form (or a phrase in its common
+    # form) — shown as the card front when app_settings.card_front == 'word'
+    # instead of the bolded sentence. Reversible: the sentence is always kept.
+    if not _has_column(c, "srs_cards", "front_word"):
+        c.execute("ALTER TABLE srs_cards ADD COLUMN front_word TEXT")
     # channel / thumbnail metadata for the video picker (nullable, backfilled).
     for col in ("channel TEXT", "channel_url TEXT", "thumbnail_url TEXT",
                 "duration INTEGER",

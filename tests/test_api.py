@@ -58,6 +58,38 @@ def test_make_card_then_queue_and_review(client, seeded_video):
     assert rv.status_code == 200
 
 
+def test_card_front_mode_toggle(client, seeded_video):
+    mk = client.post(f"/videos/{seeded_video}/make-card",
+                     json={"span": "блефовать", "timestamp": "00:00:00",
+                           "sentence": "Он блефовал за столом.",
+                           "span_text": "блефовать", "translation": "to bluff",
+                           "is_phrase": False})
+    cid = mk.json()["srs_card"]["id"]
+
+    # default: front is the bolded sentence
+    q = client.get("/srs/queue").json()["cards"]
+    card = next(c for c in q if c["id"] == cid)
+    assert "<b>" in card["front_html"] and card["front_mode"] == "sentence"
+    assert card["sentence_html"] == card["front_html"]
+
+    r = client.post("/settings", json={"key": "card_front", "value": "word"})
+    assert r.status_code == 200 and r.json()["card_front"] == "word"
+
+    q = client.get("/srs/queue").json()["cards"]
+    card = next(c for c in q if c["id"] == cid)
+    assert card["front_mode"] == "word"
+    assert 'class="hw"' in card["front_html"]
+    assert "<b>" in card["sentence_html"]          # sentence preserved on the back
+
+    # reversible
+    client.post("/settings", json={"key": "card_front", "value": "sentence"})
+    q = client.get("/srs/queue").json()["cards"]
+    card = next(c for c in q if c["id"] == cid)
+    assert "<b>" in card["front_html"] and card["front_mode"] == "sentence"
+
+    assert client.post("/settings", json={"key": "card_front", "value": "bogus"}).status_code == 422
+
+
 def test_video_practice_deck(client, seeded_video):
     mk = client.post(f"/videos/{seeded_video}/make-card",
                      json={"span": "блефовать", "timestamp": "00:00:00",

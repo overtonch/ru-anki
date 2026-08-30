@@ -757,6 +757,9 @@
                   display:flex; flex-direction:column; gap:1rem; }
   .study-q { font-size:1.4rem; line-height:1.5; text-align:center; margin:auto 0; }
   .study-q b { color:var(--accent); font-weight:750; }
+  .study-q .hw { font-size:2.3rem; font-weight:750; letter-spacing:.01em; }
+  .study-scroll .a-sent { text-align:center; font-size:1.15rem; line-height:1.55; margin:0; }
+  .study-scroll .a-sent b { color:var(--accent); font-weight:750; }
   .study-scroll .a-ctx { text-align:center; font-size:.9rem; line-height:1.5;
                          color:var(--muted); opacity:.75; margin:0; }
   .study-scroll .a-ctx + .study-q { margin-top:.2rem; }
@@ -816,6 +819,8 @@
   .sd-row input[type=number] { width:3.4rem; background:var(--card-2); border:1px solid var(--line);
                  color:var(--fg); border-radius:.3rem; padding:.2rem .35rem; font:inherit; text-align:right; }
   .sd-row input[type=checkbox] { width:1.1rem; height:1.1rem; accent-color:var(--accent); }
+  .sd-row select { background:var(--card-2); border:1px solid var(--line); color:var(--fg);
+                 border-radius:.3rem; padding:.2rem .4rem; font:inherit; }
   .sd-export { color:var(--accent); justify-content:center; }
   .study-done .study-set input { vertical-align:-.1em; margin-right:.4rem; }
   .wordbody { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch; padding:1rem 1.1rem 3rem; }
@@ -899,6 +904,9 @@
               display:flex; flex-direction:column; box-shadow:-8px 0 30px rgba(0,0,0,.4);
               animation:tocIn .18s ease; }
   @keyframes tocIn { from { transform:translateX(100%); } }
+  #tocPanel::before { content:''; position:fixed; inset:0; z-index:-1;
+              background:rgba(0,0,0,.4); animation:tocScrimIn .18s ease; }
+  @keyframes tocScrimIn { from { opacity:0; } }
   #tocPanel[hidden] { display:none; }
   .toc-head { padding:1rem 1.1rem .6rem; font-size:.7rem; text-transform:uppercase;
               letter-spacing:.07em; color:var(--muted); font-weight:700; }
@@ -2848,9 +2856,13 @@ function studyReveal() {
       <span class="a-play">▶ ${fmtTime(c.seconds)}${c.video_title ? ' · ' + escapeHtml(c.video_title) : ''}</span>
     </button>` : '';
   const ctx = c.context || {};
+  const sentHtml = c.sentence_html || c.front_html;
+  const sentLine = c.front_mode === 'word'
+    ? `<div class="a-sent">${sentHtml}</div>`                 // the sentence is the reveal now
+    : `<div class="study-q" style="font-size:1.05rem;margin:0;color:var(--muted)">${sentHtml}</div>`;
   const ctxHtml = `
     ${ctx.before ? `<div class="a-ctx">…&nbsp;${escapeHtml(ctx.before)}</div>` : ''}
-    <div class="study-q" style="font-size:1.05rem;margin:0;color:var(--muted)">${c.front_html}</div>
+    ${sentLine}
     ${ctx.after ? `<div class="a-ctx">${escapeHtml(ctx.after)}&nbsp;…</div>` : ''}`;
   $('#studyBody').innerHTML = `
     <div class="study-scroll">
@@ -3006,6 +3018,11 @@ function renderStudyDone() {
           <label class="sd-row">new cards per day
             <input type="number" min="0" max="999" value="${s.new_per_day ?? 20}"
                    onchange="setNewPerDay(this.value)"></label>
+          <label class="sd-row"><span>card front</span>
+            <select onchange="setCardFront(this.value)">
+              <option value="sentence" ${s.card_front !== 'word' ? 'selected' : ''}>full sentence</option>
+              <option value="word" ${s.card_front === 'word' ? 'selected' : ''}>word only</option>
+            </select></label>
           <label class="sd-row"><span>audio-first review</span>
             <input type="checkbox" ${STUDY_AUDIO_FIRST ? 'checked' : ''} onchange="setAudioFirst(this.checked)"></label>
           <label class="sd-row"><span>also save new cards to Anki</span>
@@ -3019,6 +3036,15 @@ async function setDualWrite(on) {
   try { await api('/settings', { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ key: 'anki_dual_write', value: on }) });
     toast(on ? 'new cards will also go to Anki' : 'new cards stay in-app only', 2600);
+  } catch (e) { toast('couldn’t save — ' + e.message, 3000); }
+}
+async function setCardFront(v) {
+  try {
+    await api('/settings', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key: 'card_front', value: v }) });
+    toast(v === 'word'
+      ? 'cards now show just the word — sentence moves to the back'
+      : 'cards now show the full sentence', 3000);
   } catch (e) { toast('couldn’t save — ' + e.message, 3000); }
 }
 async function setNewPerDay(v) {
@@ -3983,6 +4009,7 @@ function attachTranscriptSelect(box) {
 
   box.addEventListener('pointerdown', e => {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (!$('#tocPanel').hidden) return;          // chapters drawer open — ignore taps on the text
     const sp = e.target.closest && e.target.closest(wc);
     if (!sp) { dropPending(); return; }
     _phraseSel = { a: sp, b: sp, x0: e.clientX, y0: e.clientY,
@@ -4397,6 +4424,16 @@ document.addEventListener('pointerdown', e => {
   const pop = $('#inlineDecide');
   if (pop.hidden || pop.contains(e.target)) return;
   if (!e.target.closest('[data-cand]')) closeInline(true);
+}, true);
+
+/* chapters drawer: a tap anywhere outside it just closes it — don't let the tap
+   fall through and card/select the word behind it */
+document.addEventListener('click', e => {
+  const p = $('#tocPanel');
+  if (p.hidden || p.contains(e.target)) return;
+  e.stopImmediatePropagation();
+  e.preventDefault();
+  p.hidden = true;
 }, true);
 
 /* ================= reading ================= */

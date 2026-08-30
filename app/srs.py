@@ -166,6 +166,37 @@ def card_for_candidate(candidate_id):
     return _card_dict(r) if r else None
 
 
+def cards_for_front_word_backfill(force=False):
+    """Rows needing a `front_word` computed — all of them when force, else only
+    the ones still missing it."""
+    c = store.connect()
+    where = "" if force else "WHERE front_word IS NULL OR front_word=''"
+    rows = c.execute(
+        f"SELECT id, span_text, normalized_text, is_phrase, sentence, translation, "
+        f"dict_accented FROM srs_cards {where} ORDER BY id").fetchall()
+    c.close()
+    return [dict(r) for r in rows]
+
+
+def count_missing_front_word():
+    c = store.connect()
+    n = c.execute("SELECT COUNT(*) n FROM srs_cards "
+                  "WHERE front_word IS NULL OR front_word=''").fetchone()["n"]
+    c.close()
+    return n
+
+
+def set_front_word(card_id, front_word):
+    fw = (front_word or "").strip()
+    if not fw:
+        return 0
+    c = store.connect()
+    c.execute("UPDATE srs_cards SET front_word=? WHERE id=?", (fw, card_id))
+    c.commit()
+    c.close()
+    return 1
+
+
 def cards_for_video(video_id):
     """Every study card sourced from this video (directly or via its candidates),
     oldest first — for the per-content 'practice these cards' refresher."""
@@ -187,27 +218,34 @@ def _strip_stress(s):
 
 def create_card(sentence, span_text, normalized_text, is_phrase, translation,
                 *, candidate_id=None, accented=None, dict_accented=None,
-                video_id=None, timestamp=None, anki_note_id=None):
+                front_word=None, video_id=None, timestamp=None, anki_note_id=None):
     """Idempotent on candidate_id. Returns the card dict.
     `accented` = target word stressed as it appears on the card;
-    `dict_accented` = the stressed dictionary/citation form."""
+    `dict_accented` = the stressed dictionary/citation form;
+    `front_word` = headword for the 'word' front mode (defaults to the dict
+    form for a single word, the span itself for a phrase)."""
     if candidate_id is not None:
         existing = card_for_candidate(candidate_id)
         if existing:
             return existing
     sentence = _strip_stress(sentence)          # front is read without marks
     timestamp = _snap_ts(video_id, sentence, normalized_text, timestamp)
+    if not front_word:
+        front_word = (span_text.strip() if is_phrase
+                      else (dict_accented or "").strip()
+                      or store.yo_form(store.norm(normalized_text))
+                      or normalized_text.strip())
     f = _fresh_card_fields()
     c = store.connect()
     cur = c.execute(
         """INSERT INTO srs_cards
              (candidate_id, sentence, translation, span_text, normalized_text,
-              is_phrase, accented, dict_accented, video_id, timestamp,
+              is_phrase, accented, dict_accented, front_word, video_id, timestamp,
               fsrs_state, fsrs_step, stability, difficulty, due, last_review,
               anki_note_id)
-           VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?,?, ?)""",
+           VALUES (?,?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?,?, ?)""",
         (candidate_id, sentence, translation, span_text, store.norm(normalized_text),
-         int(bool(is_phrase)), accented, dict_accented, video_id, timestamp,
+         int(bool(is_phrase)), accented, dict_accented, front_word, video_id, timestamp,
          f["fsrs_state"], f["fsrs_step"], f["stability"], f["difficulty"],
          f["due"], f["last_review"], anki_note_id))
     c.commit()
@@ -676,7 +714,7 @@ def list_cards(filt="all", sort="added", q="", limit=1000, video=None):
                                         bool(d["is_phrase"]))
         out.append({
             "id": d["id"], "span_text": d["span_text"], "front_html": front,
-            "bolded": bolded,
+            "bolded": bolded, "front_word": d["front_word"],
             "normalized_text": d["normalized_text"], "translation": d["translation"],
             "accented": d["accented"], "dict_accented": d["dict_accented"],
             "is_phrase": bool(d["is_phrase"]),
@@ -832,6 +870,15 @@ def anki_dual_write():
     return bool(get_setting("anki_dual_write", False))
 
 
+def card_front():
+    """How review cards show their front:
+      'sentence' (default) — the full sentence with the target word bolded
+      'word'               — just the dictionary form / common phrase form
+    Reversible: the sentence is always kept and shown on the back."""
+    v = get_setting("card_front", "sentence")
+    return v if v in ("sentence", "word") else "sentence"
+
+
 # ---------------------------------------------------------------- migration
 
 def backfill_from_candidates(video_id=None, limit=None):
@@ -877,11 +924,19 @@ def export_apkg(path):
         css=".card{font-size:20px;text-align:center}.sent{margin:14px}"
             ".tr{font-size:22px}b{font-weight:700}")
     deck = genanki.Deck(2059400111, "Russian::ru-anki (in-app SRS)")
+    word_front = card_front() == "word"
     for r in rows:
-        front, _ = anki.front_html(r["sentence"], r["span_text"], bool(r["is_phrase"]))
-        back = (r["translation"] or "")
-        if r["accented"]:
-            back += f'<div style="opacity:.55;font-size:.8em">{r["accented"]}</div>'
+        sent, _ = anki.front_html(r["sentence"], r["span_text"], bool(r["is_phrase"]))
+        if word_front:
+            front = (r["front_word"] or r["dict_accented"] or r["normalized_text"]
+                     or r["span_text"] or "")
+            back = f'<div class="sent">{sent}</div>'
+        else:
+            front, back = sent, ""
+        back += (r["translation"] or "")
+        acc = r["dict_accented"] if word_front else r["accented"]
+        if acc:
+            back += f'<div style="opacity:.55;font-size:.8em">{acc}</div>'
         deck.add_note(genanki.Note(model=model, fields=[front, back]))
     genanki.Package(deck).write_to_file(path)
     return len(rows)

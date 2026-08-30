@@ -12,6 +12,7 @@ import time
 import traceback
 import urllib.parse as _urlparse
 
+import html as _html
 import random as _random
 import re as _re
 
@@ -1408,8 +1409,20 @@ def _study_card_view(card, with_preview=True, titles=None):
     clip = (f"/videos/{vid}/clip?t={round(seconds)}"
             f"&w={_urlparse.quote(card.get('normalized_text') or '')}") if has_clip \
         else (f"/srs/cards/{card['id']}/tts" if card.get("id") else None)
+    # the sentence (bolded target) is always available; the front is either it or
+    # just the headword, per the reversible card_front setting
+    sentence_html = card["front_html"]
+    mode = srs.card_front()
+    if mode == "word":
+        hw = (card.get("front_word") or card.get("dict_accented")
+              or card.get("normalized_text") or card["span_text"] or "").strip()
+        front_html = f'<div class="hw">{_html.escape(hw)}</div>'
+    else:
+        front_html = sentence_html
     return {
-        "id": card["id"], "front_html": card["front_html"],
+        "id": card["id"], "front_html": front_html,
+        "sentence_html": sentence_html, "front_mode": mode,
+        "front_word": card.get("front_word"),
         "translation": card["translation"], "span_text": card["span_text"],
         "normalized_text": card["normalized_text"], "accented": card["accented"],
         "dict_accented": card["dict_accented"],
@@ -1429,6 +1442,7 @@ def srs_stats():
     s = srs.stats()
     s["anki_dual_write"] = srs.anki_dual_write()
     s["new_per_day"] = srs.new_per_day()
+    s["card_front"] = srs.card_front()
     return s
 
 
@@ -1681,6 +1695,46 @@ def srs_backfill_accents(background: BackgroundTasks, limit: int | None = None,
             else srs.count_missing_accent(), "force": force}
 
 
+def _backfill_front_words(force=False):
+    """Fill srs_cards.front_word — the headword shown on the front in 'word'
+    mode. A single word with a known stressed dict form reuses it (no LLM);
+    everything else (phrases, words with no cached stress) goes through one
+    batched llm.dict_forms call."""
+    rows = srs.cards_for_front_word_backfill(force=force)
+    print(f"[front] backfilling {len(rows)} card headwords (force={force})…", flush=True)
+    done = 0
+    BATCH = 20
+    for i in range(0, len(rows), BATCH):
+        chunk = rows[i:i + BATCH]
+        need_llm = []
+        for r in chunk:
+            df = (r.get("dict_accented") or "").strip()
+            if not r["is_phrase"] and df:
+                done += srs.set_front_word(r["id"], df)
+            else:
+                need_llm.append(r)
+        if not need_llm:
+            continue
+        try:
+            forms = llm.dict_forms([(r["span_text"], r.get("sentence") or "")
+                                    for r in need_llm])
+        except Exception as e:  # noqa: BLE001
+            print(f"[front] batch {i}: {e}", flush=True)
+            forms = [""] * len(need_llm)
+        for r, form in zip(need_llm, forms):
+            fw = (form or "").strip() or (
+                r["span_text"].strip() if r["is_phrase"]
+                else (r.get("normalized_text") or r["span_text"] or "").strip())
+            done += srs.set_front_word(r["id"], fw)
+    print(f"[front] backfill done: {done} headwords set", flush=True)
+
+
+@app.post("/srs/backfill-front-words")
+def srs_backfill_front_words(background: BackgroundTasks, force: bool = False):
+    background.add_task(_backfill_front_words, force)
+    return {"queued": len(srs.cards_for_front_word_backfill(force=force)), "force": force}
+
+
 @app.get("/srs/export")
 def srs_export():
     path = os.path.join(ytdlp.MEDIA_DIR, "ru-anki-srs.apkg")
@@ -1692,7 +1746,8 @@ def srs_export():
 @app.get("/settings")
 def get_settings():
     return {"anki_dual_write": srs.anki_dual_write(),
-            "new_per_day": srs.new_per_day()}
+            "new_per_day": srs.new_per_day(),
+            "card_front": srs.card_front()}
 
 
 class PassageIn(BaseModel):
@@ -1742,11 +1797,18 @@ def explain_lyric_line(video_id: int, body: LyricIn):
 
 
 @app.post("/settings")
-def post_settings(body: SettingIn):
+def post_settings(body: SettingIn, background: BackgroundTasks):
     if body.key == "anki_dual_write":
         srs.set_setting(body.key, bool(body.value))
     elif body.key == "new_per_day":
         srs.set_setting(body.key, max(0, min(999, int(body.value))))
+    elif body.key == "card_front":
+        v = str(body.value)
+        if v not in ("sentence", "word"):
+            raise HTTPException(422, "card_front must be 'sentence' or 'word'")
+        srs.set_setting(body.key, v)
+        if v == "word" and srs.count_missing_front_word():
+            background.add_task(_backfill_front_words)   # fill headwords lazily
     else:
         raise HTTPException(422, f"unknown setting {body.key}")
     return {"ok": True, body.key: srs.get_setting(body.key)}

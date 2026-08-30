@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS srs_cards (
     is_phrase       INTEGER NOT NULL DEFAULT 0,
     accented        TEXT,                -- target word stressed AS IT APPEARS on the card
     dict_accented   TEXT,                -- stressed dictionary / citation form
+    front_word      TEXT,                -- dict form / common phrase form; front when card_front='word'
     video_id        INTEGER REFERENCES videos(id),
     timestamp       TEXT,                -- HH:MM:SS.mmm — frame thumbnail + jump-to-moment
     -- FSRS state (see fsrs.Card.to_dict)
