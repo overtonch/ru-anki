@@ -1036,11 +1036,12 @@ def set_word_family(root, lemmas):
     c.close()
 
 
-def discard_word(lemma):
-    """'Not a word I'm learning' — stop highlighting it everywhere. Breaks any
-    word-family link, records it as known so extraction won't re-propose it, and
-    (if it had cards made through the pipeline) returns their Anki note ids so
-    the caller can delete them. -> {lemma, was_family, removed_notes}."""
+def set_word_state(lemma, reason="known"):
+    """Record the learner's verdict on a lemma (`wordstate.STATES` — 'learned',
+    'known', …). Stops highlighting it everywhere, breaks any word-family link,
+    keeps extraction from re-proposing it, and returns the Anki note ids of any
+    pipeline-made cards so the caller can delete them.
+    -> {lemma, reason, was_family, removed_notes}."""
     lemma = norm(lemma)
     c = connect()
     was_family = bool(c.execute(
@@ -1055,13 +1056,61 @@ def discard_word(lemma):
               (lemma,))
     c.execute(
         """INSERT INTO resolved_words(normalized_text, reason, video_id)
-           VALUES(?, 'known', NULL)
+           VALUES(?, ?, NULL)
            ON CONFLICT(normalized_text) DO UPDATE SET
-             reason='known', resolved_at=datetime('now')""",
-        (lemma,))
+             reason=excluded.reason, resolved_at=datetime('now')""",
+        (lemma, reason))
     c.commit()
     c.close()
-    return {"lemma": lemma, "was_family": was_family, "removed_notes": notes}
+    return {"lemma": lemma, "reason": reason,
+            "was_family": was_family, "removed_notes": notes}
+
+
+def discard_word(lemma):
+    """Back-compat alias: 'not a word I'm learning'."""
+    return set_word_state(lemma, "known")
+
+
+def clear_word_state(lemma):
+    """Undo a verdict — the word goes back to undecided (can be suggested /
+    highlighted again). Does NOT recreate any deleted card."""
+    lemma = norm(lemma)
+    c = connect()
+    n = c.execute("DELETE FROM resolved_words WHERE normalized_text=? "
+                  "AND reason != 'has_card'", (lemma,)).rowcount
+    c.execute("UPDATE candidates SET status='pending' "
+              "WHERE normalized_text=? AND status='discarded'", (lemma,))
+    c.commit()
+    c.close()
+    return {"lemma": lemma, "cleared": bool(n)}
+
+
+def word_state_counts():
+    """{reason: n} across every decided lemma — for the progress screen."""
+    c = connect()
+    rows = c.execute(
+        "SELECT reason, COUNT(*) n FROM resolved_words GROUP BY reason").fetchall()
+    c.close()
+    return {r["reason"]: r["n"] for r in rows}
+
+
+def words_in_state(reason, limit=2000):
+    """Lemmas the learner put in `reason`, newest verdict first, with a gloss
+    when we have one cached."""
+    c = connect()
+    rows = c.execute(
+        """SELECT r.normalized_text lemma, r.resolved_at,
+                  COALESCE(g.gloss,
+                    (SELECT translation FROM candidates
+                     WHERE normalized_text=r.normalized_text AND translation<>''
+                     ORDER BY id DESC LIMIT 1)) gloss
+           FROM resolved_words r
+           LEFT JOIN word_gloss g ON g.lemma = r.normalized_text
+           WHERE r.reason = ?
+           ORDER BY r.resolved_at DESC LIMIT ?""",
+        (reason, limit)).fetchall()
+    c.close()
+    return [dict(x) for x in rows]
 
 
 def yo_form(lemma):
@@ -1493,9 +1542,10 @@ def drop_lyric_notes(video_id):
     c.close()
 
 
-def resolve_candidate(cand_id, decision, note_id=None):
+def resolve_candidate(cand_id, decision, note_id=None, reason=None):
     """decision: 'yes' -> status card_created + resolved_words(has_card);
-                 'no'  -> status discarded  + resolved_words(known).
+                 'no'  -> status discarded  + resolved_words(`reason` or 'known').
+    `reason` lets a 'no' carry the learner's verdict ('learned' vs 'known').
     Returns the updated candidate row (dict)."""
     c = connect()
     row = c.execute("SELECT * FROM candidates WHERE id=?", (cand_id,)).fetchone()
@@ -1505,7 +1555,7 @@ def resolve_candidate(cand_id, decision, note_id=None):
     if decision == "yes":
         status, reason = "card_created", "has_card"
     else:
-        status, reason = "discarded", "known"
+        status, reason = "discarded", (reason or "known")
     c.execute("UPDATE candidates SET status=?, anki_note_id=COALESCE(?, anki_note_id) WHERE id=?",
               (status, note_id, cand_id))
     c.execute(

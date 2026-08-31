@@ -58,6 +58,40 @@ def test_make_card_then_queue_and_review(client, seeded_video):
     assert rv.status_code == 200
 
 
+def test_word_verdict_learned_vs_known(client, seeded_video):
+    mk = client.post(f"/videos/{seeded_video}/make-card",
+                     json={"span": "блефовать", "timestamp": "00:00:00",
+                           "sentence": "Он блефовал за столом.",
+                           "span_text": "блефовать", "translation": "to bluff",
+                           "is_phrase": False})
+    assert mk.status_code == 200
+
+    states = client.get("/words/states").json()
+    keys = [s["key"] for s in states["assignable"]]
+    assert "learned" in keys and "known" in keys
+
+    r = client.post("/words/блефовать/state", json={"state": "learned"})
+    assert r.status_code == 200
+    assert r.json()["removed_srs_cards"] == 1
+
+    wd = client.get("/words/блефовать").json()
+    assert wd["status"] == "learned" and wd["verdict"] == "learned"
+
+    lst = client.get("/words?state=learned").json()
+    assert "блефовать" in [w["lemma"] for w in lst["words"]]
+    assert "блефовать" not in [w["lemma"] for w in client.get("/words?state=known").json()["words"]]
+
+    an = client.get("/srs/analytics").json()
+    assert an["word_states"].get("learned") == 1
+
+    # undo → back to undecided
+    assert client.request("DELETE", "/words/блефовать/state").status_code == 200
+    assert client.get("/words/блефовать").json()["status"] in ("new", "pending")
+
+    # bad state rejected
+    assert client.post("/words/x/state", json={"state": "bogus"}).status_code == 422
+
+
 def test_card_front_mode_toggle(client, seeded_video):
     mk = client.post(f"/videos/{seeded_video}/make-card",
                      json={"span": "блефовать", "timestamp": "00:00:00",

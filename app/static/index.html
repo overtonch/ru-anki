@@ -981,11 +981,35 @@
   html.has-mini #statsBody, html.has-mini .readbody { padding-bottom:4rem; }
   html.has-mini .study-foot { margin-bottom:3.4rem; }
 
-  #pasteWrap, #shareWrap { position:fixed; inset:0; background:rgba(6,8,11,.6); z-index:20;
+  #pasteWrap, #shareWrap, #verdictWrap { position:fixed; inset:0; background:rgba(6,8,11,.6); z-index:20;
                align-items:center; justify-content:center; padding:1rem;
                -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px); }
-  #pasteWrap[hidden], #shareWrap[hidden] { display:none; }
-  #pasteWrap:not([hidden]), #shareWrap:not([hidden]) { display:flex; }
+  #verdictWrap { z-index:42; }   /* above the inline popover it's often opened from */
+  #pasteWrap[hidden], #shareWrap[hidden], #verdictWrap[hidden] { display:none; }
+  #pasteWrap:not([hidden]), #shareWrap:not([hidden]), #verdictWrap:not([hidden]) { display:flex; }
+  .vd-modal h3 { font-size:1rem; margin:0 0 .2rem; }
+  .vd-modal h3 span { color:var(--accent); }
+  #vdOpts { display:flex; flex-direction:column; gap:.5rem; margin:.7rem 0 .5rem; }
+  .vd-opt { display:block; width:100%; text-align:left; padding:.7rem .8rem; border-radius:var(--r-sm);
+            border:1px solid var(--line); background:var(--card-2); color:var(--fg);
+            font:inherit; -webkit-tap-highlight-color:transparent; }
+  .vd-opt:active { background:var(--line-soft); }
+  .vd-opt .vl { font-weight:650; display:block; }
+  .vd-opt .vb { font-size:.78rem; color:var(--muted); }
+  .vd-opt.good { border-color:color-mix(in srgb, var(--ok) 45%, var(--line)); }
+  .vd-opt.good .vl { color:var(--ok); }
+  .vd-opt.subtle { border-style:dashed; }
+  .vd-opt.subtle .vl { color:var(--fg-dim); font-weight:500; font-size:.86rem; }
+  #wordsView { position:fixed; inset:0; z-index:16; background:var(--bg); flex-direction:column;
+               padding:var(--safe-top) 0 env(safe-area-inset-bottom); }
+  #wordsView[hidden] { display:none; } #wordsView:not([hidden]) { display:flex; }
+  .wl-row { display:flex; align-items:baseline; gap:.6rem; padding:.6rem 1.1rem;
+            border-bottom:1px solid var(--line-soft); width:100%; text-align:left;
+            background:none; border-left:0; border-right:0; border-top:0; color:var(--fg); font:inherit; }
+  .wl-row .wl-w { font-weight:600; }
+  .wl-row .wl-g { color:var(--muted); font-size:.85rem; flex:1; min-width:0;
+                  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .wl-row .wl-x { color:var(--muted); font-size:1rem; }
   #shareWrap .modal { max-height:82vh; overflow-y:auto; }
   .share-steps { margin:.4rem 0 .2rem; padding-left:1.2rem; font-size:.86rem; line-height:1.6; color:var(--fg-dim); }
   .share-steps li { margin-bottom:.5rem; }
@@ -1310,6 +1334,25 @@
       <button class="btn sm" id="pasteOk" onclick="submitPaste()">Add to library</button>
     </div>
   </div>
+</div>
+
+<!-- WORD VERDICT SHEET — "I know this word" / "not learning it" / … -->
+<div id="verdictWrap" hidden onclick="if(event.target===this)closeVerdict()">
+  <div class="modal vd-modal">
+    <h3>“<span id="vdWord"></span>” — you’ve got this?</h3>
+    <div id="vdOpts"></div>
+    <button class="backlink" onclick="closeVerdict()">Cancel</button>
+  </div>
+</div>
+
+<!-- WORD LIST — the lemmas in one verdict (learned, not learning, …) -->
+<div id="wordsView" hidden>
+  <div class="readbar">
+    <button class="backlink" onclick="history.back()">← back</button>
+    <div class="rtitle" id="wlTitle">Words</div>
+    <span style="width:2rem"></span>
+  </div>
+  <div id="wlBody" class="wordbody"></div>
 </div>
 
 <!-- CARD MODAL -->
@@ -2624,14 +2667,17 @@ async function openWord(lemma) {
   let d;
   try { d = await api('/words/' + encodeURIComponent(clean)); }
   catch (e) { $('#wordBody').innerHTML = `<div class="empty">couldn’t load — ${escapeHtml(e.message)}</div>`; return; }
-  const pill = { carded: 'have a card', pending: 'suggested', family: 'related to a card', new: 'no card' }[d.status] || d.status;
+  const pill = { carded: 'have a card', pending: 'suggested', family: 'related to a card',
+                 learned: 'learned ✓', known: 'not learning', new: 'no card' }[d.status] || d.status;
   const total = d.videos.reduce((s, v) => s + v.count, 0);
-  const canDiscard = d.status === 'carded' || d.status === 'family';
+  const decided = d.verdict === 'learned' || d.verdict === 'known';
+  const canVerdict = ['carded', 'family', 'pending'].includes(d.status) || decided;
   $('#wordBody').innerHTML = `
     <div class="w-hd" id="wHd">${escapeHtml(d.accented || d.yo || d.lemma)}</div>
     ${d.translation || d.gloss ? `<div class="w-tr">${escapeHtml(d.translation || d.gloss)}</div>` : ''}
     <span class="w-pill ${d.status}">${pill}</span>
-    ${canDiscard ? `<button class="w-discard" id="wDiscard">stop highlighting this</button>` : ''}
+    ${canVerdict ? `<button class="w-discard" id="wDiscard">${decided ? 'change that →' : 'I already know this / not learning it →'}</button>` : ''}
+    ${decided ? `<button class="w-discard" id="wUndecide">actually, put it back in rotation</button>` : ''}
     ${d.family && d.family.length ? `<div class="w-fam"><b>same word family:</b> ${d.family.map(escapeHtml).join(', ')}</div>` : ''}
     <div class="w-fam">${total ? `heard ${total}× across ${d.videos.length} video${d.videos.length > 1 ? 's' : ''}` : 'not found in your videos yet'}</div>
     ${d.videos.map(v => `
@@ -2647,17 +2693,17 @@ async function openWord(lemma) {
     openWatch(vid, Math.max(0, t - 1.5));
   });
   const wd = $('#wDiscard');
-  if (wd) wd.onclick = async () => {
-    if (d.status === 'carded' &&
-        !confirm('Delete the Anki card for “' + d.lemma + '” and stop highlighting it?')) return;
-    wd.disabled = true; wd.textContent = '…';
-    let r;
-    try { r = await api('/words/' + encodeURIComponent(d.lemma) + '/discard', { method: 'POST' }); }
-    catch (e) { wd.disabled = false; wd.textContent = 'stop highlighting this'; toast('couldn’t — ' + e.message, 3000); return; }
-    if (typeof clearGreen === 'function') clearGreen(d.lemma);
-    toast((r && r.removed_notes && r.removed_notes.length ? 'card removed — ' : '') +
-          'stopped highlighting', 3000);
-    openWord(d.lemma);
+  if (wd) wd.onclick = () => openVerdict({
+    lemma: d.lemma, label: d.accented || d.yo || d.lemma, hasCard: d.status === 'carded',
+    onResolved: () => { if (typeof clearGreen === 'function') clearGreen(d.lemma); openWord(d.lemma); },
+  });
+  const wu = $('#wUndecide');
+  if (wu) wu.onclick = async () => {
+    wu.disabled = true; wu.textContent = '…';
+    try { await api('/words/' + encodeURIComponent(d.lemma) + '/state', { method: 'DELETE' }); }
+    catch (e) { wu.disabled = false; toast('couldn’t — ' + e.message, 3000); return; }
+    toast('back in rotation — it can be suggested again', 2600);
+    refreshStudyBanner(); openWord(d.lemma);
   };
   if (!d.accented) {
     api('/words/' + encodeURIComponent(d.lemma) + '/accent', { method: 'POST' })
@@ -2666,6 +2712,78 @@ async function openWord(lemma) {
   }
 }
 function closeWord() { $('#wordView').hidden = true; }
+
+/* ---- word verdict: "learned" vs "not learning" vs …  (registry-driven) ---- */
+let WORD_STATES = null;
+async function loadWordStates() {
+  if (WORD_STATES) return WORD_STATES;
+  try { WORD_STATES = await api('/words/states'); }
+  catch {
+    WORD_STATES = { assignable: [
+      { key: 'learned', label: 'I’ve learned it', blurb: 'you studied it — you know it now', tone: 'good' },
+      { key: 'known', label: 'Not learning it', blurb: 'too easy / a cognate / not worth a card', tone: 'muted' },
+    ], default_removed: 'known' };
+  }
+  return WORD_STATES;
+}
+let VERDICT = null;   // { lemma, cardId, candId, onResolved }
+async function openVerdict(opts) {
+  VERDICT = opts || {};
+  const st = await loadWordStates();
+  $('#vdWord').textContent = opts.label || opts.lemma || 'this word';
+  const rows = st.assignable.map(s =>
+    `<button class="vd-opt ${s.tone === 'good' ? 'good' : 'subtle'}" onclick="pickVerdict('${s.key}')">
+       <span class="vl">${escapeHtml(s.label)}</span>
+       ${s.blurb ? `<span class="vb">${escapeHtml(s.blurb)}</span>` : ''}
+     </button>`).join('');
+  const bad = (opts.cardId || opts.candId) ? `<button class="vd-opt subtle" onclick="pickVerdict('__requeue')">
+       <span class="vl">The card’s wrong — remove it, keep suggesting the word</span></button>` : '';
+  $('#vdOpts').innerHTML = rows + bad;
+  $('#verdictWrap').hidden = false;
+}
+function closeVerdict() { $('#verdictWrap').hidden = true; VERDICT = null; }
+async function pickVerdict(key) {
+  const v = VERDICT; if (!v) return;
+  $('#verdictWrap').hidden = true;
+  try {
+    if (key === '__requeue') {
+      if (v.candId) await api(`/candidates/${v.candId}/undo`, { method: 'POST' });
+      else await api(`/srs/cards/${v.cardId}?requeue=1`, { method: 'DELETE' });
+      toast('card removed — the word stays in review', 2600);
+    } else if (v.lemma) {
+      await api('/words/' + encodeURIComponent(v.lemma) + '/state', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ state: key }) });
+      toast((key === 'learned' ? '✓ marked learned' : 'not learning it') + ' — no longer suggested', 2600);
+    } else if (v.cardId) {
+      await api(`/srs/cards/${v.cardId}?verdict=${key}`, { method: 'DELETE' });
+      toast(key === 'learned' ? '✓ marked learned' : 'not learning it', 2400);
+    }
+  } catch (e) { toast('couldn’t save — ' + e.message, 3200); VERDICT = null; return; }
+  const done = v.onResolved; VERDICT = null;
+  refreshStudyBanner();
+  if (done) try { done(key); } catch {}
+}
+
+/* ---- a list of every word in one verdict (learned / not learning / …) ---- */
+async function openWordList(state) {
+  $('#wordsView').hidden = false;
+  $('#wlBody').innerHTML = SPINNER;
+  let d;
+  try { d = await api('/words?state=' + encodeURIComponent(state)); }
+  catch (e) { $('#wlBody').innerHTML = `<div class="empty">couldn’t load — ${escapeHtml(e.message)}</div>`; return; }
+  $('#wlTitle').textContent = (d.label || state) + ' · ' + d.words.length;
+  $('#wlBody').innerHTML = d.words.length
+    ? d.words.map(w => `<button class="wl-row" data-l="${escapeHtml(w.lemma)}">
+        <span class="wl-w">${escapeHtml(w.lemma)}</span>
+        <span class="wl-g">${escapeHtml(w.gloss || '')}</span>
+        <span class="wl-x">→</span></button>`).join('')
+    : `<div class="empty">nothing here yet</div>`;
+  $('#wlBody').querySelectorAll('.wl-row').forEach(b =>
+    b.onclick = () => { closeWordList(); openWord(b.dataset.l); });
+}
+function closeWordList() { $('#wordsView').hidden = true; }
+
 function hmsToSec(hms) {
   const p = String(hms || '').split(':').map(Number);
   return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2]
@@ -2995,21 +3113,20 @@ function studyEditCard() {
   openCardList('all', 'Edit card', c.span_text, c.id);
 }
 
-async function studyDelete() {
+function studyDelete() {
   const c = studyCard();
   if (!c || STUDY._busy) return;
-  if (!confirm(`Delete this card for “${c.span_text}”?\n\nIt won’t be suggested again (add it later from the word page if you change your mind).`)) return;
-  STUDY._busy = true;
-  try { await api(`/srs/cards/${c.id}`, { method: 'DELETE' }); }
-  catch (e) { toast('couldn’t delete — ' + e.message, 3000); STUDY._busy = false; return; }
-  STUDY._busy = false;
-  STUDY.queue = STUDY.queue.filter(x => x.id !== c.id);
-  STUDY.history = STUDY.history.filter(h => h.card.id !== c.id);
-  if (STUDY.i >= STUDY.queue.length) STUDY.i = 0;
-  toast('card deleted', 1800);
-  if (!STUDY.queue.length && !STUDY.practice && !STUDY.offline) loadStudyQueue();
-  else renderStudyCard();
-  refreshStudyBanner();
+  openVerdict({
+    lemma: c.normalized_text, label: c.span_text, hasCard: true, cardId: c.id,
+    onResolved: () => {
+      STUDY.queue = STUDY.queue.filter(x => x.id !== c.id);
+      STUDY.history = STUDY.history.filter(h => h.card.id !== c.id);
+      if (STUDY.i >= STUDY.queue.length) STUDY.i = 0;
+      if (!STUDY.queue.length && !STUDY.practice && !STUDY.offline) loadStudyQueue();
+      else renderStudyCard();
+      refreshStudyBanner();
+    },
+  });
 }
 
 async function studyUndo() {
@@ -3128,6 +3245,8 @@ function renderStats(d) {
   const first = d.reviews_by_day[0].date.slice(5), last = d.reviews_by_day[d.reviews_by_day.length - 1].date.slice(5);
   const seg = (n, cls) => n ? `<i class="${cls}" style="flex:${n}"></i>` : '';
   const cell = (v, k, filt, title) => `<div class="stat-cell${filt ? ' tap' : ''}"${filt ? ` onclick="openCardList('${filt}','${title}')"` : ''}><div class="v">${v}</div><div class="k">${k}</div></div>`;
+  const ws = d.word_states || {};
+  const wcell = (state, k) => `<div class="stat-cell${ws[state] ? ' tap' : ''}"${ws[state] ? ` onclick="openWordList('${state}')"` : ''}><div class="v">${ws[state] || 0}</div><div class="k">${k}</div></div>`;
   $('#statsBody').innerHTML = `
     <div class="stat-grid">
       ${cell(d.streak, 'day streak', '', '')}
@@ -3136,6 +3255,8 @@ function renderStats(d) {
       ${cell(cn.total, 'cards', 'all', 'All cards')}
       ${cell(cn.mature, 'mature', 'mature', 'Mature')}
       ${cell(d.total_reviews, 'reviews', 'reviewed', 'Reviewed')}
+      ${wcell('learned', 'learned ✓')}
+      ${wcell('known', 'not learning')}
     </div>
     <div class="stat-h">reviews · last ${d.reviews_by_day.length} days</div>
     <div class="cal">${bars}</div>
@@ -3184,7 +3305,7 @@ function renderCardList(d) {
     const warn = c.bolded ? '' : '<span class="cl-badge due" title="target word not bolded">⚠</span>';
     const jump = c.seconds != null && c.video_id != null
       ? `<button class="cl-jump" onclick="event.stopPropagation();clJump(${c.video_id},${c.seconds})">▶ watch</button>` : '';
-    return `<div class="cl-row" data-id="${c.id}" data-name="${escapeHtml(c.span_text)}">
+    return `<div class="cl-row" data-id="${c.id}" data-name="${escapeHtml(c.span_text)}" data-lemma="${escapeHtml(c.normalized_text || '')}">
       <div class="cl-del-rail">delete</div>
       <div class="cl-inner">
         <div class="cl-top">
@@ -3264,20 +3385,20 @@ async function clSuspend(id, on) {
   try { await api(`/srs/cards/${id}/suspend?on=${on ? 'true' : 'false'}`, { method: 'POST' }); loadCardList(); }
   catch (e) { toast('couldn’t — ' + e.message, 2500); }
 }
-async function clDelete(id, needConfirm) {
+function clDelete(id) {
   const row = $('#clBody') && $('#clBody').querySelector(`.cl-row[data-id="${id}"]`);
   const name = row ? row.dataset.name : 'this word';
-  if (needConfirm && !confirm(`Delete the card for “${name}”? It won’t be suggested again.`)) {
-    if (row) row.classList.remove('swiped');
-    return;
-  }
-  if (row) { row.style.height = row.offsetHeight + 'px'; row.classList.add('deleting'); }
-  try { await api(`/srs/cards/${id}`, { method: 'DELETE' }); }
-  catch (e) { toast('couldn’t delete — ' + e.message, 2500);
-    if (row) { row.classList.remove('deleting', 'swiped'); row.style.height = ''; } return; }
-  if (row) { requestAnimationFrame(() => { row.style.height = '0'; }); setTimeout(() => row.remove(), 200); }
-  toast(`deleted “${name}”`, 1600);
-  refreshStudyBanner();
+  openVerdict({
+    lemma: row && row.dataset.lemma, label: name, hasCard: true, cardId: id,
+    onResolved: () => {
+      if (row) {
+        row.style.height = row.offsetHeight + 'px'; row.classList.add('deleting');
+        requestAnimationFrame(() => { row.style.height = '0'; }); setTimeout(() => row.remove(), 200);
+      }
+      refreshStudyBanner();
+    },
+  });
+  if (row) row.classList.remove('swiped');
 }
 function attachCardListSwipe() {
   const box = $('#clBody');
@@ -4350,7 +4471,7 @@ function inlineGreen(w, sp, ci, wi) {
   _greenCtx = { word, ci, wi };
   const sub = w.tr ? '— ' + w.tr : '— you’re learning this';   // card back, if /watch carried it
   _openInlinePop(sp, word, sub, '',
-    `<button class="id-no" onclick="greenDiscard()">not learning</button>
+    `<button class="id-no" onclick="greenKnow()">I know it</button>
      <button class="id-yes" onclick="greenCard()">✎ card</button>`,
     { s: w.ac, d: w.da });
   if (!w.tr || !(w.ac || w.da)) api('/words/' + encodeURIComponent(word)).then(d => {   // fallback (e.g. family-green words)
@@ -4364,15 +4485,14 @@ function greenCard() {
   $('#inlineDecide').hidden = true;
   if (_greenCtx) watchTapWord(_greenCtx.ci, _greenCtx.wi);
 }
-async function greenDiscard() {
+function greenKnow() {
   $('#inlineDecide').hidden = true;
   const word = _greenCtx && _greenCtx.word;
   if (!word) return;
-  try { await api('/words/' + encodeURIComponent(word) + '/discard', { method: 'POST' }); }
-  catch (e) { toast('couldn’t update — ' + e.message, 3000); return; }
-  clearGreen(word);
-  toast('stopped highlighting “' + word + '”', 2600);
-  if (wPausedForModal && WP) { wPausedForModal = false; try { WP.play(); } catch {} }
+  openVerdict({ lemma: word, label: word, hasCard: true, onResolved: () => {
+    clearGreen(word);
+    if (wPausedForModal && WP) { wPausedForModal = false; try { WP.play(); } catch {} }
+  } });
 }
 function clearGreen(word) {
   const t = rnorm(stripPunct(word));
@@ -4449,14 +4569,26 @@ function inlineUndo(candId, anchor, kind, tr, acc) {
   $('#inlineDecide').dataset.cand = candId;
   const fallback = kind === 'carded' ? '— you have a card for this' : '— you skipped this';
   const btns = kind === 'carded'
-    // destructive action stays subdued + left; "keep" is the safe default (primary, right)
-    ? `<button class="id-no danger" onclick="inlineUndoCommit('carded')">remove card</button>
+    // "keep" is the safe default (primary, right); "remove ▾" opens the verdict sheet
+    ? `<button class="id-no" onclick="inlineUndoVerdict('${encodeURIComponent(word)}', ${candId})">remove ▾</button>
        <button class="id-yes" onclick="closeInline(true)">keep</button>`
     : `<button class="id-no" onclick="closeInline(true)">keep skipped</button>
        <button class="id-yes" onclick="inlineUndoCommit('skipped')">back to review</button>`;
   _openInlinePop(anchor, word, tr ? '— ' + tr : fallback, '', btns, acc);
   _hydrateInlinePop(word, () => !$('#inlineDecide').hidden && $('#inlineDecide').dataset.cand == candId,
     !!tr, !!(acc && (acc.s || acc.d)));
+}
+function inlineUndoVerdict(encWord, candId) {
+  const word = decodeURIComponent(encWord);
+  $('#inlineDecide').hidden = true;
+  openVerdict({ lemma: word, label: word, candId, onResolved: () => {
+    // whatever was chosen, the word is no longer carded here
+    WCUES.forEach(cue => (cue.words || []).forEach(w => {
+      if (w.cc === candId) { delete w.cc; w.c = false; }
+    }));
+    if (READER_MODE) refreshReader(); else renderTranscript();
+    if (wPausedForModal && WP) { wPausedForModal = false; try { WP.play(); } catch {} }
+  } });
 }
 async function inlineUndoCommit(kind) {
   const id = +$('#inlineDecide').dataset.cand;
@@ -5459,9 +5591,11 @@ async function hardRefresh() {
 
 // step back one level through the app's views; returns true if it did something
 function navBack() {
+  if (!$('#verdictWrap').hidden) { closeVerdict(); return true; }
   if (!$('#lyricSheet').hidden) { closeLyricSheet(); return true; }
   if (!$('#transSheet').hidden) { closeTransSheet(); return true; }
   if (!$('#inlineDecide').hidden) { closeInline(true); return true; }
+  if (!$('#wordsView').hidden) { closeWordList(); return true; }
   if (!$('#wordView').hidden) { closeWord(); return true; }
   if (!$('#shareWrap').hidden) { closeShareHelp(); return true; }
   if (!$('#pasteWrap').hidden) { closePaste(); return true; }
@@ -5514,7 +5648,7 @@ addEventListener('popstate', () => { navBack(); try { history.pushState({ ru: 1 
 
 /* ---------------- boot ---------------- */
 // belt-and-suspenders: full-screen overlays must never be left showing
-['#studyView', '#statsView', '#cardsView', '#vidDelView', '#readView', '#pasteWrap', '#shareWrap', '#tocPanel', '#transSheet', '#lyricSheet']
+['#studyView', '#statsView', '#cardsView', '#vidDelView', '#readView', '#pasteWrap', '#shareWrap', '#tocPanel', '#transSheet', '#lyricSheet', '#verdictWrap', '#wordsView']
   .forEach(s => { const e = $(s); if (e) e.hidden = true; });
 
 if ('serviceWorker' in navigator) {

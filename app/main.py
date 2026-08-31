@@ -40,6 +40,7 @@ import whisper_rt  # noqa: E402
 import store  # noqa: E402
 import subs  # noqa: E402
 import web  # noqa: E402
+import wordstate  # noqa: E402
 import ytdlp  # noqa: E402
 
 store.init_db()
@@ -1204,6 +1205,22 @@ def decide(cand_id: int, body: DecisionIn):
     return {"candidate": updated, "anki": anki_result, "srs_card": card}
 
 
+@app.get("/words")
+def words_list(state: str):
+    """Every lemma in a given verdict ('learned', 'known', …) — newest first."""
+    if not wordstate.is_valid(state):
+        raise HTTPException(422, f"unknown state: {state}")
+    return {"state": state, "label": wordstate.label(state),
+            "words": store.words_in_state(state)}
+
+
+@app.get("/words/states")
+def word_states():
+    """The verdicts a learner can put a word in (drives the pick-a-verdict UI).
+    Extend `wordstate.STATES` to add levels — nothing else here changes."""
+    return wordstate.public()
+
+
 @app.get("/words/{lemma}")
 def word_detail(lemma: str):
     """Everything about one word: card status, family, and every place it's
@@ -1212,8 +1229,14 @@ def word_detail(lemma: str):
     have = store.card_lemmas()
     fam_lemmas = store.known_family_lemmas()
     cand, members = store.word_status(lem)
+    _c = store.connect()
+    _vr = _c.execute("SELECT reason FROM resolved_words WHERE normalized_text=?",
+                     (lem,)).fetchone()
+    _c.close()
+    verdict = _vr["reason"] if _vr else None
     status = ("carded" if lem in have
               else "family" if lem in fam_lemmas
+              else verdict if (verdict and wordstate.is_assignable(verdict))
               else "pending" if (cand and cand["status"] == "pending")
               else "new")
     translation = (cand or {}).get("translation")
@@ -1236,6 +1259,7 @@ def word_detail(lemma: str):
         "yo": store.yo_form(lem),                 # ё-restored spelling (instant)
         "accented": store.accent_for(lem),        # stressed form or None (LLM, lazy)
         "status": status,
+        "verdict": verdict if wordstate.is_assignable(verdict or "") else None,
         "translation": translation,
         "gloss": gloss,
         "family": [m for m in members if m != lem],
@@ -1263,19 +1287,50 @@ def word_accent(lemma: str):
     return {"lemma": lem, "accented": acc}
 
 
+def _apply_word_state(lemma, reason):
+    """Set a lemma's verdict + tear down every card / note for it. Shared by the
+    word page, the inline popovers, study, and the card list."""
+    lem = store.lemma_key(lemma)
+    res = store.set_word_state(lem, reason)
+    n_cards, srs_notes = srs.delete_cards_for_lemma(lem)
+    for nid in list(res.get("removed_notes", [])) + srs_notes:
+        try:
+            anki.delete_note(nid)
+        except anki.AnkiError:
+            pass
+    if res.get("removed_notes") or srs_notes:
+        _sync_soon()
+    res["removed_srs_cards"] = n_cards
+    backup.snapshot_async("word-state")
+    return {**res, **srs.stats()}
+
+
+class WordStateIn(BaseModel):
+    state: str
+
+
+@app.post("/words/{lemma}/state")
+def word_set_state(lemma: str, body: WordStateIn):
+    """Mark a word 'learned' / 'not learning' / … — stops highlighting +
+    suggesting it and removes any card. `state` is a key from GET /words/states."""
+    if not wordstate.is_assignable(body.state):
+        raise HTTPException(422, f"not an assignable state: {body.state}")
+    return _apply_word_state(lemma, body.state)
+
+
+@app.delete("/words/{lemma}/state")
+def word_clear_state(lemma: str):
+    """Undo the verdict — the word can be suggested / highlighted again. Does
+    not bring back a deleted card."""
+    out = store.clear_word_state(store.lemma_key(lemma))
+    backup.snapshot_async("word-state-clear")
+    return {**out, **srs.stats()}
+
+
 @app.post("/words/{lemma}/discard")
 def word_discard(lemma: str):
-    """'Not a word I'm learning' — stop highlighting it everywhere (breaks any
-    word-family link, records it as known) and delete any pipeline-made Anki
-    cards for it."""
-    res = store.discard_word(store.lemma_key(lemma))
-    for nid in res.get("removed_notes", []):
-        anki.delete_note(nid)
-    if res.get("removed_notes"):
-        _sync_soon()
-    res["removed_srs_cards"] = srs.delete_cards_for_lemma(res["lemma"])
-    backup.snapshot_async("discard-word")
-    return res
+    """Back-compat: same as POST /words/{lemma}/state {"state": "known"}."""
+    return _apply_word_state(lemma, "known")
 
 
 @app.post("/families/backfill")
@@ -1629,10 +1684,13 @@ def srs_suspend(card_id: int, on: bool = True):
 
 
 @app.delete("/srs/cards/{card_id}")
-def srs_delete(card_id: int, requeue: bool = False):
-    """Drop a study card. By default the source word is also marked known so it
-    won't be re-suggested; `?requeue=1` instead puts it back in the review queue
-    (for 'the card is wrong, let me remake it')."""
+def srs_delete(card_id: int, requeue: bool = False, verdict: str = "known"):
+    """Drop a study card. `?verdict=learned|known` (default known) records the
+    learner's take on the word so it isn't re-suggested; `?requeue=1` instead
+    puts it back in the review queue (for 'the card is wrong, let me remake it').
+    """
+    if not requeue and not wordstate.is_assignable(verdict):
+        raise HTTPException(422, f"not an assignable verdict: {verdict}")
     card = srs.get_card(card_id)
     if card and card.get("anki_note_id"):
         anki.delete_note(card["anki_note_id"])
@@ -1644,13 +1702,14 @@ def srs_delete(card_id: int, requeue: bool = False):
             if requeue:
                 store.unresolve_candidate(cand_id)
             else:
-                store.resolve_candidate(cand_id, "no")
+                store.resolve_candidate(cand_id, "no", reason=verdict)
         except KeyError:
             pass
-    elif card:
-        store.discard_word(store.norm(card["normalized_text"]))
+    elif card and not requeue:
+        store.set_word_state(store.norm(card["normalized_text"]), verdict)
     backup.snapshot_async("srs-delete")
-    return {"ok": True, "requeued": requeue, **srs.stats()}
+    return {"ok": True, "requeued": requeue, "verdict": None if requeue else verdict,
+            **srs.stats()}
 
 
 @app.post("/srs/backfill")

@@ -598,14 +598,15 @@ def delete_orphan_cards():
 
 
 def delete_cards_for_lemma(normalized_text):
+    """-> (n_deleted, [anki_note_id, …]) for the cards that had one."""
     c = store.connect()
-    ids = [r["id"] for r in c.execute(
-        "SELECT id FROM srs_cards WHERE normalized_text=?",
-        (store.norm(normalized_text),))]
+    rows = c.execute(
+        "SELECT id, anki_note_id FROM srs_cards WHERE normalized_text=?",
+        (store.norm(normalized_text),)).fetchall()
     c.close()
-    for cid in ids:
-        delete_card(cid)
-    return len(ids)
+    for r in rows:
+        delete_card(r["id"])
+    return len(rows), [r["anki_note_id"] for r in rows if r["anki_note_id"]]
 
 
 # ---------------------------------------------------------------- the queue
@@ -851,6 +852,7 @@ def analytics(days=30):
     return {
         "counts": {"new": new, "learning": learning, "review": review,
                    "mature": mature, "suspended": suspended, "total": total},
+        "word_states": store.word_state_counts(),   # {'learned': n, 'known': n, 'has_card': n}
         "reviews_today": reviews_today, "total_reviews": total_reviews,
         "retention": retention, "streak": streak,
         "reviews_by_day": days_list,
