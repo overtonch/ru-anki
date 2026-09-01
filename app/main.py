@@ -2170,7 +2170,8 @@ def read_text(video_id: int):
             blocks.append({"w": words, "line_id": r["id"]})
     src = v.get("url") or ""
     return {
-        "video": {k: v.get(k) for k in ("id", "title", "channel", "url")},
+        "video": {**{k: v.get(k) for k in ("id", "title", "channel", "url")},
+                  "kind": "text"},
         "chapters": chapters, "blocks": blocks,
         "chapters_loaded": cn,
         "glossary": store.glosses_for(seen),   # offline gloss pack (lemma -> EN)

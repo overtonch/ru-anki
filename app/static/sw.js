@@ -1,7 +1,7 @@
 // ru-anki service worker — keeps the app shell available offline.
 // Data (transcripts, the outbound card queue) lives in IndexedDB, handled by
 // the page itself; this SW only makes sure the page can load with no network.
-const SHELL = 'ru-anki-shell-v103';
+const SHELL = 'ru-anki-shell-v104';
 
 // fetch that gives up fast so a captive / dead network doesn't hang the app —
 // the caller falls back to cache.

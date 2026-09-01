@@ -2021,6 +2021,9 @@ async function offlineVideoList() {
     const cur = byId.get(vv.id) || {};
     Object.assign(cur, vv);   // merge meta from whichever entry has more
     if (Array.isArray(o.lines)) cur.lines = o.lines.length;
+    // the /read cache entry is unmistakable — a book, not a video
+    if (o.blocks || o.chapters) cur.kind = 'text';
+    else if (Array.isArray(o.cues) && vv.kind) cur.kind = vv.kind;   // /watch carries kind
     cur._offline = true;
     byId.set(vv.id, cur);
   }
@@ -2192,12 +2195,16 @@ function renderCard(c) {
   const fq = c.freq ? ` · <span class="fq ${c.freq.band}">${escapeHtml(c.freq.label)}</span>` : '';
   const rec = c.count > 1 ? ` · <span class="rec">heard ${c.count}×</span>` : '';
   const secs = c.timestamp_start != null ? hmsToSec(c.timestamp_start) : null;
-  const clip = secs != null ? `
-    <button class="clip" title="watch this moment">
-      <img loading="lazy" src="/videos/${CURRENT}/frame?t=${secs}" alt=""
-           onerror="this.closest('.clip').classList.add('noimg')">
-      <span class="clip-t">▶ ${fmtTime(secs)}</span>
-    </button>` : '';
+  const kind = (DETAIL_V && DETAIL_V.kind) || 'video';
+  const clip = secs == null ? ''
+    : kind === 'video' ? `
+      <button class="clip" title="watch this moment">
+        <img loading="lazy" src="/videos/${CURRENT}/frame?t=${secs}" alt=""
+             onerror="this.closest('.clip').classList.add('noimg')">
+        <span class="clip-t">▶ ${fmtTime(secs)}</span>
+      </button>`
+    : kind === 'song' ? `<button class="clip noimg" title="hear this line"><span class="clip-t">▶ ${fmtTime(secs)}</span></button>`
+    : '';
   el.innerHTML = `
     <div class="swipeflag left">✓ make card</div>
     <div class="swipeflag right">✕ discard</div>
@@ -3526,11 +3533,11 @@ async function openCard(id) {
   try { d = await api('/srs/cards/' + id); }
   catch (e) { $('#cardBody').innerHTML = `<div class="empty">couldn’t load — ${escapeHtml(e.message)}</div>`; return; }
   CARD_V = d;
-  renderCard(d);
+  renderCardDetail(d);
 }
 function closeCard() { $('#cardView').hidden = true; CARD_V = null; }
 const _FSRS_STATE = { 0: 'new', 1: 'learning', 2: 'review', 3: 'relearning' };
-function renderCard(d) {
+function renderCardDetail(d) {
   const issues = (d.issues || []);
   const dl = (k, v) => v == null || v === '' ? '' : `<div class="cd-kv"><span>${k}</span><b>${escapeHtml(String(v))}</b></div>`;
   const p = d.preview || {};
@@ -3587,7 +3594,7 @@ function renderCard(d) {
   const rc = $('#cdRecheck');
   if (rc) rc.onclick = async () => {
     rc.disabled = true; rc.textContent = 're-checking…';
-    try { const nd = await api(`/srs/cards/${d.id}/recheck`, { method: 'POST' }); CARD_V = nd; renderCard(nd);
+    try { const nd = await api(`/srs/cards/${d.id}/recheck`, { method: 'POST' }); CARD_V = nd; renderCardDetail(nd);
       toast(nd.issues.some(x => x.fix === 'recheck') ? 'still needs a look — try editing' : 'fixed ✓', 3000); }
     catch (e) { rc.disabled = false; rc.textContent = '↻ re-check this card with the LLM'; toast('couldn’t — ' + e.message, 3000); }
   };
@@ -4964,6 +4971,12 @@ document.addEventListener('click', e => {
   p.hidden = true;
 }, true);
 
+// don't send people to a dead Safari tab when there's no connection
+document.addEventListener('click', e => {
+  const a = e.target.closest && e.target.closest('a[target="_blank"]');
+  if (a && !navigator.onLine) { e.preventDefault(); toast('offline — can’t open external links'); }
+}, true);
+
 /* ================= reading ================= */
 const RFONTS = ['s', 'm', 'l', 'xl'];
 function applyReadFont() {
@@ -5043,7 +5056,13 @@ async function openReader(id) {
   let d;
   try { d = await api(`/videos/${id}/read`); idbPut('offline', 'r' + id, d).catch(() => {}); touchOfflineLRU('r' + id); }
   catch { d = await idbGet('offline', 'r' + id).catch(() => null); }
-  if (!d) { $('#readBody').innerHTML = '<div class="empty">couldn’t load this text</div>'; return; }
+  if (!d) {
+    $('#readBody').innerHTML = navigator.onLine
+      ? '<div class="empty">couldn’t load this text — check your connection</div>'
+      : '<div class="empty">not saved for offline yet — open this book once while connected and it’ll be available offline after</div>';
+    READER_MODE = true;   // so back navigation works
+    return;
+  }
   $('#rTitle').textContent = d.video.title || 'Reading';
   READER_MODE = true;
   READER_CH = d.chapters || [];
@@ -5458,7 +5477,12 @@ async function downloadOffline(id) {
 }
 async function offlineVideoMeta(id) {
   const off = await idbGet('offline', id);
-  return off ? { ...off.video, lines: off.lines.length } : { id, title: 'video ' + id };
+  if (off) return { ...off.video, lines: off.lines.length };
+  const rd = await idbGet('offline', 'r' + id).catch(() => null);      // a saved book
+  if (rd && rd.video) return { ...rd.video, kind: 'text' };
+  const wd = await idbGet('offline', 'w' + id).catch(() => null);      // a saved video/song
+  if (wd && wd.video) return { ...wd.video };
+  return { id, title: 'item ' + id };
 }
 
 /* ---------------- offline SONGS (Cache API — small AAC files) ---------------- */
