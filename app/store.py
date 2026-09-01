@@ -59,6 +59,10 @@ def init_db():
     # instead of the bolded sentence. Reversible: the sentence is always kept.
     if not _has_column(c, "srs_cards", "front_word"):
         c.execute("ALTER TABLE srs_cards ADD COLUMN front_word TEXT")
+    # learn_score: 0–100 (higher = a learner should meet it sooner), set by a
+    # daily batched LLM pass. Decides the order new cards are introduced.
+    if not _has_column(c, "srs_cards", "learn_score"):
+        c.execute("ALTER TABLE srs_cards ADD COLUMN learn_score INTEGER")
     # channel / thumbnail metadata for the video picker (nullable, backfilled).
     for col in ("channel TEXT", "channel_url TEXT", "thumbnail_url TEXT",
                 "duration INTEGER",

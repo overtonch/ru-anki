@@ -72,6 +72,9 @@ def stub_llm(monkeypatch):
                         lambda items, model=None: [((w or "") + "́", (w or "") + "́")
                                                    for w, _ in items])
     monkeypatch.setattr(llm, "word_family", lambda w, model=None: (w, [w]))
+    # deterministic fake "learn-first" score: shorter word == more common == higher
+    monkeypatch.setattr(llm, "learn_priority",
+                        lambda items, model=None: [max(1, 100 - len(w)) for w, _ in items])
     monkeypatch.setattr(llm, "extract_candidates",
                         lambda *a, **k: ([], [], {"calls": 0, "in": 0, "out": 0,
                                                   "think": 0, "cost_est": 0.0}))

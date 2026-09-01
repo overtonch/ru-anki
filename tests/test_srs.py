@@ -44,6 +44,26 @@ def test_new_cards_picked_in_order_shown_shuffled_stably(db):
     assert q3 == [i for i in q1 if i != q1[0]]
 
 
+def test_new_cards_introduced_by_learn_score(db):
+    import srs
+    srs.set_setting("new_per_day", 3)
+    ids = {}
+    for w in ("дом", "стол", "невероятный", "предотвращать"):
+        ids[w] = _make_card(srs, span=w)["id"]
+    # rank: shorter word -> higher score (conftest stub)
+    scores = {r["id"]: (100 - len(r["span_text"]))
+              for r in srs.cards_for_learn_ranking()}
+    srs.set_learn_scores(scores)
+
+    q = [c["id"] for c in srs.queue(limit=50) if c["is_new"]]
+    assert set(q) == {ids["дом"], ids["стол"], ids["невероятный"]}   # top 3 by score
+    assert ids["предотвращать"] not in q                             # lowest score, over budget
+
+    # a brand-new card starts unscored and sorts last until the daily pass runs
+    _make_card(srs, span="я")
+    assert srs.unranked_new_count() >= 1
+
+
 def test_preview_accepts_id_or_row(db):
     import srs
     c = _make_card(srs)

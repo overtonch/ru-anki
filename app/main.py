@@ -219,8 +219,17 @@ def _backfill_families(delay=0):
     print("[family] backfill done")
 
 
+def _rank_new_on_boot(delay=30):
+    time.sleep(delay)
+    try:
+        _maybe_rank_new()
+    except Exception as e:  # noqa: BLE001
+        print(f"[learn] boot rank failed: {e}", flush=True)
+
+
 if not _TESTING:
     threading.Thread(target=_backfill_families, kwargs={"delay": 20}, daemon=True).start()
+    threading.Thread(target=_rank_new_on_boot, daemon=True).start()
 
 
 # ------------------------------------------------------------------ models
@@ -1494,6 +1503,7 @@ def _study_card_view(card, with_preview=True, titles=None):
 
 @app.get("/srs/stats")
 def srs_stats():
+    _maybe_rank_new()
     s = srs.stats()
     s["anki_dual_write"] = srs.anki_dual_write()
     s["new_per_day"] = srs.new_per_day()
@@ -1558,6 +1568,7 @@ def srs_edit_card(card_id: int, body: CardEditIn):
 
 @app.get("/srs/queue")
 def srs_queue(limit: int = 60):
+    _maybe_rank_new()
     cards = srs.queue(limit=limit)
     titles = store.video_titles()
     ctxs = store.card_contexts(cards)
@@ -1752,6 +1763,64 @@ def srs_backfill_accents(background: BackgroundTasks, limit: int | None = None,
     background.add_task(_backfill_accents, limit, force)
     return {"queued": len(srs.accent_backfill_rows()) if force
             else srs.count_missing_accent(), "force": force}
+
+
+# --- learn-first ordering: a daily batched LLM pass scores the not-yet-seen
+#     cards 0-100 (higher = introduce sooner). queue() picks the day's new cards
+#     by that score. Re-run each day so newly-added cards get placed and the
+#     ranking can drift with the collection.
+_RANK_LOCK = threading.Lock()
+
+
+def _rank_new_cards(rescore_all=False):
+    if not _RANK_LOCK.acquire(blocking=False):
+        return
+    try:
+        rows = srs.cards_for_learn_ranking()
+        if not rescore_all:
+            rows = [r for r in rows if r.get("learn_score") is None]
+        if not rows:
+            srs.set_setting("learn_rank_day", srs._day_start_iso()[:10])
+            return
+        print(f"[learn] ranking {len(rows)} new cards (rescore_all={rescore_all})…", flush=True)
+        BATCH, done = 50, 0
+        for i in range(0, len(rows), BATCH):
+            chunk = rows[i:i + BATCH]
+            try:
+                scores = llm.learn_priority(
+                    [(r.get("front_word") or r["span_text"], r.get("translation") or "")
+                     for r in chunk])
+            except Exception as e:  # noqa: BLE001
+                print(f"[learn] batch {i}: {e}", flush=True)
+                continue
+            mapped = {r["id"]: s for r, s in zip(chunk, scores) if s is not None}
+            # anything the model skipped: park it mid-scale so it isn't stuck last
+            for r in chunk:
+                mapped.setdefault(r["id"], 50)
+            done += srs.set_learn_scores(mapped)
+        srs.set_setting("learn_rank_day", srs._day_start_iso()[:10])
+        print(f"[learn] ranked {done} cards", flush=True)
+    finally:
+        _RANK_LOCK.release()
+
+
+def _maybe_rank_new():
+    """Cheap check on every queue / stats load: (re)rank when the day rolled over
+    or fresh unranked cards showed up. Runs in a thread — never blocks the call."""
+    if _TESTING:
+        return
+    today = srs._day_start_iso()[:10]
+    stale_day = srs.get_setting("learn_rank_day") != today
+    if not stale_day and srs.unranked_new_count() == 0:
+        return
+    threading.Thread(target=_rank_new_cards, kwargs={"rescore_all": stale_day},
+                     daemon=True).start()
+
+
+@app.post("/srs/rank-new")
+def srs_rank_new(background: BackgroundTasks, rescore_all: bool = True):
+    background.add_task(_rank_new_cards, rescore_all)
+    return {"queued": len(srs.cards_for_learn_ranking()), "rescore_all": rescore_all}
 
 
 def _backfill_front_words(force=False):

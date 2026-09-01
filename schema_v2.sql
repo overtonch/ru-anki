@@ -112,6 +112,7 @@ CREATE TABLE IF NOT EXISTS srs_cards (
     accented        TEXT,                -- target word stressed AS IT APPEARS on the card
     dict_accented   TEXT,                -- stressed dictionary / citation form
     front_word      TEXT,                -- dict form / common phrase form; front when card_front='word'
+    learn_score     INTEGER,             -- 0-100, higher = introduce sooner (daily LLM pass)
     video_id        INTEGER REFERENCES videos(id),
     timestamp       TEXT,                -- HH:MM:SS.mmm — frame thumbnail + jump-to-moment
     -- FSRS state (see fsrs.Card.to_dict)

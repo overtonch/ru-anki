@@ -587,6 +587,43 @@ ends with "[means: …]", that gloss is authoritative for which word it is
 numbered lines, "SURFACE | DICT" separated by a pipe."""
 
 
+_LEARN_ORDER_SYSTEM = """You are ordering Russian vocabulary for a learner by how
+EARLY they should learn each item. For each numbered "WORD — meaning" line, output
+"N. SCORE" where SCORE is 0-100:
+
+ 90-100  core survival vocabulary — a beginner needs it in the first weeks
+         (быть, хотеть, говорить, день, вода, большой, хорошо, потому что)
+ 70-89   very common, everyday A2 words used constantly in speech
+ 50-69   solid, useful intermediate (B1) vocabulary
+ 30-49   less frequent B2 words — known by fluent speakers, not daily
+ 10-29   uncommon: bookish, formal, technical, regional
+  0-9    rare, archaic, poetic, slang, or highly specialised
+
+Judge by real spoken-and-written frequency and usefulness for communication, NOT
+by how the word looks. A transparent-looking cognate can still be rare; a short
+plain word can be advanced. Multi-word phrases: score the phrase as a unit.
+Output ONLY the numbered "N. SCORE" lines, nothing else."""
+
+
+def learn_priority(items, model=None):
+    """items: [(word, meaning), …] -> an int 0-100 per item (higher = a learner
+    should meet it sooner). Absolute scale, so batches are independent. Missing /
+    unparsable -> None."""
+    if not items:
+        return []
+    numbered = "\n".join(
+        f"{i + 1}. {w} — {(g or '').strip()}".rstrip(" —")
+        for i, (w, g) in enumerate(items))
+    text = _warm_or_oneshot(numbered, _LEARN_ORDER_SYSTEM, model or TRANSLATE_MODEL,
+                            timeout=60)
+    by_num = {}
+    for ln in text.splitlines():
+        m = re.match(r"\s*(\d+)[.)]\s*(-?\d+)", ln.strip())
+        if m:
+            by_num[int(m.group(1))] = max(0, min(100, int(m.group(2))))
+    return [by_num.get(i + 1) for i in range(len(items))]
+
+
 def stress_forms(items, model=None):
     """items: [(word, sentence)] or [(word, sentence, gloss)] ->
     [(surface_stressed, dict_stressed), …] aligned to items. The optional gloss

@@ -1258,6 +1258,7 @@
         <option value="due">due soon</option>
         <option value="reviewed">last seen</option>
         <option value="hardest">hardest</option>
+        <option value="learn">learn-first</option>
       </select>
     </div>
     <div id="clBody" class="cl-body"></div>
@@ -3310,6 +3311,8 @@ function renderCardList(d) {
       : c.overdue ? '<span class="cl-badge due">due</span>'
       : c.due_in ? `<span class="cl-badge">${c.due_in}</span>` : '';
     const warn = c.bolded ? '' : '<span class="cl-badge due" title="target word not bolded">⚠</span>';
+    const lp = ($('#clSort').value === 'learn' && c.learn_score != null)
+      ? `<span class="cl-badge" title="learn-first score (higher = introduced sooner)">≈${c.learn_score}</span>` : '';
     const jump = c.seconds != null && c.video_id != null
       ? `<button class="cl-jump" onclick="event.stopPropagation();clJump(${c.video_id},${c.seconds})">▶ watch</button>` : '';
     return `<div class="cl-row" data-id="${c.id}" data-name="${escapeHtml(c.span_text)}" data-lemma="${escapeHtml(c.normalized_text || '')}">
@@ -3317,7 +3320,7 @@ function renderCardList(d) {
       <div class="cl-inner">
         <div class="cl-top">
           <span class="cl-w${c.suspended ? ' sus' : ''}">${escapeHtml(c.span_text)}</span>
-          <span class="cl-tr">${escapeHtml(c.translation || '')}</span>${warn}${badge}
+          <span class="cl-tr">${escapeHtml(c.translation || '')}</span>${lp}${warn}${badge}
         </div>
         <div class="cl-exp">
           <div class="cl-sent">${c.front_html || ''}</div>

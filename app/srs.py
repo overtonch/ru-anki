@@ -622,6 +622,43 @@ def _shuffle_new_for_day(rows):
         f"{seed}|{r['id']}".encode()).digest())
 
 
+_NEW_ORDER = ("learn_score IS NULL, learn_score DESC, created_at ASC, id ASC")
+
+
+def cards_for_learn_ranking():
+    """Every not-yet-introduced card — the pool the daily LLM pass scores for
+    learn-first order."""
+    c = store.connect()
+    rows = c.execute(
+        """SELECT id, span_text, normalized_text, translation, front_word, is_phrase
+           FROM srs_cards
+           WHERE suspended=0 AND last_review IS NULL
+           ORDER BY id""").fetchall()
+    c.close()
+    return [dict(r) for r in rows]
+
+
+def unranked_new_count():
+    c = store.connect()
+    n = c.execute("SELECT COUNT(*) n FROM srs_cards "
+                  "WHERE suspended=0 AND last_review IS NULL "
+                  "AND learn_score IS NULL").fetchone()["n"]
+    c.close()
+    return n
+
+
+def set_learn_scores(scores):
+    """scores: {card_id: 0-100}. Only touches given ids."""
+    if not scores:
+        return 0
+    c = store.connect()
+    c.executemany("UPDATE srs_cards SET learn_score=? WHERE id=?",
+                  [(int(v), int(k)) for k, v in scores.items() if v is not None])
+    c.commit()
+    c.close()
+    return len(scores)
+
+
 def _new_introduced_today(c):
     row = c.execute(
         """SELECT COUNT(*) n FROM (
@@ -690,6 +727,7 @@ _LIST_SORTS = {
     "due": "due ASC", "alpha": "normalized_text ASC",
     "reviewed": "last_review DESC", "hardest": "difficulty DESC, lapses DESC",
     "reps": "reps DESC",
+    "learn": "learn_score DESC, created_at ASC",   # introduce-first order
 }
 
 
@@ -728,6 +766,7 @@ def list_cards(filt="all", sort="added", q="", limit=1000, video=None):
         out.append({
             "id": d["id"], "span_text": d["span_text"], "front_html": front,
             "bolded": bolded, "front_word": d["front_word"],
+            "learn_score": d["learn_score"],
             "normalized_text": d["normalized_text"], "translation": d["translation"],
             "accented": d["accented"], "dict_accented": d["dict_accented"],
             "is_phrase": bool(d["is_phrase"]),
@@ -762,10 +801,10 @@ def queue(limit=80):
     fresh = []
     if budget:
         fresh = [dict(r) for r in c.execute(
-            """SELECT * FROM srs_cards
-               WHERE suspended=0 AND last_review IS NULL
-               ORDER BY created_at ASC, id ASC LIMIT ?""", (budget,))]
-        fresh = _shuffle_new_for_day(fresh)   # picked in order, shown shuffled
+            f"""SELECT * FROM srs_cards
+                WHERE suspended=0 AND last_review IS NULL
+                ORDER BY {_NEW_ORDER} LIMIT ?""", (budget,))]
+        fresh = _shuffle_new_for_day(fresh)   # selected learn-first, shown shuffled
     c.close()
     return [_card_dict_from_plain(r) for r in (due + fresh)]
 
@@ -794,9 +833,9 @@ def offline_bundle(days=3):
     budget = max(0, new_per_day() - _new_introduced_today(c))
     if budget:
         rows += _shuffle_new_for_day([dict(r) for r in c.execute(
-            """SELECT * FROM srs_cards
-               WHERE suspended=0 AND last_review IS NULL
-               ORDER BY created_at ASC, id ASC LIMIT ?""", (budget,))])
+            f"""SELECT * FROM srs_cards
+                WHERE suspended=0 AND last_review IS NULL
+                ORDER BY {_NEW_ORDER} LIMIT ?""", (budget,))])
     c.close()
     out = []
     for r in rows:
