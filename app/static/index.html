@@ -1077,7 +1077,7 @@
   <h1>ru-anki</h1>
   <span class="sub" id="netpill"><span class="netdot"></span><span id="netword">…</span></span>
   <span class="hdr-right">
-    <button class="pill" id="queuePill" hidden onclick="flushQueue(true); flushSrs().then(()=>{refreshQueuePill();refreshStudyBanner();})"></button>
+    <button class="pill" id="queuePill" hidden onclick="onReconnect()"></button>
     <button class="iconbtn" id="refreshBtn" aria-label="reload the app" onclick="hardRefresh()">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/></svg>
     </button>
@@ -1467,7 +1467,14 @@ let ytPlayer = null, ytApiP = null, capTimer = null, WP = null, localURL = null;
 let WDATA = null, bgAudio = null, audioMode = false, audioURL = null, audioUserPaused = false;
 let audioSrc = null, audioSrcIsBlob = false, autoSwapped = false;
 let SONG_MODE = false, SONG_LOOP = false;
-let WCUES = [], WCANDS = {}, wActive = -1, wUserScroll = 0, wPausedForModal = false, capHidden = false;
+let WCUES = [], WCANDS = {}, WGLOSS = {}, wActive = -1, wUserScroll = 0, wPausedForModal = false, capHidden = false;
+/* best-effort local gloss for a word when the LLM is unreachable — from the
+   per-piece pack shipped with /watch and /read, keyed by lemma. */
+function localGloss(word, lemma) {
+  if (lemma && WGLOSS[lemma]) return WGLOSS[lemma];
+  const n = rnorm(stripPunct(word || '')).replace(/ё/g, 'е');
+  return WGLOSS[n] || null;
+}
 
 function toast(msg, ms=2400) {
   const t = $('#toast'); t.textContent = msg; t.classList.add('show');
@@ -2416,7 +2423,7 @@ function openCardModal(row, forceWord) {
   const tokens = row.text.split(/(\s+)/);          // words + the gaps between them
   const wordTok = [];                              // token index of each Nth word
   tokens.forEach((t, i) => { if (t && !/^\s+$/.test(t)) wordTok.push(i); });
-  MODAL = { tokens, wordTok, sentence: row.text, lineId: row.id,
+  MODAL = { tokens, wordTok, sentence: row.text, lineId: row.id, lemma: row.lemma || null,
             timestamp: row.start_time || null, compact: !!forceWord,
             anchor: null, focus: null, scatter: null, _edited: false,
             preview: null, previewFor: null, pvTimer: null, pvSeq: 0, _firstSync: true };
@@ -2539,8 +2546,18 @@ function updatePreview(span, immediate) {
     return;
   }
   MODAL.preview = null;
-  if (!navigator.onLine) {
-    box.innerHTML = '<div class="wait">ⓘ translation preview isn’t available offline — the card will be translated when it uploads</div>';
+  if (!navigator.onLine || NET === 'noserver') {
+    const g = localGloss(span, MODAL.lemma);
+    if (g) {
+      MODAL.preview = { translation: g, span_text: span, sentence: MODAL.sentence || '',
+                        is_phrase: span.split(/\s+/).length > 1, _local: true };
+      MODAL.previewFor = span;
+      box.innerHTML = `<div class="pv quick"><div class="tr">${escapeHtml(g)}
+        <span class="qtag">offline</span></div>
+        <div class="wait" style="margin-top:.4rem">full translation + stress fill in when you’re back online</div></div>`;
+    } else {
+      box.innerHTML = '<div class="wait">ⓘ offline — this word isn’t in the local dictionary. The card is saved and translated when you reconnect.</div>';
+    }
     return;
   }
   box.innerHTML = '<div class="wait"><span class="spin"></span> translating…</div>';
@@ -2587,78 +2604,57 @@ function closeCardModal(resume = true) {
 }
 
 async function confirmCard() {
+  if (!MODAL) return;
   const span = $('#modalSpan').value.trim();
   if (!span) { toast('pick a word first'); return; }
-  const pv = (MODAL.preview && MODAL.previewFor === span) ? MODAL.preview : null;
-
-  // reading flow — card goes straight to Anki (online only for now)
-  if (MODAL.textId != null) {
-    if (!navigator.onLine) { toast('connect to make cards while reading'); return; }
-    const textId = MODAL.textId, chapter = MODAL.chapterTitle;
-    const sentence = pv ? pv.sentence : MODAL.sentence;
-    closeCardModal(false);
-    try {
-      const r = await api(`/texts/${textId}/card`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ span, sentence, chapter,
-          span_text: pv ? pv.span_text : null,
-          translation: pv ? pv.translation : null,
-          is_phrase: pv ? pv.is_phrase : null }) });
-      markReadCarded(r.span_text || span);
-      toast(`✓ ${r.span_text} — ${r.translation}${r.anki && r.anki.duplicate ? ' (already in Anki)' : ''}`);
-    } catch (e) { toast('couldn’t make card — ' + e.message, 3500); }
-    return;
-  }
-
-  const watchCue = MODAL.watchCue;
-
-  // reader: green the tapped word NOW (class add on the span, no rebuild),
-  // then post + refetch so every inflected form catches up
-  if (READER_MODE) {
-    if (!navigator.onLine) { toast('connect to make cards while reading'); return; }
-    const vid = READER_ID, lineId = MODAL.lineId ?? null;
-    const sentence = pv ? pv.sentence : MODAL.sentence;
-    const tappedSpan = span;
-    closeCardModal(false);
-    markWordCarded(tappedSpan);                       // instant, surface match
-    if (pv && pv.span_text) markWordCarded(pv.span_text);
-    api(`/videos/${vid}/make-card`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ span: tappedSpan, subtitle_line_id: lineId, sentence,
-        span_text: pv ? pv.span_text : null,
-        translation: pv ? pv.translation : null,
-        is_phrase: pv ? pv.is_phrase : null }),
-    }).then(r => { toast(`✓ ${r.span_text} — ${r.translation || ''}`);
-      refreshReader(); refreshStudyBanner(); })
-      .catch(e => toast('couldn’t make card — ' + e.message, 3500));
-    return;
-  }
+  // a server preview carries authoritative span_text/translation/stress; a local
+  // (offline dictionary) one is just for the user's confidence — let the server
+  // translate it properly on flush
+  const pvRaw = (MODAL.preview && MODAL.previewFor === span) ? MODAL.preview : null;
+  const pv = (pvRaw && !pvRaw._local) ? pvRaw : null;
+  // snapshot what we need before closeCardModal nulls MODAL
+  const M = { textId: MODAL.textId ?? null, chapter: MODAL.chapterTitle || null,
+              lineId: MODAL.lineId ?? null, ts: MODAL.timestamp || null,
+              lemma: MODAL.lemma || null, watchCue: MODAL.watchCue,
+              reader: READER_MODE, vid: CURRENT, readerId: READER_ID };
+  const online = navigator.onLine && NET !== 'noserver';
 
   const item = {
     client_id: 'c' + Date.now() + Math.random().toString(36).slice(2, 6),
-    video_id: CURRENT, span,
-    subtitle_line_id: MODAL.lineId ?? null,
-    timestamp: MODAL.timestamp,
-    sentence: pv ? pv.sentence : MODAL.sentence,
+    kind: M.textId != null ? 'text' : M.reader ? 'reader' : 'video',
+    video_id: M.textId != null ? null : (M.reader ? M.readerId : M.vid),
+    text_id: M.textId, chapter: M.chapter,
+    span, subtitle_line_id: M.lineId, timestamp: M.ts,
+    sentence: (pvRaw ? pvRaw.sentence : null) || MODAL.sentence,
     span_text: pv ? pv.span_text : null,
     translation: pv ? pv.translation : null,
     is_phrase: pv ? pv.is_phrase : null,
     created_at: Date.now(),
   };
+
   closeCardModal(false);
+
+  markWordCarded(span);                                 // optimistic, everywhere
+  if (pv && pv.span_text) markWordCarded(pv.span_text);
+  rememberLocalCard(span);
+
   await idbPut('queue', item.client_id, item);
   await refreshQueuePill();
-  toast(pv ? `carded: ${pv.span_text} — ${pv.translation}`
-           : (navigator.onLine ? 'card queued' : 'saved — translates when online'));
-  flushQueue();
 
-  if (watchCue != null && WP) {
-    // replay the line you just carded
+  const g = (pvRaw && pvRaw.translation) || localGloss(span, M.lemma);
+  toast(g ? `carded: ${span} — ${g}` : (online ? 'card queued' : 'saved — translates when back online'),
+        online ? 2200 : 3400);
+
+  if (online) flushQueue().then(() => {
+    if (READER_MODE) refreshReader();
+    refreshStudyBanner();
+  });
+
+  if (M.watchCue != null && WP) {
     wPausedForModal = false;
-    markWordCarded(span);
-    try { WP.seek(WCUES[watchCue].s); WP.play(); } catch {}
-  } else {
-    $('#q').value = ''; $('#results').innerHTML = '';   // clear the search
+    try { WP.seek(WCUES[M.watchCue].s); WP.play(); } catch {}
+  } else if (item.kind === 'video') {
+    $('#q').value = ''; $('#results').innerHTML = '';
   }
 }
 
@@ -2707,6 +2703,7 @@ async function openWatch(id, seekTo) {
 
   WCUES = data.cues || [];
   WCANDS = data.cands || {};
+  WGLOSS = (typeof data !== "undefined" ? data : d).glossary || WGLOSS || {};
   WDATA = data;
   wActive = -1; WP = null; audioMode = false;
   SONG_MODE = (data.video && data.video.kind === 'song');
@@ -2821,24 +2818,55 @@ function closeVerdict() { $('#verdictWrap').hidden = true; VERDICT = null; }
 async function pickVerdict(key) {
   const v = VERDICT; if (!v) return;
   $('#verdictWrap').hidden = true;
-  try {
-    if (key === '__requeue') {
-      if (v.candId) await api(`/candidates/${v.candId}/undo`, { method: 'POST' });
-      else await api(`/srs/cards/${v.cardId}?requeue=1`, { method: 'DELETE' });
-      toast('card removed — the word stays in review', 2600);
-    } else if (v.lemma) {
-      await api('/words/' + encodeURIComponent(v.lemma) + '/state', {
+  const online = navigator.onLine && NET !== 'noserver';
+  // whichever verb, describe it once
+  const op = { kind: key === '__requeue' ? 'requeue' : 'verdict', state: key,
+               lemma: v.lemma || null, cardId: v.cardId || null, candId: v.candId || null,
+               client_id: 'w' + Date.now() + Math.random().toString(36).slice(2, 5), at: Date.now() };
+  const run = async () => {
+    if (op.kind === 'requeue') {
+      if (op.candId) await api(`/candidates/${op.candId}/undo`, { method: 'POST' });
+      else await api(`/srs/cards/${op.cardId}?requeue=1`, { method: 'DELETE' });
+    } else if (op.lemma) {
+      await api('/words/' + encodeURIComponent(op.lemma) + '/state', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ state: key }) });
-      toast((key === 'learned' ? '✓ marked learned' : 'not learning it') + ' — no longer suggested', 2600);
-    } else if (v.cardId) {
-      await api(`/srs/cards/${v.cardId}?verdict=${key}`, { method: 'DELETE' });
-      toast(key === 'learned' ? '✓ marked learned' : 'not learning it', 2400);
+        body: JSON.stringify({ state: op.state }) });
+    } else if (op.cardId) {
+      await api(`/srs/cards/${op.cardId}?verdict=${op.state}`, { method: 'DELETE' });
     }
-  } catch (e) { toast('couldn’t save — ' + e.message, 3200); VERDICT = null; return; }
+  };
+  if (op.lemma && op.state !== '__requeue') forgetLocalCard(op.lemma);   // stop greening it locally
+  if (online) {
+    try { await run(); }
+    catch (e) { await idbPut('wordOut', op.client_id, op); toast('saved — will sync when online', 2800); }
+  } else {
+    await idbPut('wordOut', op.client_id, op);
+  }
+  refreshQueuePill();
+  toast(op.kind === 'requeue' ? 'card removed — the word stays in review'
+        : op.state === 'learned' ? '✓ marked learned — no longer suggested'
+        : 'not learning it — no longer suggested', 2600);
   const done = v.onResolved; VERDICT = null;
   refreshStudyBanner();
   if (done) try { done(key); } catch {}
+}
+async function flushWordOut() {
+  let items; try { items = await idbAll('wordOut'); } catch { return; }
+  for (const op of (items || [])) {
+    try {
+      if (op.kind === 'requeue') {
+        if (op.candId) await api(`/candidates/${op.candId}/undo`, { method: 'POST' });
+        else await api(`/srs/cards/${op.cardId}?requeue=1`, { method: 'DELETE' });
+      } else if (op.lemma) {
+        await api('/words/' + encodeURIComponent(op.lemma) + '/state', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ state: op.state }) });
+      } else if (op.cardId) {
+        await api(`/srs/cards/${op.cardId}?verdict=${op.state}`, { method: 'DELETE' });
+      }
+      await idbDel('wordOut', op.client_id);
+    } catch { /* leave it for next time */ }
+  }
 }
 
 /* ---- a list of every word in one verdict (learned / not learning / …) ---- */
@@ -2955,17 +2983,23 @@ async function loadStudyQueue() {
     d = await api('/srs/queue');
     idbPut('srsCache', 'queue', d).catch(() => {});
     if (d.review_pace_s) STUDY.paceS = d.review_pace_s;
-    syncOfflineSRS();                          // refresh the offline bundle + clips
+    syncOfflineSRS(true);                      // keep the offline bundle + clips fresh
   } catch (e) {
     offline = true;
-    const b = await idbGet('srsCache', 'bundle').catch(() => null);
+    let b = await idbGet('srsCache', 'bundle').catch(() => null);
+    if (!b && navigator.onLine) { await syncOfflineSRS(true); b = await idbGet('srsCache', 'bundle').catch(() => null); }
     if (b && b.cards) {
       const now = new Date().toISOString();
       d = { cards: b.cards.filter(c => c.is_new || (c.due && c.due <= now)) };
     } else {
       d = await idbGet('srsCache', 'queue').catch(() => null);
     }
-    if (!d) { $('#studyBody').innerHTML = `<div class="study-done"><div class="big">📡</div><div class="msg">offline</div><div class="sub">connect once to download your review queue</div></div>`; return; }
+    if (!d) {
+      $('#studyBody').innerHTML = `<div class="study-done"><div class="big">📡</div>
+        <div class="msg">no offline review data</div>
+        <div class="sub">open Study once while connected and it’ll work offline after that</div></div>`;
+      return;
+    }
   }
   STUDY.offline = offline;
   const already = new Set((await idbAll('srsOut').catch(() => [])).map(x => x.card_id));
@@ -3460,17 +3494,25 @@ function closeManual() { $('#manualWrap').hidden = true; }
 async function submitManualCard() {
   const span = $('#mcSpan').value.trim();
   if (!span) { toast('type a word or phrase'); return; }
-  if (!navigator.onLine) { toast('connect to translate & add the card', 3000); return; }
+  const sentence = $('#mcSent').value.trim() || null, note = $('#mcNote').value.trim() || null;
+  const online = navigator.onLine && NET !== 'noserver';
   const btn = $('#mcOk'); setBusy(btn, true, 'adding');
-  let r;
-  try {
-    r = await api('/srs/cards', { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ span, sentence: $('#mcSent').value.trim() || null,
-                             note: $('#mcNote').value.trim() || null }) });
-  } catch (e) { setBusy(btn, false); toast('couldn’t add — ' + e.message, 3800); return; }
-  setBusy(btn, false);
-  closeManual();
-  toast(`✓ ${r.span_text} — ${r.translation || ''}`, 3600);
+
+  const item = { client_id: 'c' + Date.now() + Math.random().toString(36).slice(2, 6),
+                 kind: 'manual', span, sentence, note, created_at: Date.now() };
+  await idbPut('queue', item.client_id, item);
+  await refreshQueuePill();
+
+  if (online) {
+    // flush now so we can show the real translation
+    await flushQueue();
+    const still = (await idbAll('queue')).some(x => x.client_id === item.client_id);
+    setBusy(btn, false); closeManual();
+    toast(still ? 'saved — will finish adding shortly' : `✓ card added`, 3200);
+  } else {
+    setBusy(btn, false); closeManual();
+    toast('saved — translates & adds when you’re back online', 3600);
+  }
   refreshStudyBanner();
   if (!$('#cardsView').hidden) loadCardList();
 }
@@ -4424,6 +4466,7 @@ function renderTranscript() {
   box.appendChild(frag);
   box.onscroll = () => { wUserScroll = Date.now(); };
   attachTranscriptSelect();
+  applyLocalCards();
 }
 
 /* drag across words in the transcript → highlight the phrase, translate + card it */
@@ -4654,17 +4697,18 @@ function transToCard() {
   else resumeAfterWordwork();
 }
 function watchTapWord(ci, wi) {
+  const lem = (WCUES[ci].words[wi] || {}).l || null;
   if (READER_MODE) {
     const around = [WCUES[ci - 1], WCUES[ci], WCUES[ci + 1]]
       .filter(c => c && c.text).map(c => c.text).join(' ');
-    openCardModal({ id: WCUES[ci].lineId || null, text: around, start_time: null },
+    openCardModal({ id: WCUES[ci].lineId || null, text: around, start_time: null, lemma: lem },
                   WCUES[ci].words[wi].t);
     if (MODAL) MODAL.watchCue = ci;
     return;
   }
   if (WP) { WP.pause(); wPausedForModal = true; }
   const around = [WCUES[ci - 1], WCUES[ci], WCUES[ci + 1]].filter(Boolean).map(c => c.text).join(' ');
-  openCardModal({ id: null, text: around, start_time: hms(WCUES[ci].s) }, WCUES[ci].words[wi].t);
+  openCardModal({ id: null, text: around, start_time: hms(WCUES[ci].s), lemma: lem }, WCUES[ci].words[wi].t);
   if (MODAL) MODAL.watchCue = ci;
 }
 function markWordCarded(span) {
@@ -4675,6 +4719,30 @@ function markWordCarded(span) {
     if (hit(sp.textContent)) sp.classList.add('has-card');
   });
   WCUES.forEach(c => (c.words || []).forEach(w => { if (hit(w.t)) w.c = true; }));
+}
+
+/* a locally-remembered carded set so an offline re-render of /watch or /read
+   (which comes from the possibly-stale server flag) doesn't lose green words
+   you just made or un-made offline. Cleared for a word when it's un-carded. */
+let LCARD = (() => { try { return new Set(JSON.parse(localStorage.getItem('lcarded') || '[]')); } catch { return new Set(); } })();
+function _saveLCard() { try { localStorage.setItem('lcarded', JSON.stringify([...LCARD])); } catch {} }
+function rememberLocalCard(span) {
+  rnorm(stripPunct(span)).split(/\s+/).forEach(w => { if (w.length > 1) LCARD.add(w); });
+  _saveLCard();
+}
+function forgetLocalCard(span) {
+  rnorm(stripPunct(span)).split(/\s+/).forEach(w => LCARD.delete(w));
+  _saveLCard();
+}
+function applyLocalCards() {
+  if (!LCARD.size) return;
+  document.querySelectorAll('#transcript .cw, #capOverlay .capw, #readBody .rw').forEach(sp => {
+    const w = rnorm(stripPunct(sp.textContent));
+    if (w && LCARD.has(w) && !sp.classList.contains('pending')) sp.classList.add('has-card');
+  });
+  WCUES.forEach(c => (c.words || []).forEach(w => {
+    if (w.t && LCARD.has(rnorm(stripPunct(w.t)))) w.c = true;
+  }));
 }
 
 /* route a tapped word to the right action */
@@ -4720,8 +4788,9 @@ function clearGreen(word) {
   const t = rnorm(stripPunct(word));
   const hit = txt => rnorm(stripPunct(txt)) === t;
   WCUES.forEach(c => (c.words || []).forEach(x => { if (hit(x.t)) x.c = false; }));
-  document.querySelectorAll('#transcript .cw.has-card, #capOverlay .capw.has-card')
+  document.querySelectorAll('#transcript .cw.has-card, #capOverlay .capw.has-card, #readBody .rw.has-card')
     .forEach(el => { if (hit(el.textContent)) el.classList.remove('has-card'); });
+  forgetLocalCard(word);
 }
 function _bareStress(s) { return (s || '').toLowerCase().replace(/[́̀]/g, ''); }
 function _openInlinePop(anchor, span, sub, freqHtml, btns, acc) {
@@ -4979,6 +5048,7 @@ async function openReader(id) {
   READER_CH = d.chapters || [];
   READER_MORE = { expandable: !!d.expandable, loaded: d.chapters_loaded || READER_CH.length };
   WCANDS = d.cands || {};
+  WGLOSS = (typeof data !== "undefined" ? data : d).glossary || WGLOSS || {};
   WCUES = (d.blocks || []).map(b => b.h != null
     ? { heading: b.h }
     : { words: b.w, text: (b.w || []).map(x => x.t).join(' '), lineId: b.line_id });
@@ -5001,6 +5071,7 @@ async function refreshReader() {
   READER_CH = d.chapters || [];
   READER_MORE = { expandable: !!d.expandable, loaded: d.chapters_loaded || READER_CH.length };
   WCANDS = d.cands || {};
+  WGLOSS = (typeof data !== "undefined" ? data : d).glossary || WGLOSS || {};
   WCUES = (d.blocks || []).map(bl => bl.h != null
     ? { heading: bl.h }
     : { words: bl.w, text: (bl.w || []).map(x => x.t).join(' '), lineId: bl.line_id });
@@ -5041,6 +5112,7 @@ function renderReaderBody() {
   }
   box.onscroll = () => { updateReadProg(); saveReadScrollSoon(); };
   attachTranscriptSelect(box);
+  applyLocalCards();
 }
 async function loadMoreChapters() {
   const btn = $('#readMoreBtn');
@@ -5064,6 +5136,7 @@ async function loadMoreChapters() {
   READER_CH = d.chapters || [];
   READER_MORE = { expandable: !!r.more_available, loaded: d.chapters_loaded };
   WCANDS = d.cands || {};
+  WGLOSS = (typeof data !== "undefined" ? data : d).glossary || WGLOSS || {};
   WCUES = (d.blocks || []).map(bl => bl.h != null ? { heading: bl.h }
     : { words: bl.w, text: (bl.w || []).map(x => x.t).join(' '), lineId: bl.line_id });
   renderReaderBody(); renderReaderToc(); updateReaderReviewBtn();
@@ -5284,20 +5357,23 @@ async function deleteText() {
 
 /* ---------------- offline queue + flush ---------------- */
 async function refreshQueuePill() {
-  const nc = (await idbAll('queue')).length;
+  const nc = (await idbAll('queue').catch(() => [])).length;
   const nr = (await idbAll('srsOut').catch(() => [])).length;
-  const n = nc + nr;
+  const nw = (await idbAll('wordOut').catch(() => [])).length;
+  const n = nc + nr + nw;
   const pill = $('#queuePill');
   if (!n) { pill.hidden = true; return; }
   pill.hidden = false;
-  const label = nc && nr ? `${nc} card${nc > 1 ? 's' : ''} + ${nr} review${nr > 1 ? 's' : ''}`
-    : nc ? `${nc} card${nc > 1 ? 's' : ''} to upload`
-    : `${nr} review${nr > 1 ? 's' : ''} to sync`;
-  pill.innerHTML = flushing ? `<span class="spin"></span> syncing ${n}…` : label;
+  const parts = [];
+  if (nc) parts.push(`${nc} card${nc > 1 ? 's' : ''}`);
+  if (nr) parts.push(`${nr} review${nr > 1 ? 's' : ''}`);
+  if (nw) parts.push(`${nw} change${nw > 1 ? 's' : ''}`);
+  pill.innerHTML = flushing ? `<span class="spin"></span> syncing ${n}…` : parts.join(' + ') + ' to sync';
 }
 let flushing = false;
 async function flushQueue(manual) {
-  if (flushing || !navigator.onLine) { if (manual && !navigator.onLine) toast('still offline'); return; }
+  const online = navigator.onLine && NET !== 'noserver';
+  if (flushing || !online) { if (manual && !online) toast('still offline — will sync when connected'); return; }
   const items = await idbAll('queue');
   if (!items.length) return;
   flushing = true;
@@ -5311,22 +5387,38 @@ async function flushQueue(manual) {
     const byId = Object.fromEntries(items.map(i => [i.client_id, i]));
     for (const r of res.results) {
       if (r.ok) { await idbDel('queue', r.client_id); ok++; continue; }
-      // server reachable but this item failed (dup, deleted video, …).
-      // keep retrying a few times, then give up so the pill can clear.
       const it = byId[r.client_id]; if (!it) continue;
       it.tries = (it.tries || 0) + 1; it.last_error = r.error;
       if (it.tries >= 4) { await idbDel('queue', r.client_id); dropped++; }
       else { await idbPut('queue', r.client_id, it); retry++; }
     }
     await refreshQueuePill();
-    const bits = [];
-    if (ok) bits.push(`${ok} added to Anki`);
-    if (retry) bits.push(`${retry} will retry`);
-    if (dropped) bits.push(`${dropped} gave up (${res.results.find(r=>!r.ok)?.error || 'error'})`);
-    if (bits.length) toast(bits.join(' · '), dropped || retry ? 4000 : 2400);
+    if (ok && (manual || retry || dropped)) {
+      const bits = [`${ok} card${ok > 1 ? 's' : ''} added`];
+      if (retry) bits.push(`${retry} will retry`);
+      if (dropped) bits.push(`${dropped} failed (${res.results.find(r => !r.ok)?.error || 'error'})`);
+      toast(bits.join(' · '), 4000);
+    }
+    if (ok) {                       // real green (every inflected form) now that it's server-side
+      if (READER_MODE) refreshReader();
+      else if (WP && !$('#watchView').hidden) refreshWatchFlags();
+      refreshStudyBanner();
+    }
   } catch (e) {
-    if (manual) toast('upload failed — Anki reachable? will retry', 3000);
+    if (manual) toast('upload failed — will retry', 3000);
   } finally { flushing = false; refreshQueuePill(); }
+}
+async function refreshWatchFlags() {
+  if (!WDATA || WDATA.video == null) return;
+  try {
+    const d = await api(`/videos/${WDATA.video.id}/watch`);
+    idbPut('offline', 'w' + WDATA.video.id, d).catch(() => {});
+    const byIdx = {};
+    d.cues.forEach((c, i) => byIdx[i] = c.words);
+    WCUES.forEach((c, i) => { if (byIdx[i]) c.words = byIdx[i]; });
+    WGLOSS = d.glossary || WGLOSS;
+    renderTranscript();
+  } catch {}
 }
 
 /* ---------------- offline download ---------------- */
@@ -5752,10 +5844,10 @@ let _db;
 function idb() {
   if (_db) return _db;
   _db = new Promise((res, rej) => {
-    const r = indexedDB.open('ru-anki', 2);
+    const r = indexedDB.open('ru-anki', 3);
     r.onupgradeneeded = () => {
       const db = r.result;
-      for (const s of ['offline', 'queue', 'srsCache', 'srsOut'])
+      for (const s of ['offline', 'queue', 'srsCache', 'srsOut', 'wordOut'])
         if (!db.objectStoreNames.contains(s)) db.createObjectStore(s);
     };
     r.onsuccess = () => res(r.result);
@@ -5827,11 +5919,12 @@ function setNet(state) {
 }
 function paintNet() { probeHealth(); }
 
-function onReconnect() {
-  flushQueue();
-  flushSrs().then(() => { refreshQueuePill(); refreshStudyBanner(); syncOfflineSRS(true);
-    if (STUDY && !$('#studyView').hidden && STUDY.offline) loadStudyQueue(); });
+async function onReconnect() {
+  await Promise.allSettled([flushQueue(), flushSrs(), flushWordOut()]);
+  refreshQueuePill(); refreshStudyBanner(); syncOfflineSRS(true);
+  if (STUDY && !$('#studyView').hidden && STUDY.offline) loadStudyQueue();
   if (CURRENT && !$('#detailView').hidden) openDetail(CURRENT);   // re-populate the server-only panels
+  else if (!$('#readView').hidden && READER_MODE) refreshReader();
   else if (!$('#listView').hidden) loadVideosQuiet();
 }
 window.addEventListener('online', probeHealth);
@@ -5973,11 +6066,11 @@ attachScrubber();
 if (READING_ENABLED) $('#readingControls').hidden = false;
 probeHealth();
 refreshQueuePill();
-flushQueue();
+flushQueue(); flushWordOut();
 loadVideos();
 handleShareLaunch();                                 // ?u=<link> from the share sheet
-setTimeout(() => syncOfflineSRS(), 4000);            // warm the offline review cache
-setInterval(() => { if (!document.hidden) syncOfflineSRS(); }, 30 * 60 * 1000);
+setTimeout(() => syncOfflineSRS(true), 2500);        // warm the offline review cache on every launch
+setInterval(() => { if (!document.hidden) syncOfflineSRS(); }, 15 * 60 * 1000);
 setTimeout(pruneOfflineCache, 8000);                 // keep the offline blob store bounded
 </script>
 </body>

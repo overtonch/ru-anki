@@ -268,7 +268,11 @@ class MakeCardIn(BaseModel):
 
 class FlushItem(BaseModel):
     client_id: str
-    video_id: int
+    kind: str = "video"                 # video | reader | text | manual
+    video_id: int | None = None
+    text_id: int | None = None
+    chapter: str | None = None
+    note: str | None = None
     span: str
     subtitle_line_id: int | None = None
     timestamp: str | None = None
@@ -2059,7 +2063,9 @@ _CYR = _re.compile(r"[А-Яа-яЁё]")
 
 
 def _word_flagger(video_id):
-    """-> (flag(text) -> [word dict], pend_rows). Shared by /watch and /read."""
+    """-> (flag(text) -> [word dict], pend_rows, seen_lemmas set). Shared by
+    /watch and /read. `seen_lemmas` accumulates every Cyrillic lemma flag() has
+    tokenised, so the caller can ship a gloss pack for the whole piece."""
     have = store.card_lemmas() | store.known_family_lemmas()
     glosses = store.carded_glosses()
     accents = store.carded_accents()
@@ -2067,6 +2073,7 @@ def _word_flagger(video_id):
     pending = {r["normalized_text"]: r["id"]
                for r in pend_rows if r.get("normalized_text")}
     decided = store.video_decided_lemmas(video_id)
+    seen = set()
 
     def flag(text):
         words = []
@@ -2075,6 +2082,8 @@ def _word_flagger(video_id):
             w = {"t": tok, "c": False}
             if core and _CYR.search(core):
                 lem = store.lemma_key(core)
+                seen.add(lem)
+                w["l"] = lem                       # for the offline gloss lookup
                 if lem in have:
                     w["c"] = True
                     if lem in glosses:
@@ -2095,7 +2104,7 @@ def _word_flagger(video_id):
             words.append(w)
         return words, len(have)
 
-    return flag, pend_rows
+    return flag, pend_rows, seen
 
 
 @app.get("/videos/{video_id}/watch")
@@ -2106,7 +2115,7 @@ def watch(video_id: int):
     if not v:
         raise HTTPException(404, "no such video")
     cues = subs.caption_cues(store.raw_subs(video_id))
-    flag, pend_rows = _word_flagger(video_id)
+    flag, pend_rows, seen = _word_flagger(video_id)
     out = []
     card_count = 0
     for cue in cues:
@@ -2122,6 +2131,7 @@ def watch(video_id: int):
                    "thumbnail_url", "kind")},
         "cues": out,
         "card_count": card_count,
+        "glossary": store.glosses_for(seen),   # offline gloss pack (lemma -> EN)
         "cands": {r["id"]: {"span": r["span_text"], "tr": r["translation"],
                             "acc": store.accent_for(r["normalized_text"]),
                             "freq": store.freq_hint(r["normalized_text"], r["is_phrase"])}
@@ -2140,7 +2150,7 @@ def read_text(video_id: int):
     rows = c.execute("SELECT id, text FROM subtitle_lines WHERE video_id=? ORDER BY id",
                      (video_id,)).fetchall()
     c.close()
-    flag, pend_rows = _word_flagger(video_id)
+    flag, pend_rows, seen = _word_flagger(video_id)
     blocks, chapters, cn = [], [], 0
     for r in rows:
         txt = (r["text"] or "")
@@ -2158,6 +2168,7 @@ def read_text(video_id: int):
         "video": {k: v.get(k) for k in ("id", "title", "channel", "url")},
         "chapters": chapters, "blocks": blocks,
         "chapters_loaded": cn,
+        "glossary": store.glosses_for(seen),   # offline gloss pack (lemma -> EN)
         # a paginated online book can grow — the reader shows a "load more" button
         "expandable": bool(src) and "ilibrary.ru" in src,
         "cands": {r["id"]: {"span": r["span_text"], "tr": r["translation"],
@@ -2571,6 +2582,23 @@ def translate_preview(body: TranslateIn):
         raise HTTPException(502, f"translation failed: {e}")
 
 
+def _flush_one(it: FlushItem):
+    """Create one queued card, dispatching on kind. Cards made offline arrive
+    with span_text/translation blank so the server does a proper LLM pass."""
+    if it.kind == "manual":
+        return manual_card(ManualCardIn(span=it.span, sentence=it.sentence, note=it.note))
+    if it.kind == "text" and it.text_id is not None:
+        return text_card(it.text_id, TextCardIn(
+            span=it.span, sentence=it.sentence or "", chapter=it.chapter,
+            span_text=it.span_text, translation=it.translation, is_phrase=it.is_phrase))
+    # video / reader — reader items carry the kind='text' video's id
+    if it.video_id is None:
+        raise HTTPException(422, "no video for this card")
+    return _make_one_card(it.video_id, it.subtitle_line_id, it.span,
+                          it.timestamp, it.sentence, it.span_text,
+                          it.translation, it.is_phrase)
+
+
 @app.post("/cards/flush")
 def cards_flush(body: FlushIn):
     """Batch-create queued cards (offline client reconnecting). Returns a
@@ -2578,14 +2606,15 @@ def cards_flush(body: FlushIn):
     out = []
     for it in body.items:
         try:
-            r = _make_one_card(it.video_id, it.subtitle_line_id, it.span,
-                               it.timestamp, it.sentence, it.span_text,
-                               it.translation, it.is_phrase)
-            out.append({"client_id": it.client_id, "ok": True, **r})
+            r = _flush_one(it)
+            out.append({"client_id": it.client_id, "ok": True,
+                        "span_text": r.get("span_text"), "translation": r.get("translation")})
         except HTTPException as e:
             out.append({"client_id": it.client_id, "ok": False, "error": str(e.detail)})
         except anki.AnkiError as e:
             out.append({"client_id": it.client_id, "ok": False, "error": f"Anki: {e}"})
+        except Exception as e:  # noqa: BLE001
+            out.append({"client_id": it.client_id, "ok": False, "error": str(e)[:200]})
     if any(o["ok"] for o in out):
         backup.snapshot_async("flush")
     return {"results": out}

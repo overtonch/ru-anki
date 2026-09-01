@@ -897,6 +897,26 @@ def freq_hint(normalized_text, is_phrase=False):
     return {"rank": rank, "label": f"{label} · ~#{rank // 1000}k", "band": band}
 
 
+def glosses_for(lemmas):
+    """{lemma: gloss} for the ones the local dictionary knows — one query.
+    Feeds the offline gloss pack shipped with /watch and /read."""
+    lemmas = [l for l in {(x or "").strip().lower().replace("ё", "е") for x in lemmas} if l]
+    if not lemmas:
+        return {}
+    c = connect()
+    out = {}
+    try:
+        for chunk in (lemmas[i:i + 800] for i in range(0, len(lemmas), 800)):
+            q = "SELECT headword, gloss FROM dict_ru WHERE headword IN (%s)" % \
+                ",".join("?" * len(chunk))
+            for r in c.execute(q, chunk):
+                out[r["headword"]] = r["gloss"]
+    except sqlite3.OperationalError:
+        pass
+    c.close()
+    return out
+
+
 def gloss_for(span):
     """Instant best-effort Russian->English gloss from the local dictionary, or
     None. Tries the surface form, then the pymorphy lemma. Placeholder only —
