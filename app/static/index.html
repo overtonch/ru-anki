@@ -4729,9 +4729,10 @@ function markWordCarded(span) {
   WCUES.forEach(c => (c.words || []).forEach(w => { if (hit(w.t)) w.c = true; }));
 }
 
-/* a locally-remembered carded set so an offline re-render of /watch or /read
-   (which comes from the possibly-stale server flag) doesn't lose green words
-   you just made or un-made offline. Cleared for a word when it's un-carded. */
+/* a short-lived local carded set: bridges the gap between making/un-making a card
+   offline and the server flag catching up. Entries are dropped as soon as the
+   server's own flag confirms the word's status (so it can't wrongly green a word
+   forever). */
 let LCARD = (() => { try { return new Set(JSON.parse(localStorage.getItem('lcarded') || '[]')); } catch { return new Set(); } })();
 function _saveLCard() { try { localStorage.setItem('lcarded', JSON.stringify([...LCARD])); } catch {} }
 function rememberLocalCard(span) {
@@ -4744,13 +4745,19 @@ function forgetLocalCard(span) {
 }
 function applyLocalCards() {
   if (!LCARD.size) return;
+  let changed = false;
+  WCUES.forEach(c => (c.words || []).forEach(w => {
+    if (!w.t) return;
+    const norm = rnorm(stripPunct(w.t));
+    if (!LCARD.has(norm) && !(w.l && LCARD.has(w.l))) return;
+    if (w.c || w.p) { LCARD.delete(norm); if (w.l) LCARD.delete(w.l); changed = true; }  // server now authoritative
+    else w.c = true;
+  }));
+  if (changed) _saveLCard();
   document.querySelectorAll('#transcript .cw, #capOverlay .capw, #readBody .rw').forEach(sp => {
     const w = rnorm(stripPunct(sp.textContent));
     if (w && LCARD.has(w) && !sp.classList.contains('pending')) sp.classList.add('has-card');
   });
-  WCUES.forEach(c => (c.words || []).forEach(w => {
-    if (w.t && LCARD.has(rnorm(stripPunct(w.t)))) w.c = true;
-  }));
 }
 
 /* route a tapped word to the right action */
