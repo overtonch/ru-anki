@@ -988,12 +988,12 @@
   html.has-mini #statsBody, html.has-mini .readbody { padding-bottom:4rem; }
   html.has-mini .study-foot { margin-bottom:3.4rem; }
 
-  #pasteWrap, #shareWrap, #verdictWrap { position:fixed; inset:0; background:rgba(6,8,11,.6); z-index:20;
+  #pasteWrap, #shareWrap, #verdictWrap, #manualWrap { position:fixed; inset:0; background:rgba(6,8,11,.6); z-index:20;
                align-items:center; justify-content:center; padding:1rem;
                -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px); }
   #verdictWrap { z-index:42; }   /* above the inline popover it's often opened from */
-  #pasteWrap[hidden], #shareWrap[hidden], #verdictWrap[hidden] { display:none; }
-  #pasteWrap:not([hidden]), #shareWrap:not([hidden]), #verdictWrap:not([hidden]) { display:flex; }
+  #pasteWrap[hidden], #shareWrap[hidden], #verdictWrap[hidden], #manualWrap[hidden] { display:none; }
+  #pasteWrap:not([hidden]), #shareWrap:not([hidden]), #verdictWrap:not([hidden]), #manualWrap:not([hidden]) { display:flex; }
   .vd-modal h3 { font-size:1rem; margin:0 0 .2rem; }
   .vd-modal h3 span { color:var(--accent); }
   #vdOpts { display:flex; flex-direction:column; gap:.5rem; margin:.7rem 0 .5rem; }
@@ -2703,7 +2703,7 @@ async function openWatch(id, seekTo) {
 
   WCUES = data.cues || [];
   WCANDS = data.cands || {};
-  WGLOSS = (typeof data !== "undefined" ? data : d).glossary || WGLOSS || {};
+  WGLOSS = data.glossary || WGLOSS || {};
   WDATA = data;
   wActive = -1; WP = null; audioMode = false;
   SONG_MODE = (data.video && data.video.kind === 'song');
@@ -3565,12 +3565,13 @@ function renderCard(d) {
 
     <div class="cd-meta">
       ${dl('source', srcTxt)}
-      ${dl('state', _FSRS_STATE[d.fsrs_state] || d.fsrs_state)}
-      ${dl('due', d.is_new ? 'new — not started' : (d.due || '').slice(0, 16).replace('T', ' '))}
-      ${dl('reps', d.reps)} ${dl('lapses', d.lapses)}
-      ${dl('interval', p[3] || '')}
-      ${dl('stability', d.stability != null ? (+d.stability).toFixed(1) + ' d' : '')}
-      ${dl('difficulty', d.difficulty != null ? (+d.difficulty).toFixed(1) : '')}
+      ${dl('state', d.suspended ? 'suspended' : d.is_new ? 'new' : (_FSRS_STATE[d.fsrs_state] || d.fsrs_state))}
+      ${dl('due', d.is_new ? 'not started' : (d.due || '').slice(0, 16).replace('T', ' '))}
+      ${dl('reviews', d.reps)} ${dl('lapses', d.lapses)}
+      ${d.is_new
+        ? dl('next (Good)', p[3] || '')
+        : (dl('stability', d.stability != null ? (+d.stability).toFixed(1) + ' d' : '') +
+           dl('difficulty', d.difficulty != null ? (+d.difficulty).toFixed(1) : ''))}
       ${dl('learn-first score', d.learn_score)}
       ${dl('added', (d.created_at || '').slice(0, 10))}
       ${dl('in Anki', d.anki_note_id ? 'yes' : 'no')}
@@ -5048,7 +5049,7 @@ async function openReader(id) {
   READER_CH = d.chapters || [];
   READER_MORE = { expandable: !!d.expandable, loaded: d.chapters_loaded || READER_CH.length };
   WCANDS = d.cands || {};
-  WGLOSS = (typeof data !== "undefined" ? data : d).glossary || WGLOSS || {};
+  WGLOSS = d.glossary || WGLOSS || {};
   WCUES = (d.blocks || []).map(b => b.h != null
     ? { heading: b.h }
     : { words: b.w, text: (b.w || []).map(x => x.t).join(' '), lineId: b.line_id });
@@ -5071,7 +5072,7 @@ async function refreshReader() {
   READER_CH = d.chapters || [];
   READER_MORE = { expandable: !!d.expandable, loaded: d.chapters_loaded || READER_CH.length };
   WCANDS = d.cands || {};
-  WGLOSS = (typeof data !== "undefined" ? data : d).glossary || WGLOSS || {};
+  WGLOSS = d.glossary || WGLOSS || {};
   WCUES = (d.blocks || []).map(bl => bl.h != null
     ? { heading: bl.h }
     : { words: bl.w, text: (bl.w || []).map(x => x.t).join(' '), lineId: bl.line_id });
@@ -5136,7 +5137,7 @@ async function loadMoreChapters() {
   READER_CH = d.chapters || [];
   READER_MORE = { expandable: !!r.more_available, loaded: d.chapters_loaded };
   WCANDS = d.cands || {};
-  WGLOSS = (typeof data !== "undefined" ? data : d).glossary || WGLOSS || {};
+  WGLOSS = d.glossary || WGLOSS || {};
   WCUES = (d.blocks || []).map(bl => bl.h != null ? { heading: bl.h }
     : { words: bl.w, text: (bl.w || []).map(x => x.t).join(' '), lineId: bl.line_id });
   renderReaderBody(); renderReaderToc(); updateReaderReviewBtn();
@@ -5409,15 +5410,25 @@ async function flushQueue(manual) {
   } finally { flushing = false; refreshQueuePill(); }
 }
 async function refreshWatchFlags() {
-  if (!WDATA || WDATA.video == null) return;
+  if (!WDATA || !WDATA.video) return;
   try {
     const d = await api(`/videos/${WDATA.video.id}/watch`);
     idbPut('offline', 'w' + WDATA.video.id, d).catch(() => {});
-    const byIdx = {};
-    d.cues.forEach((c, i) => byIdx[i] = c.words);
-    WCUES.forEach((c, i) => { if (byIdx[i]) c.words = byIdx[i]; });
     WGLOSS = d.glossary || WGLOSS;
-    renderTranscript();
+    // fold the fresh per-word flags into WCUES without rebuilding the DOM
+    (d.cues || []).forEach((fc, i) => {
+      const cur = WCUES[i]; if (!cur || !cur.words || !fc.words) return;
+      fc.words.forEach((fw, wi) => { if (cur.words[wi]) Object.assign(cur.words[wi], fw); });
+    });
+    // repaint just the class on already-rendered word spans
+    document.querySelectorAll('#transcript .cue').forEach(line => {
+      const ci = +line.dataset.i, words = (WCUES[ci] || {}).words || [];
+      line.querySelectorAll('.cw').forEach((sp, wi) => {
+        const w = words[wi]; if (!w) return;
+        sp.classList.toggle('has-card', !!w.c);
+        sp.classList.toggle('pending', !!w.p && !w.c);
+      });
+    });
   } catch {}
 }
 

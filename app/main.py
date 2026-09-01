@@ -1910,15 +1910,20 @@ def _rank_new_cards(rescore_all=False):
         _RANK_LOCK.release()
 
 
+_last_rank_kick = 0.0
+
+
 def _maybe_rank_new():
     """Cheap check on every queue / stats load: (re)rank when the day rolled over
     or fresh unranked cards showed up. Runs in a thread — never blocks the call."""
-    if _TESTING:
+    global _last_rank_kick
+    if _TESTING or time.time() - _last_rank_kick < 90:
         return
     today = srs._day_start_iso()[:10]
     stale_day = srs.get_setting("learn_rank_day") != today
     if not stale_day and srs.unranked_new_count() == 0:
         return
+    _last_rank_kick = time.time()
     threading.Thread(target=_rank_new_cards, kwargs={"rescore_all": stale_day},
                      daemon=True).start()
 
