@@ -1382,6 +1382,35 @@ def add_reading_text(url, title, author, chapters):
     return vid
 
 
+def append_reading_chapters(video_id, chapters, from_num):
+    """Add more chapters to an existing kind='text' item without disturbing what's
+    already there (reading position, cards, highlights all stay). `from_num` is
+    the 1-based number of the first appended chapter. -> lines added."""
+    new_lines, vtt_add = [], []
+    t0 = 0.0
+    for off, ch in enumerate(chapters):
+        ci = from_num + off
+        if ch.get("title"):
+            new_lines.append((f"{ci}:00:00", "## " + ch["title"]))
+        for pi, para in enumerate(ch.get("paragraphs") or [], 1):
+            new_lines.append((f"{ci}:{pi // 60:02d}:{pi % 60:02d}", para))
+            vtt_add += [f"{secs_to_hms(t0)} --> {secs_to_hms(t0 + 4)}", para, ""]
+            t0 += 5
+    c = connect()
+    c.executemany(
+        "INSERT INTO subtitle_lines(video_id, start_time, text) VALUES(?,?,?)",
+        [(video_id, ts, tx) for ts, tx in new_lines])
+    cur = c.execute("SELECT raw_subs FROM videos WHERE id=?", (video_id,)).fetchone()
+    raw = (cur["raw_subs"] if cur else "") or "WEBVTT\n"
+    c.execute("UPDATE videos SET raw_subs=? WHERE id=?",
+              (raw.rstrip() + "\n\n" + "\n".join(vtt_add), video_id))
+    c.commit()
+    c.close()
+    _LEMMA_IDX.pop(video_id, None)
+    drop_sentence_cache(video_id=video_id)
+    return len(new_lines)
+
+
 def add_song(url, title, artist, cues, subs_kind="lrclib", duration=None,
              thumbnail_url=None):
     """Store a song as a kind='song' video. `cues`: [(start, end, text)] — the

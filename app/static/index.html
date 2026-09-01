@@ -927,6 +927,13 @@
                   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
                   letter-spacing:.02em; }
   .readbody .rh:first-child { margin-top:0; }
+  .read-more { display:block; width:100%; margin:1.5em 0 3em; padding:.85rem;
+               border:1px dashed var(--line); border-radius:var(--r-sm);
+               background:var(--card-2); color:var(--accent); font:inherit;
+               font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  .read-more:active { background:var(--line-soft); }
+  .read-more[disabled] { opacity:.5; color:var(--muted); }
+  .toc-more { color:var(--accent) !important; border-top:1px solid var(--line-soft); margin-top:.3rem; }
   .readnav { display:flex; align-items:center; justify-content:space-between;
              padding:.5rem 1rem; border-top:1px solid var(--line-soft); flex:none;
              font-size:.8rem; color:var(--muted); }
@@ -1382,7 +1389,7 @@ let VIDEOS = [];
 let TEXTS = [];
 let ARCHIVED = [];
 let READ = null;             // legacy paste/epub reader
-let READER_MODE = false, READER_ID = null, READER_CH = [];
+let READER_MODE = false, READER_ID = null, READER_CH = [], READER_MORE = null;
 let CURRENT = null;          // video id in detail view
 let DETAIL_V = null;
 let listTimer = null, sse = null, tickTimer = null, searchTimer = null;
@@ -4755,6 +4762,7 @@ async function openReader(id) {
   $('#rTitle').textContent = d.video.title || 'Reading';
   READER_MODE = true;
   READER_CH = d.chapters || [];
+  READER_MORE = { expandable: !!d.expandable, loaded: d.chapters_loaded || READER_CH.length };
   WCANDS = d.cands || {};
   WCUES = (d.blocks || []).map(b => b.h != null
     ? { heading: b.h }
@@ -4776,6 +4784,7 @@ async function refreshReader() {
   try { d = await api(`/videos/${READER_ID}/read`); idbPut('offline', 'r' + READER_ID, d).catch(() => {}); }
   catch { return; }
   READER_CH = d.chapters || [];
+  READER_MORE = { expandable: !!d.expandable, loaded: d.chapters_loaded || READER_CH.length };
   WCANDS = d.cands || {};
   WCUES = (d.blocks || []).map(bl => bl.h != null
     ? { heading: bl.h }
@@ -4808,8 +4817,42 @@ function renderReaderBody() {
     frag.appendChild(p);
   });
   box.appendChild(frag);
+  if (READER_MORE && READER_MORE.expandable) {
+    const more = document.createElement('button');
+    more.className = 'read-more'; more.id = 'readMoreBtn';
+    more.textContent = `＋ load the next chapters`;
+    more.onclick = loadMoreChapters;
+    box.appendChild(more);
+  }
   box.onscroll = () => { updateReadProg(); saveReadScrollSoon(); };
   attachTranscriptSelect(box);
+}
+async function loadMoreChapters() {
+  const btn = $('#readMoreBtn');
+  if (!READER_ID || !navigator.onLine) { toast('need a connection to load more'); return; }
+  if (btn) { btn.disabled = true; btn.textContent = 'fetching…'; }
+  const box = $('#readBody'), keep = box.scrollTop;
+  let r;
+  try {
+    r = await api(`/videos/${READER_ID}/more-chapters`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ count: 5 }) });
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = '＋ load the next chapters'; }
+    if (/no more/i.test(e.message)) { READER_MORE.expandable = false; renderReaderBody(); toast('that’s all this source has', 2600); }
+    else toast('couldn’t load — ' + e.message, 3000);
+    return;
+  }
+  toast(`added ${r.added_chapters} chapter${r.added_chapters === 1 ? '' : 's'}`, 2200);
+  let d;
+  try { d = await api(`/videos/${READER_ID}/read`); idbPut('offline', 'r' + READER_ID, d).catch(() => {}); } catch { return; }
+  READER_CH = d.chapters || [];
+  READER_MORE = { expandable: !!r.more_available, loaded: d.chapters_loaded };
+  WCANDS = d.cands || {};
+  WCUES = (d.blocks || []).map(bl => bl.h != null ? { heading: bl.h }
+    : { words: bl.w, text: (bl.w || []).map(x => x.t).join(' '), lineId: bl.line_id });
+  renderReaderBody(); renderReaderToc(); updateReaderReviewBtn();
+  requestAnimationFrame(() => { box.scrollTop = keep; updateReadProg(); });   // stay where you were
 }
 function renderReaderToc() {
   const list = $('#tocList');
@@ -4825,6 +4868,12 @@ function renderReaderToc() {
     };
     list.appendChild(b);
   });
+  if (READER_MORE && READER_MORE.expandable) {
+    const m = document.createElement('button');
+    m.className = 'toc-more'; m.textContent = '＋ load more chapters';
+    m.onclick = () => { $('#tocPanel').hidden = true; loadMoreChapters(); };
+    list.appendChild(m);
+  }
 }
 function updateReadProg() {
   const b = $('#readBody');

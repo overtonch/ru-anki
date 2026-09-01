@@ -1982,14 +1982,51 @@ def read_text(video_id: int):
             disp = txt.replace("ё", "е").replace("Ё", "Е")
             words, _ = flag(disp)
             blocks.append({"w": words, "line_id": r["id"]})
+    src = v.get("url") or ""
     return {
         "video": {k: v.get(k) for k in ("id", "title", "channel", "url")},
         "chapters": chapters, "blocks": blocks,
+        "chapters_loaded": cn,
+        # a paginated online book can grow — the reader shows a "load more" button
+        "expandable": bool(src) and "ilibrary.ru" in src,
         "cands": {r["id"]: {"span": r["span_text"], "tr": r["translation"],
                             "acc": store.accent_for(r["normalized_text"]),
                             "freq": store.freq_hint(r["normalized_text"], r["is_phrase"])}
                   for r in pend_rows},
     }
+
+
+class MoreChaptersIn(BaseModel):
+    count: int | None = 5
+
+
+@app.post("/videos/{video_id}/more-chapters")
+def more_chapters(video_id: int, body: MoreChaptersIn):
+    """Pull the next batch of chapters for an imported paginated book and append
+    them — reading position, cards and highlights are left untouched."""
+    v = store.get_video(video_id)
+    if not v or v.get("kind") != "text":
+        raise HTTPException(404, "no such reading text")
+    url = (v.get("url") or "").strip()
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(422, "this text has no source URL to expand from")
+    loaded = len(store.reading_chapters(video_id))
+    want = max(1, min(12, body.count or 5))
+    try:
+        parsed = web.import_url(url, max_chapters=want, start=loaded)
+    except httpx.HTTPError as e:
+        raise HTTPException(502, f"couldn’t fetch: {str(e)[:150]}")
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    added = store.append_reading_chapters(video_id, parsed["chapters"],
+                                          from_num=loaded + 1)
+    backup.snapshot_async("more-chapters")
+    total = parsed.get("total_chapters")
+    new_loaded = loaded + len(parsed["chapters"])
+    return {"added_chapters": len(parsed["chapters"]), "added_lines": added,
+            "chapters_loaded": new_loaded,
+            "more_available": bool(total and new_loaded < total),
+            "total_chapters": total}
 
 
 @app.get("/videos/{video_id}/lines")

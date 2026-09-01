@@ -136,18 +136,25 @@ def _first(m):
     return m.group(1) if m else None
 
 
-def import_url(url, max_chapters=5):
+def import_url(url, max_chapters=5, start=0):
+    """`start` skips that many leading chapters — for pulling the *next* batch of
+    an already-imported paginated book. `total_chapters` in the result is how
+    many the source has, so the caller knows when it's done."""
     url = url.strip()
     host = urlparse(url).netloc.replace("www.", "")
     if host == "ilibrary.ru":
         title, author, chap_urls = _ilibrary(url)
+        start = max(0, int(start or 0))
         n = max(1, min(_MAX_CH, max_chapters or 5))
         chapters = []
-        for cu in chap_urls[:n]:
+        for cu in chap_urls[start:start + n]:
             ch = _ilibrary_chapter(_get(cu))
             if ch:
                 chapters.append(ch)
         if not chapters:
-            raise ValueError("couldn't find chapter text")
-        return {"title": title, "author": author, "chapters": chapters}
-    return _generic(url)
+            raise ValueError("no more chapters" if start else "couldn't find chapter text")
+        return {"title": title, "author": author, "chapters": chapters,
+                "total_chapters": len(chap_urls), "start": start}
+    if start:
+        raise ValueError("this source isn't paginated — nothing more to load")
+    return {**_generic(url), "total_chapters": 1, "start": 0}
