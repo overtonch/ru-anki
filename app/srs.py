@@ -219,7 +219,8 @@ def _strip_stress(s):
 
 def create_card(sentence, span_text, normalized_text, is_phrase, translation,
                 *, candidate_id=None, accented=None, dict_accented=None,
-                front_word=None, video_id=None, timestamp=None, anki_note_id=None):
+                front_word=None, video_id=None, timestamp=None, anki_note_id=None,
+                source=None):
     """Idempotent on candidate_id. Returns the card dict.
     `accented` = target word stressed as it appears on the card;
     `dict_accented` = the stressed dictionary/citation form;
@@ -243,12 +244,12 @@ def create_card(sentence, span_text, normalized_text, is_phrase, translation,
              (candidate_id, sentence, translation, span_text, normalized_text,
               is_phrase, accented, dict_accented, front_word, video_id, timestamp,
               fsrs_state, fsrs_step, stability, difficulty, due, last_review,
-              anki_note_id)
-           VALUES (?,?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?,?, ?)""",
+              anki_note_id, source)
+           VALUES (?,?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,?,?, ?,?)""",
         (candidate_id, sentence, translation, span_text, store.norm(normalized_text),
          int(bool(is_phrase)), accented, dict_accented, front_word, video_id, timestamp,
          f["fsrs_state"], f["fsrs_step"], f["stability"], f["difficulty"],
-         f["due"], f["last_review"], anki_note_id))
+         f["due"], f["last_review"], anki_note_id, source))
     c.commit()
     cid = cur.lastrowid
     row = c.execute("SELECT * FROM srs_cards WHERE id=?", (cid,)).fetchone()
@@ -311,7 +312,7 @@ def update_card(card_id, *, sentence=None, span_text=None, translation=None,
     if sentence is not None:
         sets += ["sentence=?"]; args += [_strip_stress(sentence.strip())]
     if span_text is not None:
-        sp = span_text.strip()
+        sp = _strip_stress(span_text.strip())      # the target is read without marks
         sets += ["span_text=?", "normalized_text=?", "is_phrase=?"]
         args += [sp, store.lemma_key(sp), 1 if " " in sp else 0]
     if translation is not None:
@@ -326,6 +327,30 @@ def update_card(card_id, *, sentence=None, span_text=None, translation=None,
     c.commit()
     c.close()
     return get_card(card_id)
+
+
+def strip_span_stress():
+    """One-off repair: some cards ended up with a stress mark IN span_text (it
+    belongs only in accented / dict_accented). That makes the target unmatchable
+    in its sentence, so the front doesn't bold it. Strip it + fix normalized_text
+    and front_word. Returns the count fixed."""
+    c = store.connect()
+    rows = c.execute(
+        "SELECT id, span_text, front_word FROM srs_cards "
+        "WHERE span_text LIKE '%' || char(769) || '%' "
+        "   OR span_text LIKE '%' || char(768) || '%'").fetchall()
+    n = 0
+    for r in rows:
+        sp = _strip_stress(r["span_text"])
+        fw = r["front_word"]
+        if fw and _strip_stress(fw) == sp:      # front_word was the bare span -> keep in sync
+            fw = sp
+        c.execute("UPDATE srs_cards SET span_text=?, normalized_text=?, front_word=? WHERE id=?",
+                  (sp, store.lemma_key(sp), fw, r["id"]))
+        n += 1
+    c.commit()
+    c.close()
+    return n
 
 
 def set_accent_for_lemma(normalized_text, accented, force=False):
@@ -577,10 +602,15 @@ def delete_cards_for_video(video_id):
     return len(ids)
 
 
+# an orphan = a pipeline card whose video was hard-deleted. A hand-added
+# ('manual') card also has no video_id but is deliberate — never an orphan.
+_ORPHAN_WHERE = "video_id IS NULL AND (source IS NULL OR source <> 'manual')"
+
+
 def orphan_anki_note_ids():
     c = store.connect()
     rows = c.execute("SELECT anki_note_id FROM srs_cards "
-                     "WHERE anki_note_id IS NOT NULL AND video_id IS NULL").fetchall()
+                     f"WHERE anki_note_id IS NOT NULL AND {_ORPHAN_WHERE}").fetchall()
     c.close()
     return [r["anki_note_id"] for r in rows]
 
@@ -590,7 +620,7 @@ def delete_orphan_cards():
     delete — no jump-to-the-moment, no clip, no context to relink."""
     c = store.connect()
     ids = [r["id"] for r in c.execute(
-        "SELECT id FROM srs_cards WHERE video_id IS NULL")]
+        f"SELECT id FROM srs_cards WHERE {_ORPHAN_WHERE}")]
     c.close()
     for cid in ids:
         delete_card(cid)
@@ -689,7 +719,7 @@ def stats():
         "SELECT MIN(due) d FROM srs_cards WHERE suspended=0 AND last_review IS NOT NULL "
         "AND due > ?", (now,)).fetchone()["d"]
     orphans = c.execute(
-        "SELECT COUNT(*) n FROM srs_cards WHERE video_id IS NULL").fetchone()["n"]
+        f"SELECT COUNT(*) n FROM srs_cards WHERE {_ORPHAN_WHERE}").fetchone()["n"]
     # typical seconds per review, from the last 200 graded — median, so one card
     # left open for 3 minutes doesn't blow up the estimate. Clamped to a sane
     # band and defaulted to 6s before there's history.
@@ -720,7 +750,8 @@ _LIST_FILTERS = {
     "mature":    ("suspended=0 AND stability >= 21", []),
     "due":       ("suspended=0 AND last_review IS NOT NULL AND due <= :n", ["n"]),
     "suspended": ("suspended=1", []),
-    "orphan":    ("video_id IS NULL", []),
+    "orphan":    (_ORPHAN_WHERE, []),
+    "manual":    ("source = 'manual'", []),
 }
 _LIST_SORTS = {
     "added": "created_at DESC, id DESC", "oldest": "created_at ASC, id ASC",

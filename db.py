@@ -50,6 +50,14 @@ def _lemma_one(tok: str) -> str:
     return norm(_morph().parse(tok)[0].normal_form)
 
 
+@functools.lru_cache(maxsize=200_000)
+def _lemmas_all(tok: str) -> frozenset:
+    """Every lemma pymorphy considers for `tok` (not just the top parse) —
+    pymorphy's ranking sometimes buries the obvious one (ямы -> 'ям' over
+    'яма'). Used only where a false negative is worse than a false positive."""
+    return frozenset(norm(p.normal_form) for p in _morph().parse(tok)[:6])
+
+
 @functools.lru_cache(maxsize=100_000)
 def yo_lemma(tok: str) -> str:
     """Citation form WITH ё preserved (pymorphy's dictionary is ё-aware:
@@ -146,6 +154,10 @@ def bold(sentence, span, is_phrase, tag="**"):
         t = norm(t)
         return _lemma_one(t) if _BOLD_CYR.fullmatch(t) else None
 
+    def _lemset(t):
+        t = norm(t)
+        return _lemmas_all(t) if _BOLD_CYR.fullmatch(t) else frozenset()
+
     if not is_phrase:
         st = _stem(span)
         for a, b in toks:
@@ -154,10 +166,10 @@ def bold(sentence, span, is_phrase, tag="**"):
         # morphology fallback — the crude stemmer misses fleeting vowels
         # (иголка/иголок), consonant mutation (вертеть/верчу) and verb-class
         # shifts (блефовать/блефуешь); pymorphy lemmas catch them.
-        sp_lem = _lem(span)
-        if sp_lem:
+        sp_lems = _lemset(span)
+        if sp_lems:
             for a, b in toks:
-                if _lem(sentence[a:b]) == sp_lem:
+                if _lemset(sentence[a:b]) & sp_lems:
                     return wrap(a, b)
         return sentence
 
@@ -166,10 +178,10 @@ def bold(sentence, span, is_phrase, tag="**"):
     # only if 2+ matched and they sit close together.
     parts = [w for w in span.split() if len(norm(w)) >= 3]
     stems = [s for s in (_stem(w) for w in parts) if len(s) >= 3]
-    lems = {l for l in (_lem(w) for w in parts) if l}
+    lems = set().union(*(_lemset(w) for w in parts)) if parts else set()
     matched = [(a, b) for a, b in toks
                if any(hit(sentence[a:b], s) for s in stems)
-               or _lem(sentence[a:b]) in lems]
+               or (_lemset(sentence[a:b]) & lems)]
     if len(matched) >= 2:
         span_toks = sum(1 for a, b in toks if matched[0][0] <= a and b <= matched[-1][1])
         if span_toks <= max(len(parts) + 2, 5):

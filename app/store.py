@@ -63,6 +63,11 @@ def init_db():
     # daily batched LLM pass. Decides the order new cards are introduced.
     if not _has_column(c, "srs_cards", "learn_score"):
         c.execute("ALTER TABLE srs_cards ADD COLUMN learn_score INTEGER")
+    # source: where the card came from. NULL/'video'/'text' = pipeline; 'manual'
+    # = hand-added for something heard outside the app (no video_id, but NOT an
+    # orphan — an orphan is a pipeline card whose video was hard-deleted).
+    if not _has_column(c, "srs_cards", "source"):
+        c.execute("ALTER TABLE srs_cards ADD COLUMN source TEXT")
     # channel / thumbnail metadata for the video picker (nullable, backfilled).
     for col in ("channel TEXT", "channel_url TEXT", "thumbnail_url TEXT",
                 "duration INTEGER",

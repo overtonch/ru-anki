@@ -157,7 +157,7 @@ def _learn_accent_async(span_text, sentence=""):
 
 def _commit_card(*, sentence, span_text, normalized_text, is_phrase, translation,
                  source_html, candidate_id=None, video_id=None, timestamp=None,
-                 accented=None, dict_accented=None, tags=None):
+                 accented=None, dict_accented=None, tags=None, source=None):
     """Create the in-app SRS card, and — only if the Anki dual-write setting is
     on — the Anki note too. Returns (srs_card_dict, anki_result_or_None)."""
     anki_result = None
@@ -172,7 +172,7 @@ def _commit_card(*, sentence, span_text, normalized_text, is_phrase, translation
     card = srs.create_card(
         sentence, span_text, normalized_text, is_phrase, translation,
         candidate_id=candidate_id, accented=accented, dict_accented=dict_accented,
-        video_id=video_id, timestamp=timestamp,
+        video_id=video_id, timestamp=timestamp, source=source,
         anki_note_id=(anki_result or {}).get("note_id"))
     return card, anki_result
 
@@ -1604,6 +1604,34 @@ def srs_offline(days: int = 2):
             "cards": cards, "media": media, **srs.stats()}
 
 
+def _card_issues(card):
+    """Human-readable things that might be wrong with a card — for the detail
+    view. Each: {level: 'warn'|'info', msg, fix?}."""
+    out = []
+    sp = card["span_text"] or ""
+    sent = (card["sentence"] or "").strip()
+    ph = bool(card["is_phrase"])
+    _, bolded = anki.front_html(sent, sp, ph)
+    if not bolded:
+        out.append({"level": "warn", "fix": "recheck",
+                    "msg": f"“{sp}” can’t be found in the sentence, so the card front "
+                           f"won’t highlight it. Re-check will re-derive it, or edit below."})
+    if not sent or sent == sp:
+        out.append({"level": "info",
+                    "msg": "No example sentence — the front is just the word."})
+    if not (card["translation"] or "").strip():
+        out.append({"level": "warn", "fix": "recheck", "msg": "No translation."})
+    if not ph and not (card["accented"] or card["dict_accented"]):
+        out.append({"level": "info", "msg": "No stress marks yet — the daily pass fills these in."})
+    if (card.get("video_id") is None and card.get("candidate_id") is None
+            and card.get("source") != "manual"):
+        out.append({"level": "warn",
+                    "msg": "The source video was deleted — no clip or jump-to-the-moment."})
+    if len(sent) > 320:
+        out.append({"level": "info", "msg": "Long sentence — consider trimming it in edit."})
+    return out
+
+
 @app.get("/srs/cards/{card_id}")
 def srs_card(card_id: int):
     card = srs.get_card(card_id)
@@ -1611,7 +1639,81 @@ def srs_card(card_id: int):
         raise HTTPException(404, "no such card")
     v = _study_card_view(card)
     v["context"] = store.card_context(card.get("video_id"), card.get("sentence") or "")
-    return {**v, "preview": srs.preview(card_id)}
+    titles = store.video_titles()
+    src = titles.get(card.get("video_id")) or {}
+    return {**v, "preview": srs.preview(card_id),
+            "issues": _card_issues(card),
+            "sentence": card["sentence"], "is_phrase": bool(card["is_phrase"]),
+            "source": card.get("source"), "candidate_id": card.get("candidate_id"),
+            "created_at": card.get("created_at"), "last_review": card.get("last_review"),
+            "reps": card["reps"], "lapses": card["lapses"],
+            "stability": card.get("stability"), "difficulty": card.get("difficulty"),
+            "fsrs_state": card.get("fsrs_state"), "due": card.get("due"),
+            "suspended": bool(card.get("suspended")), "learn_score": card.get("learn_score"),
+            "anki_note_id": card.get("anki_note_id"),
+            "video_kind": src.get("kind"), "video_title": src.get("title")}
+
+
+def _recheck_card(card):
+    """Re-derive a card's target + translation + stress from its own sentence —
+    fixes an unmatched target / missing translation. Returns the updated card or
+    None if it didn't improve."""
+    span = srs._strip_stress(card["span_text"] or "")
+    sent = (card["sentence"] or "").strip()
+    if not span:
+        return None
+    try:
+        p = _translate_ctx(span, sent)
+    except llm.LLMError:
+        return None
+    new_span = p["span_text"]
+    _, bolded = anki.front_html(p["sentence"] or sent, new_span, p["is_phrase"])
+    upd = srs.update_card(
+        card["id"],
+        span_text=new_span,
+        sentence=(p["sentence"] or sent) if bolded else None,
+        translation=p["translation"] or card["translation"] or None)
+    acc, dacc = p.get("stressed"), p.get("dict_form")
+    if not p["is_phrase"]:
+        srs.set_accents_for_lemma(store.norm(new_span), acc or "", dacc or "", force=True)
+    return srs.get_card(card["id"])
+
+
+@app.post("/srs/cards/{card_id}/recheck")
+def srs_card_recheck(card_id: int):
+    card = srs.get_card(card_id)
+    if not card:
+        raise HTTPException(404, "no such card")
+    _recheck_card(card)
+    _sync_soon()
+    backup.snapshot_async("card-recheck")
+    return srs_card(card_id)
+
+
+def _fix_all_cards():
+    fixed_stress = srs.strip_span_stress()
+    print(f"[fix] stripped stress from {fixed_stress} span_texts", flush=True)
+    rechecked = 0
+    for row in srs.list_cards("all", limit=5000)["cards"]:
+        if row["bolded"]:
+            continue
+        c = srs.get_card(row["id"])
+        if c and _recheck_card(c):
+            rechecked += 1
+    _sync_soon()
+    backup.snapshot_async("fix-all-cards")
+    print(f"[fix] rechecked {rechecked} unbolded cards", flush=True)
+
+
+@app.post("/srs/cards/fix")
+def srs_fix_cards(background: BackgroundTasks):
+    """Bulk repair: strip stray stress marks out of span_text, then re-derive
+    every card whose target still can't be located in its sentence."""
+    stressed = srs.strip_span_stress()   # do the cheap deterministic part now
+    unbolded = sum(1 for r in srs.list_cards("all", limit=5000)["cards"] if not r["bolded"])
+    if unbolded:
+        background.add_task(_fix_all_cards)
+    return {"span_stress_stripped": stressed, "unbolded_queued": unbolded}
 
 
 @app.get("/srs/cards/{card_id}/preview")
@@ -2379,6 +2481,46 @@ def text_translate(text_id: int, body: TextTranslateIn):
         return _translate_ctx(body.span, body.sentence)
     except llm.LLMError as e:
         raise HTTPException(502, f"translation failed: {e}")
+
+
+class ManualCardIn(BaseModel):
+    span: str
+    sentence: str | None = None
+    note: str | None = None          # "where did you hear it" — goes on the source line
+
+
+@app.post("/srs/cards")
+def manual_card(body: ManualCardIn):
+    """Add a card by hand — for a word/phrase heard outside the app. No video
+    source; the sentence you give (if any) is the context, and the card gets
+    spoken audio (TTS) like a reading card."""
+    span = (body.span or "").strip()
+    if not span:
+        raise HTTPException(422, "give a word or phrase")
+    try:
+        p = _translate_ctx(span, body.sentence)
+    except llm.LLMError as e:
+        raise HTTPException(502, f"translation failed: {e}")
+    span_text, translation, ph, sent = (
+        p["span_text"], p["translation"], p["is_phrase"], p["sentence"])
+    sent = (sent or "").strip() or span_text     # no context given -> front is just the word
+    acc, dacc = p.get("stressed"), p.get("dict_form")
+    if not ph and not (acc and dacc):
+        acc, dacc = _accent_sync(span_text, sent, ph)
+    card, res = _commit_card(
+        sentence=sent, span_text=span_text, normalized_text=span_text,
+        is_phrase=ph, translation=translation,
+        source_html=anki.source_html_manual(body.note),
+        accented=acc, dict_accented=dacc, source="manual",
+        tags=["ru-anki", "manual"])
+    store.mark_carded(span_text)
+    _also_card_surface_lemma(span, span_text, ph)
+    _learn_family_async(store.lemma_key(span_text))
+    threading.Thread(target=_rank_new_cards, daemon=True).start()   # place it in the learn order
+    backup.snapshot_async("manual-card")
+    return {"span_text": span_text, "translation": translation, "is_phrase": ph,
+            "accented": acc, "dict_accented": dacc,
+            "srs_card": card, "anki": res, **srs.stats()}
 
 
 @app.post("/texts/{text_id}/card")

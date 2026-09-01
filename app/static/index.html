@@ -1017,15 +1017,50 @@
   .wl-row .wl-g { color:var(--muted); font-size:.85rem; flex:1; min-width:0;
                   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .wl-row .wl-x { color:var(--muted); font-size:1rem; }
+  #cardView { position:fixed; inset:0; z-index:16; background:var(--bg); flex-direction:column;
+              padding:var(--safe-top) 0 env(safe-area-inset-bottom); }
+  #cardView[hidden] { display:none; } #cardView:not([hidden]) { display:flex; }
+  .cl-badge.cl-warn { cursor:pointer; -webkit-tap-highlight-color:transparent; }
+  .cd-issues { margin:.2rem 0 1rem; display:flex; flex-direction:column; gap:.5rem; }
+  .cd-issue { display:flex; gap:.55rem; align-items:flex-start; font-size:.9rem; line-height:1.4;
+              padding:.6rem .7rem; border-radius:var(--r-sm); }
+  .cd-issue.warn { background:color-mix(in srgb, var(--no) 14%, transparent); border:1px solid color-mix(in srgb, var(--no) 40%, var(--line)); }
+  .cd-issue.info { background:var(--card-2); border:1px solid var(--line-soft); color:var(--fg-dim); }
+  .cd-issue .ci-ico { flex:none; }
+  .cd-fix { margin-top:.2rem; width:100%; padding:.6rem; border-radius:var(--r-sm);
+            border:1px solid var(--accent); background:var(--accent-soft); color:var(--fg); font:inherit; }
+  .cd-ok { color:var(--ok); font-size:.9rem; margin:.2rem 0 1rem; }
+  .cd-card { border:1px solid var(--line); border-radius:var(--r); padding:1rem; margin-bottom:1rem;
+             text-align:center; }
+  .cd-card hr { border:0; border-top:1px solid var(--line-soft); margin:.8rem 0; }
+  .cd-front { font-size:1.25rem; line-height:1.5; } .cd-front b { color:var(--accent); font-weight:750; }
+  .cd-tr { font-size:1.15rem; font-weight:600; }
+  .cd-acc { color:var(--fg-dim); font-weight:600; margin-top:.3rem; }
+  .cd-ctx { color:var(--muted); font-size:.82rem; margin-top:.5rem; line-height:1.5; }
+  .cd-acts { display:flex; flex-wrap:wrap; gap:.5rem; margin-bottom:1rem; }
+  .cd-acts button { padding:.5rem .7rem; border:1px solid var(--line); border-radius:var(--r-sm);
+                    background:var(--card-2); color:var(--fg); font:inherit; font-size:.85rem; }
+  .cd-acts .cd-del { border-color:color-mix(in srgb, var(--no) 45%, var(--line)); color:var(--no); }
+  .cd-meta { display:grid; grid-template-columns:1fr 1fr; gap:.1rem .8rem; font-size:.82rem; }
+  .cd-kv { display:flex; justify-content:space-between; gap:.5rem; padding:.35rem 0;
+           border-bottom:1px solid var(--line-soft); }
+  .cd-kv span { color:var(--muted); } .cd-kv b { text-align:right; }
+  .cd-edit { margin-top:1rem; display:flex; flex-direction:column; gap:.6rem; }
+  .cd-edit[hidden] { display:none; }
+  .cd-edit label { font-size:.78rem; color:var(--muted); display:flex; flex-direction:column; gap:.25rem; }
+  .cd-edit input, .cd-edit textarea { background:var(--card); border:1px solid var(--line);
+      color:var(--fg); border-radius:var(--r-sm); padding:.5rem .6rem; font:inherit; }
   #shareWrap .modal { max-height:82vh; overflow-y:auto; }
   .share-steps { margin:.4rem 0 .2rem; padding-left:1.2rem; font-size:.86rem; line-height:1.6; color:var(--fg-dim); }
   .share-steps li { margin-bottom:.5rem; }
   .share-steps code, #shareBody code { background:var(--card-2); border:1px solid var(--line);
       border-radius:.3rem; padding:.06rem .3rem; font-size:.82em; word-break:break-all; }
-  #pasteWrap textarea { width:100%; margin-top:.5rem; padding:.7rem .8rem; font-size:.95rem;
+  #pasteWrap textarea, #manualWrap textarea { width:100%; margin-top:.5rem; padding:.7rem .8rem; font-size:.95rem;
                         border:1px solid var(--line); border-radius:var(--r-sm);
                         background:var(--card); color:var(--fg); resize:vertical;
                         font-family:inherit; -webkit-appearance:none; }
+  #manualWrap input[type=text] { width:100%; margin-top:.5rem; }
+  #manualWrap .modalhint { color:var(--muted); }
 
   .toast { position:fixed; left:50%; bottom:1.2rem; transform:translateX(-50%);
            background:#2f333c; color:#f1f1f1; padding:.6rem 1rem; border-radius:.5rem; font-size:.9rem;
@@ -1068,6 +1103,10 @@
       </select>
       <button class="backlink" onclick="openShareHelp()">· share &amp; import ↗</button>
       <span id="addStatus"></span>
+    </div>
+    <div class="status">
+      <button class="backlink" onclick="openManualCard()">✏️ add a card by hand</button>
+      <span style="color:var(--muted)">· for a word you heard elsewhere</span>
     </div>
     <!-- reading feature — kept, hidden behind READING_ENABLED -->
     <div class="status" id="readingControls" hidden>
@@ -1327,6 +1366,35 @@
       <button class="btn sm" onclick="closeShareHelp()">Got it</button>
     </div>
   </div>
+</div>
+
+<!-- ADD A CARD BY HAND — for something heard outside the app -->
+<div id="manualWrap" hidden onclick="if(event.target===this)closeManual()">
+  <div class="modal">
+    <h3>Add a card by hand</h3>
+    <p class="modalhint">A word or phrase you heard somewhere else. A sentence helps the card, but isn’t required.</p>
+    <input type="text" id="mcSpan" placeholder="word or phrase (Russian)"
+           autocapitalize="off" autocomplete="off" spellcheck="false"
+           onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();$('#mcSent').focus()}">
+    <textarea id="mcSent" rows="2" placeholder="the sentence you heard it in — optional"
+              autocapitalize="off" autocomplete="off" spellcheck="false"></textarea>
+    <input type="text" id="mcNote" placeholder="where from? e.g. a film, a podcast — optional"
+           autocapitalize="sentences" autocomplete="off">
+    <div class="modalbtns">
+      <button class="backlink" onclick="closeManual()">Cancel</button>
+      <button class="btn sm" id="mcOk" onclick="submitManualCard()">Add card</button>
+    </div>
+  </div>
+</div>
+
+<!-- SINGLE CARD — details + issues -->
+<div id="cardView" hidden>
+  <div class="readbar">
+    <button class="backlink" onclick="history.back()">← back</button>
+    <div class="rtitle">Card</div>
+    <span style="width:2rem"></span>
+  </div>
+  <div id="cardBody" class="wordbody"></div>
 </div>
 
 <!-- PASTE TEXT MODAL -->
@@ -3310,7 +3378,7 @@ function renderCardList(d) {
       : c.is_new ? '<span class="cl-badge new">new</span>'
       : c.overdue ? '<span class="cl-badge due">due</span>'
       : c.due_in ? `<span class="cl-badge">${c.due_in}</span>` : '';
-    const warn = c.bolded ? '' : '<span class="cl-badge due" title="target word not bolded">⚠</span>';
+    const warn = c.bolded ? '' : `<button class="cl-badge due cl-warn" onclick="event.stopPropagation();openCard(${c.id})" title="tap to see what's wrong">⚠</button>`;
     const lp = ($('#clSort').value === 'learn' && c.learn_score != null)
       ? `<span class="cl-badge" title="learn-first score (higher = introduced sooner)">≈${c.learn_score}</span>` : '';
     const jump = c.seconds != null && c.video_id != null
@@ -3326,6 +3394,7 @@ function renderCardList(d) {
           <div class="cl-sent">${c.front_html || ''}</div>
           ${(c.accented || c.dict_accented) ? `<div class="cl-acc">${escapeHtml(c.accented || c.dict_accented)}${c.dict_accented && c.dict_accented !== c.accented ? ' → ' + escapeHtml(c.dict_accented) : ''}</div>` : ''}
           <div class="cl-acts">
+            <button onclick="event.stopPropagation();openCard(${c.id})">⤢ details</button>
             ${jump}
             <button onclick="event.stopPropagation();clEdit(${c.id})">✏️ edit</button>
             <button onclick="event.stopPropagation();clSuspend(${c.id},${c.suspended ? 0 : 1})">${c.suspended ? 'unsuspend' : 'suspend'}</button>
@@ -3347,7 +3416,11 @@ function renderCardList(d) {
   const orphanBar = (CL.filter === 'orphan' && d.total)
     ? `<div class="cl-orphan-bar">These cards' source video was deleted — no jump-to-the-moment, clip or context.
          <button onclick="purgeOrphans()">Delete all ${d.total}</button></div>` : '';
-  $('#clBody').innerHTML = `${orphanBar}<div class="cl-count">${d.shown} of ${d.total}${d.shown < d.total ? ' (refine to see more)' : ''}</div>${rows}`;
+  const nBad = d.cards.filter(c => !c.bolded).length;
+  const fixBar = nBad
+    ? `<div class="cl-orphan-bar">${nBad} card${nBad === 1 ? ' has' : 's have'} a target that can’t be found in its sentence (⚠).
+         <button onclick="fixAllCards(this)">Auto-fix</button></div>` : '';
+  $('#clBody').innerHTML = `${orphanBar}${fixBar}<div class="cl-count">${d.shown} of ${d.total}${d.shown < d.total ? ' (refine to see more)' : ''}</div>${rows}`;
   attachCardListSwipe();
   if (CL.autoEdit) { const id = CL.autoEdit; CL.autoEdit = null; clEdit(id);
     const r = $('#clBody').querySelector(`.cl-row[data-id="${id}"]`); if (r) r.scrollIntoView({ block: 'center' }); }
@@ -3377,6 +3450,145 @@ async function clSaveEdit(id) {
   row.classList.remove('editing');
   toast(d.bolded ? 'saved' : 'saved — still not bolded, check the word', d.bolded ? 1400 : 3000);
 }
+/* ---- add a card by hand (heard it outside the app) ---- */
+function openManualCard(prefill) {
+  $('#mcSpan').value = prefill || ''; $('#mcSent').value = ''; $('#mcNote').value = '';
+  $('#manualWrap').hidden = false;
+  setTimeout(() => $('#mcSpan').focus(), 50);
+}
+function closeManual() { $('#manualWrap').hidden = true; }
+async function submitManualCard() {
+  const span = $('#mcSpan').value.trim();
+  if (!span) { toast('type a word or phrase'); return; }
+  if (!navigator.onLine) { toast('connect to translate & add the card', 3000); return; }
+  const btn = $('#mcOk'); setBusy(btn, true, 'adding');
+  let r;
+  try {
+    r = await api('/srs/cards', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ span, sentence: $('#mcSent').value.trim() || null,
+                             note: $('#mcNote').value.trim() || null }) });
+  } catch (e) { setBusy(btn, false); toast('couldn’t add — ' + e.message, 3800); return; }
+  setBusy(btn, false);
+  closeManual();
+  toast(`✓ ${r.span_text} — ${r.translation || ''}`, 3600);
+  refreshStudyBanner();
+  if (!$('#cardsView').hidden) loadCardList();
+}
+
+/* ---- single-card detail + issues ---- */
+let CARD_V = null;
+async function openCard(id) {
+  $('#cardView').hidden = false;
+  $('#cardBody').innerHTML = SPINNER;
+  let d;
+  try { d = await api('/srs/cards/' + id); }
+  catch (e) { $('#cardBody').innerHTML = `<div class="empty">couldn’t load — ${escapeHtml(e.message)}</div>`; return; }
+  CARD_V = d;
+  renderCard(d);
+}
+function closeCard() { $('#cardView').hidden = true; CARD_V = null; }
+const _FSRS_STATE = { 0: 'new', 1: 'learning', 2: 'review', 3: 'relearning' };
+function renderCard(d) {
+  const issues = (d.issues || []);
+  const dl = (k, v) => v == null || v === '' ? '' : `<div class="cd-kv"><span>${k}</span><b>${escapeHtml(String(v))}</b></div>`;
+  const p = d.preview || {};
+  const acc = (d.accented || d.dict_accented)
+    ? `<div class="cd-acc">${escapeHtml(d.accented || '')}${d.dict_accented && d.dict_accented !== d.accented ? ' → ' + escapeHtml(d.dict_accented) : ''}</div>` : '';
+  const srcTxt = d.video_id != null
+    ? `${escapeHtml(d.video_title || 'video')}${d.timestamp ? ' · ' + escapeHtml(d.timestamp) : ''}`
+    : d.source === 'manual' ? 'added by hand' : 'no source (video was deleted)';
+  $('#cardBody').innerHTML = `
+    ${issues.length ? `<div class="cd-issues">
+      ${issues.map(x => `<div class="cd-issue ${x.level}">
+        <span class="ci-ico">${x.level === 'warn' ? '⚠' : 'ⓘ'}</span>
+        <span>${escapeHtml(x.msg)}</span></div>`).join('')}
+      ${issues.some(x => x.fix === 'recheck') ? `<button class="cd-fix" id="cdRecheck">↻ re-check this card with the LLM</button>` : ''}
+    </div>` : `<div class="cd-ok">✓ no issues found</div>`}
+
+    <div class="cd-card">
+      <div class="cd-front">${d.front_html || '—'}</div>
+      <hr>
+      <div class="cd-tr">${escapeHtml(d.translation || '—')}</div>
+      ${acc}
+      ${d.context && (d.context.before || d.context.after) ? `<div class="cd-ctx">${
+        [d.context.before, d.context.after].filter(Boolean).map(escapeHtml).join(' … ')}</div>` : ''}
+    </div>
+
+    <div class="cd-acts">
+      <button onclick="cardEdit()">✏️ edit</button>
+      ${d.video_id != null && d.seconds != null ? `<button onclick="cardJump()">▶ go to source</button>` : ''}
+      <button onclick="cardSuspend()">${d.suspended ? 'unsuspend' : 'suspend'}</button>
+      <button class="cd-del" onclick="cardVerdict()">remove ▾</button>
+    </div>
+
+    <div class="cd-meta">
+      ${dl('source', srcTxt)}
+      ${dl('state', _FSRS_STATE[d.fsrs_state] || d.fsrs_state)}
+      ${dl('due', d.is_new ? 'new — not started' : (d.due || '').slice(0, 16).replace('T', ' '))}
+      ${dl('reps', d.reps)} ${dl('lapses', d.lapses)}
+      ${dl('interval', p[3] || '')}
+      ${dl('stability', d.stability != null ? (+d.stability).toFixed(1) + ' d' : '')}
+      ${dl('difficulty', d.difficulty != null ? (+d.difficulty).toFixed(1) : '')}
+      ${dl('learn-first score', d.learn_score)}
+      ${dl('added', (d.created_at || '').slice(0, 10))}
+      ${dl('in Anki', d.anki_note_id ? 'yes' : 'no')}
+    </div>
+
+    <div class="cd-edit" id="cdEdit" hidden>
+      <label>word / phrase<input class="cde-span" value="${escapeHtml(d.span_text || '')}"></label>
+      <label>sentence<textarea class="cde-sent" rows="3">${escapeHtml(d.sentence || '')}</textarea></label>
+      <label>translation<input class="cde-tr" value="${escapeHtml(d.translation || '')}"></label>
+      <div class="cd-acts"><button class="cde-save" onclick="cardSaveEdit()">save</button>
+        <button onclick="$('#cdEdit').hidden=true">cancel</button></div>
+    </div>`;
+  const rc = $('#cdRecheck');
+  if (rc) rc.onclick = async () => {
+    rc.disabled = true; rc.textContent = 're-checking…';
+    try { const nd = await api(`/srs/cards/${d.id}/recheck`, { method: 'POST' }); CARD_V = nd; renderCard(nd);
+      toast(nd.issues.some(x => x.fix === 'recheck') ? 'still needs a look — try editing' : 'fixed ✓', 3000); }
+    catch (e) { rc.disabled = false; rc.textContent = '↻ re-check this card with the LLM'; toast('couldn’t — ' + e.message, 3000); }
+  };
+}
+function cardEdit() { $('#cdEdit').hidden = false; $('#cdEdit .cde-sent').focus(); }
+async function cardSaveEdit() {
+  const d = CARD_V; if (!d) return;
+  const btn = $('#cdEdit .cde-save'); btn.disabled = true;
+  try {
+    await api(`/srs/cards/${d.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ span_text: $('#cdEdit .cde-span').value.trim(),
+        sentence: $('#cdEdit .cde-sent').value.trim(),
+        translation: $('#cdEdit .cde-tr').value.trim() }) });
+  } catch (e) { btn.disabled = false; toast('couldn’t save — ' + e.message, 3000); return; }
+  openCard(d.id);
+  if (!$('#cardsView').hidden) loadCardList();
+}
+function cardJump() {
+  const d = CARD_V; if (!d || d.video_id == null) return;
+  $('#cardView').hidden = true;
+  clJump(d.video_id, d.seconds || 0);
+}
+function cardSuspend() {
+  const d = CARD_V; if (!d) return;
+  api(`/srs/cards/${d.id}/suspend`, { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ suspended: !d.suspended }) })
+    .then(() => { openCard(d.id); refreshStudyBanner(); })
+    .catch(e => toast('couldn’t — ' + e.message, 2500));
+}
+function cardVerdict() {
+  const d = CARD_V; if (!d) return;
+  openVerdict({ lemma: d.normalized_text, label: d.span_text, hasCard: true, cardId: d.id,
+    onResolved: () => { closeCard(); refreshStudyBanner(); if (!$('#cardsView').hidden) loadCardList(); } });
+}
+
+async function fixAllCards(btn) {
+  if (btn) { btn.disabled = true; btn.textContent = 'fixing…'; }
+  try {
+    const r = await api('/srs/cards/fix', { method: 'POST' });
+    toast(`stripped ${r.span_stress_stripped} stray stress marks · re-deriving ${r.unbolded_queued} card${r.unbolded_queued === 1 ? '' : 's'}…`, 4000);
+  } catch (e) { if (btn) { btn.disabled = false; btn.textContent = 'Auto-fix'; } toast('couldn’t — ' + e.message, 3000); return; }
+  setTimeout(loadCardList, 3000);          // give the background pass a head start
+}
+
 async function purgeOrphans() {
   if (!confirm('Delete every study card whose source video was removed? This can’t be undone.')) return;
   try {
@@ -5644,9 +5856,11 @@ async function hardRefresh() {
 // step back one level through the app's views; returns true if it did something
 function navBack() {
   if (!$('#verdictWrap').hidden) { closeVerdict(); return true; }
+  if (!$('#manualWrap').hidden) { closeManual(); return true; }
   if (!$('#lyricSheet').hidden) { closeLyricSheet(); return true; }
   if (!$('#transSheet').hidden) { closeTransSheet(); return true; }
   if (!$('#inlineDecide').hidden) { closeInline(true); return true; }
+  if (!$('#cardView').hidden) { closeCard(); return true; }
   if (!$('#wordsView').hidden) { closeWordList(); return true; }
   if (!$('#wordView').hidden) { closeWord(); return true; }
   if (!$('#shareWrap').hidden) { closeShareHelp(); return true; }
@@ -5700,7 +5914,7 @@ addEventListener('popstate', () => { navBack(); try { history.pushState({ ru: 1 
 
 /* ---------------- boot ---------------- */
 // belt-and-suspenders: full-screen overlays must never be left showing
-['#studyView', '#statsView', '#cardsView', '#vidDelView', '#readView', '#pasteWrap', '#shareWrap', '#tocPanel', '#transSheet', '#lyricSheet', '#verdictWrap', '#wordsView']
+['#studyView', '#statsView', '#cardsView', '#vidDelView', '#readView', '#pasteWrap', '#shareWrap', '#tocPanel', '#transSheet', '#lyricSheet', '#verdictWrap', '#wordsView', '#manualWrap', '#cardView']
   .forEach(s => { const e = $(s); if (e) e.hidden = true; });
 
 if ('serviceWorker' in navigator) {

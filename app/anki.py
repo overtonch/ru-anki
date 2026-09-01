@@ -101,6 +101,13 @@ def source_html_text(title, author, chapter):
     return html.escape(" · ".join(parts))
 
 
+def source_html_manual(note):
+    """Source field for a hand-added card — 'added by hand' plus wherever the
+    learner said they heard it."""
+    n = (note or "").strip()
+    return html.escape("added by hand" + (f" · {n}" if n else ""))
+
+
 def front_html(sentence, span, is_phrase):
     marked = bold(sentence, span, bool(is_phrase), "\x00")
     bolded = "\x00" in marked

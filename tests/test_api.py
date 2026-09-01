@@ -58,6 +58,31 @@ def test_make_card_then_queue_and_review(client, seeded_video):
     assert rv.status_code == 200
 
 
+def test_manual_card_and_detail(client):
+    r = client.post("/srs/cards", json={"span": "лакуна", "note": "a film"})
+    assert r.status_code == 200
+    cid = r.json()["srs_card"]["id"]
+
+    # not an orphan even though it has no video
+    assert client.get("/srs/stats").json()["orphans"] == 0
+    assert cid in [c["id"] for c in client.get("/srs/cards?filter=manual").json()["cards"]]
+
+    d = client.get(f"/srs/cards/{cid}").json()
+    assert d["source"] == "manual" and "issues" in d and "reps" in d
+    assert d["tts"] is True                     # manual cards get spoken audio
+
+    assert client.post("/srs/cards", json={"span": "  "}).status_code == 422
+
+
+def test_bulk_fix_strips_span_stress(client, seeded_video, db):
+    import srs
+    c = srs.create_card("Он тут.", "сло́во", "сло́во", False, "word")
+    assert "́" in srs.get_card(c["id"])["span_text"]
+    n = client.post("/srs/cards/fix").json()["span_stress_stripped"]
+    assert n >= 1
+    assert "́" not in srs.get_card(c["id"])["span_text"]
+
+
 def test_word_verdict_learned_vs_known(client, seeded_video):
     mk = client.post(f"/videos/{seeded_video}/make-card",
                      json={"span": "блефовать", "timestamp": "00:00:00",
