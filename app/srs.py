@@ -119,6 +119,21 @@ _FSRS_COLS = ("fsrs_state", "fsrs_step", "stability", "difficulty",
               "due", "last_review")
 
 
+def _aware(s):
+    """FSRS does aware-datetime arithmetic; a naive timestamp in the DB (old
+    data, a restored backup, a hand-edit) would 500 the whole queue. Coerce to
+    UTC-aware ISO."""
+    if not s:
+        return s
+    try:
+        dt = _dt.datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_dt.timezone.utc)
+        return dt.isoformat()
+    except (ValueError, TypeError):
+        return s
+
+
 def _row_to_fsrs(row):
     from fsrs import Card
     return Card.from_dict({
@@ -127,8 +142,8 @@ def _row_to_fsrs(row):
         "step": row["fsrs_step"],
         "stability": row["stability"],
         "difficulty": row["difficulty"],
-        "due": row["due"],
-        "last_review": row["last_review"],
+        "due": _aware(row["due"]),
+        "last_review": _aware(row["last_review"]),
     })
 
 
