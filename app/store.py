@@ -68,6 +68,13 @@ def init_db():
     # orphan — an orphan is a pipeline card whose video was hard-deleted).
     if not _has_column(c, "srs_cards", "source"):
         c.execute("ALTER TABLE srs_cards ADD COLUMN source TEXT")
+    # card-format v2: `translation` holds ONE clean primary meaning; the other
+    # senses / idioms go in `alt_meanings` (small text on the back). `sentence`
+    # is trimmed to the clause with the word; the original long context (mostly
+    # for reading cards) is kept in `sentence_full`.
+    for col in ("alt_meanings TEXT", "sentence_full TEXT"):
+        if not _has_column(c, "srs_cards", col.split()[0]):
+            c.execute(f"ALTER TABLE srs_cards ADD COLUMN {col}")
     # channel / thumbnail metadata for the video picker (nullable, backfilled).
     for col in ("channel TEXT", "channel_url TEXT", "thumbnail_url TEXT",
                 "duration INTEGER",

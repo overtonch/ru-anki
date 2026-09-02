@@ -1492,6 +1492,8 @@ def _study_card_view(card, with_preview=True, titles=None):
         "sentence_html": sentence_html, "front_mode": mode,
         "front_word": card.get("front_word"),
         "translation": card["translation"], "span_text": card["span_text"],
+        "alt_meanings": card.get("alt_meanings"),
+        "reformatted": bool(card.get("alt_meanings") or card.get("sentence_full")),
         "normalized_text": card["normalized_text"], "accented": card["accented"],
         "dict_accented": card["dict_accented"],
         "is_new": card["is_new"], "reps": card["reps"], "lapses": card["lapses"],

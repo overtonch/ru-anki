@@ -422,6 +422,38 @@ def _warm_or_oneshot(prompt, system, model, timeout):
         return text
 
 
+_CARD_MEANING_SYSTEM = """You are refining ONE Russian vocabulary flashcard for an
+advanced (B2/C1) English-speaking learner. You get: the target word, its
+dictionary form, the sentence where the learner met it, and the current
+(often messy, slash-separated) translation.
+
+Output ONE raw JSON object, no code fence, nothing else:
+{
+  "primary": "the ONE English word or short phrase the learner should recall. The single cleanest translation that fits the VAST MAJORITY of the contexts they will meet this word in. NOT a list, no slashes, no parenthetical alternatives.",
+  "primary_is_contextual": false,
+  "alt": "other senses of the word, concise, separated by '; ' — plus any set phrase / idiom it commonly appears in (write those as 'фраза — meaning'). Empty string only if the word genuinely has one sense.",
+  "context": "the ONE clause or sentence from the given sentence that actually contains the target word, trimmed to at most ~14 words, punctuation/casing cleaned, still natural Russian. If the given sentence is already short, return it unchanged. NEVER invent or translate text — it must be a substring-faithful trim of what you were given (a form of the target word must remain)."
+}
+
+`primary`:
+- Default: the general, most-frequent meaning (спор -> "argument", not "debate / dispute / controversy"; злоба -> "malice").
+- EXCEPTION (rare) — set "primary_is_contextual": true and make `primary` the narrow sense ONLY when the word is used here in a marked / idiomatic / slang / technical way the general meaning would not convey. Then `alt` MUST begin with the general meaning.
+- Match register: a bookish word gets a bookish gloss; slang gets slang.
+
+Keep `alt` short — the learner skims it. 2-5 senses maximum."""
+
+
+def card_meaning(word, dict_form, sentence, current="", model=None):
+    """Refine a card's back per the card-format spec: one clean primary meaning,
+    a short list of alternatives, and a trimmed context clause.
+    -> {"primary", "primary_is_contextual", "alt", "context"}."""
+    prompt = (f"Target word: {word}\nDictionary form: {dict_form}\n"
+              f"Sentence: {(sentence or '').strip()}\n"
+              f"Current translation: {current or '(none)'}")
+    return _parse_obj(_warm_or_oneshot(prompt, _CARD_MEANING_SYSTEM,
+                                       model or TRANSLATE_MODEL, timeout=60))
+
+
 def word_family(word, model=None):
     """-> (root, [member lemmas]) for a Russian word. One headless call."""
     text = _warm_or_oneshot(f"Word: {word}", _FAMILY_SYSTEM,
