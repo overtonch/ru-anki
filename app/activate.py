@@ -31,7 +31,24 @@ import srs         # noqa: E402
 import store       # noqa: E402
 
 _DATA = os.path.join(_HERE, "data", "activate")
-LEVELS = ("gentle", "standard", "stretch")
+
+# the difficulty scale — a CEFR ladder. The learner sets where the English
+# prompts pitch; "acing b2" means producing b2-level thoughts on demand.
+LEVELS = ("a1", "a2", "b1", "b1+", "b2", "b2+")
+_LEVEL_GUIDE = {
+    "a1": "4–6 words, ONE clause, present tense. e.g. 'I drink coffee every morning.'",
+    "a2": "one everyday sentence; past or future fine; at most a simple 'that' clause. "
+          "e.g. 'Yesterday I told my friend I was tired.'",
+    "b1": "a compound sentence — two ideas joined by and / but / because / so, or "
+          "simple reported speech. e.g. 'I wanted to come but I had too much work.'",
+    "b1+": "a sentence with a subordinate clause AND a real aspect or modal choice. "
+           "e.g. 'If I get time tomorrow I'll finish what I started last week.'",
+    "b2": "a genuinely complex thought: two or three clauses, a conditional or "
+          "hypothetical, a чтобы-clause, or a hedged opinion — the kind of sentence "
+          "you stumble on when speaking.",
+    "b2+": "near-native complexity — nested clauses, concession (although / even "
+           "though), idiomatic phrasing, a subtle modal or evidential shade.",
+}
 _MATURE_REPS = 4          # an item counts as "active" once it's stuck this well
 _FN_TAGS = ("CONJ", "PREP", "PRCL", "NPRO", "Apro")   # skip these as word targets
 
@@ -48,8 +65,12 @@ def _get(key, default):
 
 
 def settings():
+    lvl = _get("level", "a2")
+    if lvl not in LEVELS:
+        lvl = {"gentle": "a1", "standard": "b1", "stretch": "b2"}.get(lvl, "a2")
     return {
-        "level": _get("level", "standard"),
+        "level": lvl,
+        "levels": list(LEVELS),
         "mix": float(_get("mix", 0.65)),        # share of new items that are verbs
         "per_day": int(_get("per_day", 10)),    # new items introduced per day
     }
@@ -259,7 +280,9 @@ def next_item():
 
     try:
         p = llm.activate_prompt(it["target"], it["gloss"] or "", kind=it["kind"],
-                                government=gov, level=st["level"], avoid=angles[-4:])
+                                government=gov, level=st["level"],
+                                level_guide=_LEVEL_GUIDE.get(st["level"], _LEVEL_GUIDE["b1"]),
+                                avoid=angles[-4:])
     except Exception as e:  # noqa: BLE001
         print(f"[activate] prompt {it['target']}: {e}", flush=True)
         p = {"task": f"Say something true about your life using «{it['target']}».",

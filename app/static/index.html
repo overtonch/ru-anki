@@ -858,6 +858,12 @@
   #actSheet select, #actSheet input { background:var(--card); border:1px solid var(--line); color:var(--fg);
                                       border-radius:8px; padding:.45rem .6rem; font:inherit; -webkit-appearance:none; }
   #actSheet input[type=number] { width:4rem; text-align:center; }
+  .act-lvl-wrap { padding:.7rem 0 .3rem; border-top:1px solid var(--line-soft); }
+  .act-lvl-top { display:flex; justify-content:space-between; align-items:baseline; font-size:.9rem; }
+  .act-lvl-top b { color:var(--accent); font-size:1.1rem; }
+  .act-lvl-wrap input[type=range] { width:100%; margin:.6rem 0 .2rem; accent-color:var(--accent); }
+  .act-lvl-scale { display:flex; justify-content:space-between; font-size:.62rem; color:var(--muted);
+                   text-transform:uppercase; letter-spacing:.03em; }
 
   #convoView { position:fixed; inset:0; z-index:15; background:var(--bg); flex-direction:column;
                padding:var(--safe-top) 0 env(safe-area-inset-bottom); }
@@ -6674,13 +6680,19 @@ async function actSettings() {
   let s;
   try { s = await api('/activate/stats'); } catch { return; }
   $('#actSheet').hidden = false;
+  const lv = s.levels || ['a1', 'a2', 'b1', 'b1+', 'b2', 'b2+'];
+  const li = Math.max(0, lv.indexOf(s.level));
   $('#actSheet').innerHTML = `
     <h3>Activate settings</h3>
-    <label class="dsk-row">difficulty
-      <select id="actLevel" onchange="actSaveSettings()">
-        ${['gentle', 'standard', 'stretch'].map(l => `<option value="${l}" ${s.level === l ? 'selected' : ''}>${l}</option>`).join('')}
-      </select></label>
-    <p class="dsk-hint">gentle: short present-tense thoughts · standard: normal sentences · stretch: conditions, subordinate clauses, harder angles</p>
+    <div class="act-lvl-wrap">
+      <div class="act-lvl-top"><span>how complex should the sentences be?</span>
+        <b id="actLvlNow">${(lv[li] || 'b1').toUpperCase()}</b></div>
+      <input type="range" id="actLevel" min="0" max="${lv.length - 1}" step="1" value="${li}"
+             oninput="$('#actLvlNow').textContent=(${JSON.stringify(lv)}[this.value]||'').toUpperCase()"
+             onchange="actSaveSettings()">
+      <div class="act-lvl-scale">${lv.map(l => `<span>${l}</span>`).join('')}</div>
+      <p class="dsk-hint" id="actLvlHint">${_ACT_LVL_HINT[lv[li]] || ''}</p>
+    </div>
     <label class="dsk-row">verbs vs words
       <select id="actMix" onchange="actSaveSettings()">
         <option value="1" ${s.mix >= 0.95 ? 'selected' : ''}>verbs only</option>
@@ -6692,9 +6704,20 @@ async function actSettings() {
       <input id="actPerDay" type="number" min="0" max="40" value="${s.per_day}" onchange="actSaveSettings()"></label>
     <button class="flow-cancel" onclick="$('#actSheet').hidden=true">done</button>`;
 }
+const _ACT_LVL_HINT = {
+  'a1': 'short present-tense thoughts, one clause',
+  'a2': 'a normal everyday sentence; past/future fine',
+  'b1': 'two ideas joined — but / because / so; simple reported speech',
+  'b1+': 'a subordinate clause plus a real aspect or modal choice',
+  'b2': 'complex thoughts — conditionals, чтобы, hedged opinions; the ones you stumble on',
+  'b2+': 'near-native — nested clauses, concession, idiom, subtle modals',
+};
 async function actSaveSettings() {
+  const lv = ['a1', 'a2', 'b1', 'b1+', 'b2', 'b2+'];
+  const li = $('#actLevel') ? parseInt($('#actLevel').value, 10) : null;
+  if (li != null && $('#actLvlHint')) $('#actLvlHint').textContent = _ACT_LVL_HINT[lv[li]] || '';
   const body = {
-    level: $('#actLevel') ? $('#actLevel').value : undefined,
+    level: li != null ? lv[li] : undefined,
     mix: $('#actMix') ? parseFloat($('#actMix').value) : undefined,
     per_day: $('#actPerDay') ? parseInt($('#actPerDay').value, 10) : undefined,
   };

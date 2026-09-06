@@ -70,9 +70,9 @@ def stub_llm(monkeypatch):
                    "patterns": [{"gov": "acc", "role": "the object", "ex": f"Я {v} это."}],
                    "trap": None} for v in verbs]})
 
-    def _act_prompt(target, gloss, kind="verb", government="", level="standard",
-                    avoid=(), model=None):
-        return {"task": f"I {gloss or target} every day (v{len(avoid)}).",
+    def _act_prompt(target, gloss, kind="verb", government="", level="b1",
+                    level_guide="", avoid=(), model=None):
+        return {"task": f"I {gloss or target} every day ({level}, v{len(avoid)}).",
                 "model": f"Я {target} каждый день.", "note": government or None}
     monkeypatch.setattr(llm, "activate_prompt", _act_prompt)
 
