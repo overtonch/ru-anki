@@ -820,7 +820,8 @@
   .act-target { font-size:2rem; font-weight:750; line-height:1.2; }
   .act-target .act-gloss { display:block; font-size:.95rem; font-weight:400; color:var(--muted); margin-top:.3rem; }
   .act-govhint { font-size:.85rem; color:var(--accent); margin-top:.5rem; font-weight:600; }
-  .act-task { font-size:1.15rem; line-height:1.5; margin:1.6rem 0 .3rem; color:var(--fg); }
+  .act-say { font-size:.68rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:1.6rem 0 .35rem; }
+  .act-task { font-size:1.2rem; line-height:1.5; margin:0 0 .3rem; color:var(--fg); font-weight:500; }
   .act-task.sm { font-size:.9rem; color:var(--muted); margin:.4rem 0 1rem; }
   .act-hint { font-size:.78rem; color:var(--muted); margin-bottom:1.4rem; }
   .act-input { width:100%; min-height:3.5rem; background:var(--card); border:1px solid var(--line);
@@ -6568,8 +6569,9 @@ function actRenderFront() {
       <div class="act-kind">${kindTag}</div>
       <div class="act-target">${escapeHtml(it.target)}<span class="act-gloss">${escapeHtml(it.gloss || '')}</span></div>
       ${it.kind === 'verb' && it.government ? `<div class="act-govhint">${escapeHtml(it.government)}</div>` : ''}
+      <div class="act-say">say this in Russian:</div>
       <div class="act-task">${escapeHtml(it.task || '')}</div>
-      <div class="act-hint">say it in your head${ACT.mode === 'type' ? ' or type it' : ''}, then check</div>
+      <div class="act-hint">${ACT.mode === 'type' ? 'type it, or think it and reveal' : 'form it in your head, then reveal'}</div>
       ${typeRow}
       <button class="act-modeswap" onclick="setActMode('${ACT.mode === 'type' ? 'think' : 'type'}')">
         ${ACT.mode === 'type' ? 'just think it instead' : 'type it instead'}</button>

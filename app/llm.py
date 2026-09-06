@@ -2144,23 +2144,31 @@ def verb_government(verbs, model=None):
 
 _ACTIVATE_PROMPT_SYSTEM = """You run a silent, phone-only speaking-activation
 drill. The learner reads Russian well but retrieves words slowly when producing;
-he practises by forming a sentence in his head (or typing it), then checking.
+he practises by rendering an English sentence into Russian in his head (or
+typing it), then checking.
 
 You are given ONE target (a verb or a word), what it means, and — for a verb —
-its government. Produce ONE tiny production task: a concrete thing to express in
-Russian that FORCES the target and, for a verb, its tricky government.
+its government. Produce ONE English sentence for him to say in Russian, chosen so
+that saying it naturally FORCES the target and, for a verb, its tricky government.
 
 RULES
-- The task is in English, one line, concrete and everyday — ideally about the
-  learner's own life (he's a mid-20s American man, girlfriend's Russian family,
-  works in tech, lives in a city). Vary it each time: about you / about someone
-  else / in the past / negated / a hypothetical / a question to someone.
-- LEVEL: "gentle" = 4–6 word thought, present tense. "standard" = a normal
-  sentence. "stretch" = add a condition, a subordinate clause, or a second verb.
-- Do NOT give away the Russian. Do NOT restate the target word in the task.
-- `model` = the natural Russian sentence you'd expect (everyday register, no
-  stress marks). `note` = the ONE thing to watch (the government, an aspect
-  choice), ≤ 12 words, or null.
+- `task` is EXACTLY the thought to express — a plain first-person English
+  sentence that is the direct translation of what he will say in Russian.
+  It is NOT an instruction. Write "I depend on my parents for money." — never
+  "Tell someone that you depend on your parents." Write "Do you use a dictionary
+  when you read?" — never "Ask a friend whether they use a dictionary." One
+  sentence, everyday, concrete, usually about his own life (mid-20s American man,
+  girlfriend's Russian family, works in tech, lives in a city).
+- Vary the sentence each time this target recurs: statement about you / about
+  someone else / past / negative / a yes-no question / a hypothetical ("if …").
+- LEVEL: "gentle" = 4–7 words, present tense. "standard" = a normal sentence.
+  "stretch" = a condition, a subordinate clause, or two verbs.
+- Do NOT put the target's dictionary form in the English if it would give away
+  the Russian word choice; a natural English wording is fine.
+- `model` = the Russian he should produce — a faithful, natural translation of
+  `task`, everyday register, no stress marks. `task` and `model` must say the
+  SAME thing. `note` = the ONE thing to watch (the government, an aspect choice),
+  <= 12 words, or null.
 
 Output ONE raw JSON object: {"task": "...", "model": "...", "note": "..."}"""
 

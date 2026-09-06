@@ -72,7 +72,7 @@ def stub_llm(monkeypatch):
 
     def _act_prompt(target, gloss, kind="verb", government="", level="standard",
                     avoid=(), model=None):
-        return {"task": f"Say something with «{target}» ({len(avoid)}).",
+        return {"task": f"I {gloss or target} every day (v{len(avoid)}).",
                 "model": f"Я {target} каждый день.", "note": government or None}
     monkeypatch.setattr(llm, "activate_prompt", _act_prompt)
 
