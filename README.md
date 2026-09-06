@@ -1,7 +1,14 @@
-# ru-anki — YouTube → Russian vocab → Anki
+# ru-anki — a personal Russian learning app
 
-Paste a YouTube link, get Russian vocab candidates pulled from the subtitles,
-review them with a tap, and confirmed ones become Anki recognition cards.
+Started as "paste a YouTube link → Russian vocab candidates → Anki cards" and
+grew into a full learning app: in-app spaced repetition, endless level-tuned
+flow reading, a conversation partner, reformulation speaking practice, grammar /
+motion-verb / chunk decks, and a proficiency model. Most of this README still
+describes the original extraction tool.
+
+**Key docs:** `LEARNING.md` (the learning-science basis + design checklist for
+new modes — read before adding a practice mode), `CARDS.md` (SRS card spec),
+`TODO.md` (roadmap + open items), `deploy/BACKUP.md` (data safety).
 
 ## Running
 

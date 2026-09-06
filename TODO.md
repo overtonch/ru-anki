@@ -82,6 +82,22 @@ library + proficiency graphs all ride on this.
 
 ## Decided but not built
 
+- **Speaking activation modes** — `LEARNING.md` has the rationale + a design
+  checklist. The passive→active gap is the biggest hole (reading B2+/C1−,
+  speaking A2/B1). Planned, in priority order:
+  1. **Verb-government gym** — curated ~400-verb frequency list, drill each
+     verb's case/preposition through personalized micro-prompts, SRS-spaced.
+     Silent, 5-min. The ~150 non-obvious-government verbs first.
+  2. **Productive-vocabulary ladder** — walk the top ~2.5k content words minus
+     what's already active; each word: frame-fill → own sentence → link to the
+     previous word. The recognition SRS's missing productive twin.
+  3. **Transformation chains** — timed single-element swaps, morphology
+     automatization, 60-sec warm-up.
+  4. **"Say it another way"** — one concept, produce it 3 ways (drop a word /
+     change register / change tense) — circumlocution + retrieval flexibility.
+  Plus an **active-word count** on the Level tab next to passive `known_words`.
+  Format for all: type OR think-then-reveal-and-self-grade.
+
 - (done 2026-09-01) **Card format v2** — `CARDS.md` is the spec. Back = one clean
   bold `translation` + concise `alt_meanings` + a one-clause `sentence` (full
   context kept in `sentence_full`). `meaning_contextual` flags the rare
