@@ -4119,8 +4119,9 @@ async function loadStudyQueue() {
     let b = await idbGet('srsCache', 'bundle').catch(() => null);
     if (!b && navigator.onLine) { await syncOfflineSRS(true); b = await idbGet('srsCache', 'bundle').catch(() => null); }
     if (b && b.cards) {
-      const now = new Date().toISOString();
-      d = { cards: b.cards.filter(c => c.is_new || (c.due && c.due <= now)) };
+      // due_now already accounts for the daily batching (graduated cards due any
+      // time today), computed server-side when the bundle was built
+      d = { cards: b.cards.filter(c => c.is_new || c.due_now) };
     } else {
       d = await idbGet('srsCache', 'queue').catch(() => null);
     }

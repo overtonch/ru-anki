@@ -111,6 +111,13 @@ def _day_start_iso():
     return start.astimezone(_dt.timezone.utc).isoformat()
 
 
+def _day_end_iso():
+    """ISO of the NEXT local DAY_CUTOFF_HOUR — the review-queue horizon. Graduated
+    cards due anywhere in today's window are surfaced from the day's start, so
+    reviews land in one daily batch instead of trickling in hour by hour."""
+    return _iso(_dt.datetime.fromisoformat(_day_start_iso()) + _dt.timedelta(days=1))
+
+
 def _human_delta(due_iso, ref=None):
     due = _parse(due_iso)
     ref = ref or _utc()
@@ -935,11 +942,14 @@ def stats():
     _now = _utc()
     now = _iso(_now)
     soon = _iso(_now + LEARNING_HORIZON)
+    eod = _day_end_iso()
     due = c.execute(
         """SELECT COUNT(*) n FROM srs_cards
            WHERE suspended=0 AND last_review IS NOT NULL
-             AND ( due <= :now OR (fsrs_state IN (1,3) AND due <= :soon) )""",
-        {"now": now, "soon": soon}).fetchone()["n"]
+             AND ( (fsrs_state = 2 AND due <= :eod)
+                   OR (fsrs_state IN (1,3) AND due <= :soon)
+                   OR due <= :now )""",
+        {"now": now, "soon": soon, "eod": eod}).fetchone()["n"]
     new_total = c.execute(
         "SELECT COUNT(*) n FROM srs_cards WHERE suspended=0 AND last_review IS NULL"
     ).fetchone()["n"]
@@ -957,7 +967,7 @@ def stats():
             ORDER BY {_NEW_ORDER} LIMIT ?""", (per_day,)).fetchall()
     nd = c.execute(
         "SELECT MIN(due) d FROM srs_cards WHERE suspended=0 AND last_review IS NOT NULL "
-        "AND due > ?", (now,)).fetchone()["d"]
+        "AND due > ?", (eod,)).fetchone()["d"]
     orphans = c.execute(
         f"SELECT COUNT(*) n FROM srs_cards WHERE {_ORPHAN_WHERE}").fetchone()["n"]
     leeches = c.execute(
@@ -987,7 +997,7 @@ def stats():
             "new_runway_days": -(-new_total // per_day) if new_total else 0,   # ceil
             "next_batch_median_rank": batch_rank,
             "reviewed_today": reviewed_today, "orphans": orphans, "leeches": leeches,
-            "review_pace_s": round(pace, 1),
+            "review_pace_s": round(pace, 1), "day_end": eod,
             "next_due": _human_delta(nd) if nd else None}
 
 
@@ -1020,7 +1030,7 @@ def list_cards(filt="all", sort="added", q="", limit=1000, video=None):
     if "d" in needs:
         params["d"] = _day_start_iso()
     if "n" in needs:
-        params["n"] = _iso(_utc())
+        params["n"] = _day_end_iso()          # "due" list = everything due today
     clauses = [where]
     if video is not None:
         clauses.append("(video_id = :vid OR candidate_id IN "
@@ -1073,14 +1083,16 @@ def queue(limit=80):
     c = store.connect()
     now = _utc()
     soon = _iso(now + LEARNING_HORIZON)
+    eod = _day_end_iso()
     now_i = _iso(now)
     due = [dict(r) for r in c.execute(
         """SELECT * FROM srs_cards
            WHERE suspended=0 AND last_review IS NOT NULL
-             AND ( due <= :now
-                   OR (fsrs_state IN (1,3) AND due <= :soon) )
+             AND ( (fsrs_state = 2 AND due <= :eod)          -- whole day's reviews up front
+                   OR (fsrs_state IN (1,3) AND due <= :soon) -- learning steps stay minute-scale
+                   OR due <= :now )
            ORDER BY due ASC LIMIT :lim""",
-        {"now": now_i, "soon": soon, "lim": limit})]
+        {"now": now_i, "soon": soon, "eod": eod, "lim": limit})]
     # fresh cards up to the daily budget: aim for prod_per_day() production of
     # new_per_day() total, each type backfilling the other when it runs short.
     total_left, prod_budget = _new_plan(c)
@@ -1107,6 +1119,7 @@ def offline_bundle(days=3):
     now = _utc()
     horizon = _iso(now + _dt.timedelta(days=max(0, days)))
     now_i = _iso(now)
+    eod = _day_end_iso()
     rows = [dict(r) for r in c.execute(
         """SELECT * FROM srs_cards
            WHERE suspended=0 AND last_review IS NOT NULL AND due <= :h
@@ -1118,10 +1131,12 @@ def offline_bundle(days=3):
     out = []
     for r in rows:
         d = _card_dict_from_plain(r)
-        d["due_now"] = (d["last_review"] is None) or (d["due"] is not None
-                                                      and d["due"] <= now_i)
+        # "due now" = new, a learning-step card that has come up, or any graduated
+        # card due some time today (surfaced as one daily batch)
+        d["due_now"] = (d["last_review"] is None) or (d["due"] is not None and (
+            d["due"] <= eod if d.get("fsrs_state") == 2 else d["due"] <= now_i))
         out.append(d)
-    return {"generated_at": now_i, "days": days, "cards": out}
+    return {"generated_at": now_i, "days": days, "day_end": eod, "cards": out}
 
 
 # ---------------------------------------------------------------- analytics

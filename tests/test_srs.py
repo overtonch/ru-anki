@@ -174,6 +174,29 @@ def test_queue_excludes_future_but_bundle_includes_them(db):
     assert b["id"] in bundle_ids
 
 
+def test_a_whole_days_reviews_are_available_from_the_start(db):
+    """Graduated cards due any time later today show up in the queue now, so
+    reviews land in one daily batch instead of trickling in."""
+    import srs, store
+    later = _make_card(srs, span="позже")
+    tomorrow = _make_card(srs, span="завтра")
+    srs.review(later["id"], 3)
+    srs.review(tomorrow["id"], 3)
+    eod = dt.datetime.fromisoformat(srs._day_end_iso())
+    c = store.connect()
+    # one due in a few hours (still today), one due well after the day cutoff
+    c.execute("UPDATE srs_cards SET fsrs_state=2, due=? WHERE id=?",
+              (srs._iso(eod - dt.timedelta(hours=2)), later["id"]))
+    c.execute("UPDATE srs_cards SET fsrs_state=2, due=? WHERE id=?",
+              (srs._iso(eod + dt.timedelta(hours=8)), tomorrow["id"]))
+    c.commit(); c.close()
+    ids = {x["id"] for x in srs.queue(limit=50)}
+    assert later["id"] in ids and tomorrow["id"] not in ids
+    assert srs.stats()["due"] >= 1
+    bundle = {x["id"]: x for x in srs.offline_bundle(days=3)["cards"]}
+    assert bundle[later["id"]]["due_now"] and not bundle[tomorrow["id"]]["due_now"]
+
+
 def test_refresher_includes_every_fumbled_card_not_just_the_far_future_ones(db):
     """Regression: the fumbled source used to require due > (today + ~2d), which
     silently dropped most of a heavy week's 'Again's."""
