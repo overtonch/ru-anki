@@ -765,6 +765,18 @@
                    font-family:var(--sans, system-ui); font-size:.9rem; cursor:pointer; min-width:12rem; }
   .flow-more-btn:disabled { opacity:.55; }
   .flow-more-btn.err { border-color:#e07a6d; color:#e07a6d; }
+  .flow-end { text-align:center; margin:2.5rem auto 6rem; max-width:22rem;
+              font-family:var(--sans, system-ui); }
+  .flow-end .fe-rule { color:var(--muted); font-size:1.1rem; letter-spacing:.5em; margin-bottom:1rem; }
+  .flow-end .fe-t { font-size:1.15rem; font-weight:700; line-height:1.35; }
+  .flow-end .fe-sub { color:var(--muted); font-size:.8rem; margin:.35rem 0 1.4rem; }
+  .flow-end .fe-seq { display:block; width:100%; padding:.8rem 1rem; border-radius:12px; border:0;
+                      background:var(--ok); color:#0b1016; font:inherit; font-weight:700; cursor:pointer; }
+  .flow-end .fe-seq:disabled { opacity:.6; }
+  .flow-end .fe-row { display:flex; gap:.6rem; margin-top:.7rem; }
+  .flow-end .fe-row button { flex:1; padding:.6rem; border-radius:10px; border:1px solid var(--line);
+                             background:transparent; color:var(--muted); font:inherit; font-size:.85rem; cursor:pointer; }
+  .flib-seq { color:var(--accent); font-size:.72rem; font-weight:600; }
   #flowSheet .fs-sub { color:var(--muted); font-size:.8rem; margin:1.2rem 0 .4rem; text-transform:uppercase; letter-spacing:.04em; }
   .flow-doms { display:flex; flex-direction:column; gap:.5rem; margin:.4rem 0 .8rem; }
   .flow-dom { border:1px solid var(--line); border-radius:.6rem; overflow:hidden; }
@@ -6388,6 +6400,7 @@ function closeFlow() {
   $('#flowView').hidden = true; FLOW = null;
   $('#flowPop').hidden = true;
   $('#flowReviewTag') && $('#flowReviewTag').remove();
+  $('#flowEnd') && $('#flowEnd').remove();
 }
 async function openFlow() {
   $('#flowView').hidden = false;
@@ -6427,13 +6440,15 @@ async function flowNew() {
 function flibRow(s) {
   const when = s.last_read_at || s.created_at || '';
   const dom = s.domain_label ? escapeHtml(s.domain_label) + ' · ' : '';
+  const prog = s.total ? (s.done ? '✓ finished' : `part ${s.chunks || 0}/${s.total}`) : '';
+  const seq = s.parent_id ? '<span class="flib-seq">↳ sequel</span> ' : '';
   return `<div class="flib-row">
     <div class="flib-main" onclick="flowResume(${s.id})">
-      <div class="flib-t">${escapeHtml(s.topic || 'session')}</div>
-      <div class="flib-sub">${dom}${s.words_read || 0} words${s.unknown_seen ? ' · ' + s.unknown_seen + ' tapped' : ''}${s.level ? ' · ~' + s.level.toUpperCase() : ''}${when ? ' · ' + relTime(when) : ''}</div>
+      <div class="flib-t">${seq}${escapeHtml(s.topic || 'session')}</div>
+      <div class="flib-sub">${dom}${prog ? prog + ' · ' : ''}${s.unknown_seen ? s.unknown_seen + ' tapped · ' : ''}${s.level ? '~' + s.level.toUpperCase() + ' · ' : ''}${when ? relTime(when) : ''}</div>
     </div>
     <button class="flib-rev" onclick="flowResume(${s.id}, true)">review</button>
-    <button class="flib-go" onclick="flowResume(${s.id})">continue ▸</button>
+    <button class="flib-go" onclick="flowResume(${s.id})">${s.done ? 'reread' : 'continue ▸'}</button>
   </div>`;
 }
 function relTime(iso) {
@@ -6468,7 +6483,8 @@ async function flowStart(topic, domain) {
   catch (e) { $('#flowSheet').innerHTML = `<div class="empty">couldn’t start — ${escapeHtml(e.message)}</div>
     <button class="flow-cancel" onclick="flowNew()">try again</button>`; return; }
   FLOW = { id: d.id, chunks: [], unknown: {}, fetching: false, done: false, review: false,
-           lastLevel: (d.chunk || {}).level };
+           lastLevel: (d.chunk || {}).level, total: (d.chunk || {}).total || 5, part: 1,
+           title: (d.chunk || {}).title || '' };
   $('#flowSheet').hidden = true;
   $('#flowReviewTag') && $('#flowReviewTag').remove();
   $('#flowBody').innerHTML = '';
@@ -6493,8 +6509,9 @@ async function flowResume(id, review) {
   let s;
   try { s = await api('/reading/sessions/' + id); }
   catch (e) { $('#flowBody').innerHTML = `<div class="empty">${escapeHtml(e.message)}</div>`; return; }
-  FLOW = { id, chunks: [], unknown: {}, fetching: false, done: false, review: !!review,
-           lastLevel: s.level };
+  FLOW = { id, chunks: [], unknown: {}, fetching: false, done: !!s.done, review: !!review,
+           lastLevel: s.level, total: s.total || 5, part: (s.chunks || []).length || 1,
+           title: s.title || s.topic || '' };
   (s.unknown || []).forEach(u => { FLOW.unknown[u.lemma] = u; });
   $('#flowBody').innerHTML = '';
   $('#flowReviewTag') && $('#flowReviewTag').remove();
@@ -6502,7 +6519,9 @@ async function flowResume(id, review) {
   flowWireScroll();
   refreshFlowProg();
   $('#flowBody').scrollTop = review ? 0 : $('#flowBody').scrollHeight;
-  if (review) {
+  if (FLOW.done) {
+    flowEndCard();
+  } else if (review) {
     const tag = document.createElement('div');
     tag.id = 'flowReviewTag'; tag.className = 'flow-review-tag';
     tag.textContent = 'review — reading what you’ve seen';
@@ -6519,6 +6538,8 @@ async function flowResume(id, review) {
 }
 function flowMoreBtn(state) {
   if (!FLOW || FLOW.review) return;
+  if (FLOW.done && state !== 'loading') { $('#flowMoreBtn') && $('#flowMoreBtn').remove(); flowEndCard(); return; }
+  $('#flowEnd') && $('#flowEnd').remove();
   let b = $('#flowMoreBtn');
   if (!b) {
     b = document.createElement('button');
@@ -6527,9 +6548,49 @@ function flowMoreBtn(state) {
   }
   $('#flowBody').appendChild(b);   // keep it last
   b.disabled = state === 'loading';
-  b.textContent = state === 'loading' ? 'writing the next page…'
-    : state === 'error' ? '↻ try again' : 'continue reading ↓';
+  b.textContent = state === 'loading' ? 'writing the next part…'
+    : state === 'error' ? '↻ try again' : `continue reading  ·  ${FLOW.part}/${FLOW.total} ↓`;
   b.classList.toggle('err', state === 'error');
+}
+function flowEndCard() {
+  if (!FLOW || $('#flowEnd')) return;
+  $('#flowMoreBtn') && $('#flowMoreBtn').remove();
+  // report the last part read so the session is marked finished
+  if (!FLOW.review && !FLOW._endReported) {
+    FLOW._endReported = true;
+    const last = FLOW.chunks[FLOW.chunks.length - 1];
+    if (last) api(`/reading/sessions/${FLOW.id}/next`, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ read_seq: last.seq, read_words: last.n_words || 0 }) }).catch(() => {});
+  }
+  const el = document.createElement('div');
+  el.id = 'flowEnd'; el.className = 'flow-end';
+  el.innerHTML = `<div class="fe-rule">◈</div>
+    <div class="fe-t">${escapeHtml(FLOW.title || 'The end')}</div>
+    <div class="fe-sub">that's the whole piece — ${FLOW.total} parts</div>
+    <button class="fe-seq" onclick="flowSequel()">continue — a sequel, with a twist ↦</button>
+    <div class="fe-row">
+      <button onclick="flowNew()">＋ something new</button>
+      <button onclick="flowLibrary()">📚 library</button>
+    </div>`;
+  $('#flowBody').appendChild(el);
+}
+async function flowSequel() {
+  const btn = $('#flowEnd') && $('#flowEnd').querySelector('.fe-seq');
+  if (btn) { btn.disabled = true; btn.textContent = 'writing the next chapter…'; }
+  let d;
+  try { d = await api(`/reading/sessions/${FLOW.id}/sequel`, { method: 'POST' }); }
+  catch (e) { toast('couldn’t — ' + e.message, 2600); if (btn) { btn.disabled = false; btn.textContent = 'continue — a sequel, with a twist ↦'; } return; }
+  FLOW = { id: d.id, chunks: [], unknown: {}, fetching: false, done: false, review: false,
+           lastLevel: (d.chunk || {}).level, total: (d.chunk || {}).total || 5, part: 1,
+           title: (d.chunk || {}).title || '' };
+  $('#flowReviewTag') && $('#flowReviewTag').remove();
+  $('#flowBody').innerHTML = '';
+  flowAppendChunk(d.chunk);
+  flowWireScroll();
+  refreshFlowProg();
+  flowMoreBtn();
+  flowMaybeMore();
+  $('#flowBody').scrollTop = 0;
 }
 function flowAppendChunk(chunk, silent) {
   if (!chunk || chunk.error) {
@@ -6538,6 +6599,10 @@ function flowAppendChunk(chunk, silent) {
   }
   FLOW.chunks.push({ seq: chunk.seq, n_words: chunk.n_words });
   if (chunk.level) FLOW.lastLevel = chunk.level;
+  if (chunk.total) FLOW.total = chunk.total;
+  if (chunk.part) FLOW.part = chunk.part;
+  if (chunk.title && !FLOW.title) FLOW.title = chunk.title;
+  if (chunk.done) FLOW.done = true;
   const wrap = document.createElement('div');
   wrap.dataset.seq = chunk.seq;
   chunk.text.split(/\n\n+/).forEach(para => {
@@ -6594,6 +6659,11 @@ async function flowMore(force) {
     d = await api(`/reading/sessions/${FLOW.id}/next`, { method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ read_seq: last ? last.seq : null, read_words: last ? last.n_words : 0 }) });
   } catch (e) { FLOW.fetching = false; flowMoreBtn('error'); return; }
+  const seq = d.chunk && d.chunk.seq;
+  if (seq && FLOW.chunks.some(c => c.seq === seq)) {   // already have it — piece is done
+    FLOW.done = FLOW.done || (d.chunk && d.chunk.done);
+    FLOW.fetching = false; flowMoreBtn(); return;
+  }
   flowAppendChunk(d.chunk);
   refreshFlowProg();
   flowMoreBtn(d.chunk && d.chunk.error ? 'error' : undefined);
@@ -6696,10 +6766,10 @@ document.addEventListener('click', e => {
 });
 function refreshFlowProg() {
   if (!FLOW) return;
-  const words = FLOW.chunks.reduce((s, c) => s + (c.n_words || 0), 0);
   const n = Object.keys(FLOW.unknown).length;
   const lv = FLOW.lastLevel ? '~' + FLOW.lastLevel.toUpperCase() + ' · ' : '';
-  $('#flowProg').innerHTML = `${lv}<b>${words}</b> words${n ? ` · <b>${n}</b> new →` : ''}`;
+  const parts = FLOW.total ? (FLOW.done ? `done · ${FLOW.total}/${FLOW.total}` : `part ${FLOW.part}/${FLOW.total}`) : '';
+  $('#flowProg').innerHTML = `${lv}${parts}${n ? ` · <b>${n}</b> new →` : ''}`;
 }
 async function flowOpenWords() {
   if (!FLOW || !FLOW.id) return;

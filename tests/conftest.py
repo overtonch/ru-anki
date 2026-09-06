@@ -270,16 +270,25 @@ def stub_llm(monkeypatch):
     monkeypatch.setattr(llm, "journal_analysis", _journal_analysis)
 
     # --- flow reading ---
+    def _reading_flow_plan(topic, prompt="", style="", grounding="", cefr="b1",
+                           parts=5, sequel_of=None, model=None):
+        tw = (sequel_of["title"] + " — далее") if sequel_of else (topic or prompt or "рассказ")
+        return {"title": tw[:60], "hook": f"why {topic or prompt} matters",
+                "beats": [f"part {i + 1}: {'ending' if i + 1 == parts else 'develops'}"
+                          for i in range(parts)]}
+    monkeypatch.setattr(llm, "reading_flow_plan", _reading_flow_plan)
+
     def _reading_flow_chunk(topic, prompt, summary, rank_est, seed_words=(),
-                            grounding="", style="", model=None):
-        n = (len(summary or "") % 3) + 1
+                            grounding="", style="", plan=None, part=1, total=5,
+                            model=None):
         seeded = (" " + " ".join(seed_words[:2])) if seed_words else ""
         body = ("Максим медленно шёл по широкой шумной улице и думал о своей работе "
                 "и о том большом незнакомом городе вокруг него каждый день. "
                 "Люди спешили мимо, а он смотрел на дома и деревья и совсем "
                 "не хотел никуда торопиться этим тихим серым утром.")
-        return {"text": [f"Это абзац номер {n} про {topic or prompt}.{seeded} " + body],
-                "summary": (summary or "") + f" [{n}]"}
+        tail = " Конец." if part >= total else ""
+        return {"text": [f"Часть {part} из {total} про {topic or prompt}.{seeded} " + body + tail],
+                "summary": (summary or "") + f" [{part}]"}
     monkeypatch.setattr(llm, "reading_flow_chunk", _reading_flow_chunk)
 
     # --- conversation partner ---

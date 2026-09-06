@@ -120,6 +120,10 @@ def init_db():
         c.execute("ALTER TABLE reading_flow_sessions ADD COLUMN domain TEXT")
     if _has_column(c, "reading_flow_chunks", "id") and not _has_column(c, "reading_flow_chunks", "text_accented"):
         c.execute("ALTER TABLE reading_flow_chunks ADD COLUMN text_accented TEXT")
+    for _col in ("plan TEXT", "total_parts INTEGER NOT NULL DEFAULT 5", "parent_id INTEGER"):
+        if _has_column(c, "reading_flow_sessions", "id") and not _has_column(
+                c, "reading_flow_sessions", _col.split()[0]):
+            c.execute(f"ALTER TABLE reading_flow_sessions ADD COLUMN {_col}")
     # Fold any legacy known_lexicon rows into resolved_words.
     c.execute(
         """INSERT OR IGNORE INTO resolved_words(normalized_text, reason, video_id, resolved_at)

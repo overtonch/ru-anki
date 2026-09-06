@@ -172,8 +172,9 @@ GIT_TABLES = (
      "last_practiced, created_at FROM speeches ORDER BY id"),
     # flow reading — the generated stories ARE content (each is a unique LLM
     # generation the reader may return to), plus the words they didn't know
-    ("reading_flow_sessions", "SELECT id, topic, prompt, domain, rank_est, chunks, words_read, "
-     "unknown_seen, summary, status, created_at, last_read_at FROM reading_flow_sessions ORDER BY id"),
+    ("reading_flow_sessions", "SELECT id, topic, prompt, domain, rank_est, plan, total_parts, "
+     "parent_id, chunks, words_read, unknown_seen, summary, status, created_at, last_read_at "
+     "FROM reading_flow_sessions ORDER BY id"),
     ("reading_flow_chunks", "SELECT session_id, seq, text, text_accented, n_words, read, created_at "
      "FROM reading_flow_chunks ORDER BY session_id, seq"),
     ("reading_flow_unknown", "SELECT session_id, lemma, surface, sentence, rank, carded, at "

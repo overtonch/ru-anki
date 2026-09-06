@@ -1859,50 +1859,112 @@ def _reading_level_line(rank_est):
     return _READING_LEVELS[-1][1], _READING_LEVELS[-1][2]
 
 
-_READING_FLOW_SYSTEM = """You write the next stretch of a continuous, comfortable
-reading piece for a Russian learner. They picked a topic; you keep it going.
+_READING_PLAN_SYSTEM = """You plan a SHORT, self-contained Russian reading piece
+for a language learner — {parts} parts of ~130 words each, read one part at a
+time. Your job is the SHAPE: give the whole thing a real arc so that something
+actually happens and the reader wants to keep going.
 
-FORM — a "FORM" note tells you what KIND of piece this is (a news article, a
-popular-science explainer, a chapter of a novel, a dialogue…). Follow it closely:
-it governs the genre, structure, register and voice. If there is no FORM note,
-default to a light first-person or lightly-narrated piece that suits the topic.
-Do NOT default to "a third-person story about two people talking" — only write
-that if the FORM note asks for it.
+FORM — the "FORM" note says what kind of piece this is (a story, a news article,
+a popular-science explainer…). Plan the arc that fits it:
+- a STORY: a hook / a situation with tension → something changes → a complication
+  or turn → the climax → a real resolution. Someone wants something; something
+  gets in the way; by the end it's settled (well or badly).
+- an ARTICLE / ESSAY: a sharp question or surprising fact → the key background →
+  the core tension or disagreement → the author's reading of it → a conclusion
+  that lands. Not a list — an argument with a spine.
+
+MUST be intriguing from the first line — a concrete hook, real stakes, a reason
+to read on. No vague throat-clearing.
+
+Part {parts} is the ENDING. It resolves things. No cliffhanger, no "to be
+continued".
+
+Output ONE raw JSON object, nothing else:
+{{"title": "a short Russian title (<= 6 words)",
+  "hook": "one sentence, in English, on why this is worth reading",
+  "beats": ["what part 1 does", "part 2", … exactly {parts} entries]}}
+Beats are your notes to yourself (English is fine) — concrete: what happens / what
+gets covered in that part, and how it ends to pull the reader into the next."""
+
+
+def reading_flow_plan(topic, prompt="", style="", grounding="", cefr="b1",
+                      parts=5, sequel_of=None, model=None):
+    """-> {"title": str, "hook": str, "beats": [str] * parts}. Raises LLMError."""
+    body = [f"TOPIC: {(topic or prompt or 'anything interesting').strip()}"]
+    if prompt and prompt.strip() and prompt.strip() != (topic or "").strip():
+        body.append(f"WHAT THE READER ASKED FOR: {prompt.strip()}")
+    if style and style.strip():
+        body.append("FORM: " + style.strip())
+    if grounding and grounding.strip():
+        body.append("GROUNDING: " + grounding.strip())
+    if sequel_of:
+        body.append("THIS IS A SEQUEL. The previous piece was «%s» — %s\nWrite a "
+                    "genuine next chapter / follow-up: same world and (if a story) "
+                    "characters, but move time forward and open on a real TWIST — "
+                    "a reversal, a consequence come due, a new threat, a secret "
+                    "surfacing. It must stand on its own too."
+                    % (sequel_of.get("title", "?"), sequel_of.get("summary", "")))
+    sysm = _READING_PLAN_SYSTEM.format(parts=parts)
+    last = None
+    for i in range(2):
+        p = "\n\n".join(body) + ("" if i == 0 else "\n\nReturn ONLY strict JSON.")
+        try:
+            d = _parse_obj(run_claude(p, sysm, model=model or TRANSLATE_MODEL, timeout=90)[0])
+            beats = [str(b).strip() for b in (d.get("beats") or []) if str(b).strip()]
+            if beats:
+                return {"title": (d.get("title") or topic or "").strip()[:80],
+                        "hook": (d.get("hook") or "").strip()[:200],
+                        "beats": beats}
+        except LLMError as e:
+            last = e
+    raise last or LLMError("no plan")
+
+
+_READING_FLOW_SYSTEM = """You write ONE part of a short, planned Russian reading
+piece for a language learner. You are given the whole PLAN and told which PART to
+write now.
+
+PART — write exactly the part asked for. Hit its beat. Do NOT rush ahead into
+later beats or drag in earlier ones.
+- If this is NOT the last part: end it at a real pull-forward moment — a question
+  opened, a decision looming, a fact that demands the next step. Not a recap.
+- If this IS the last part ("FINAL"): bring the whole piece to a proper close —
+  the story resolves, or the article's argument lands. No cliffhanger, no "to be
+  continued", no teaser for a sequel.
+
+FORM — the "FORM" note governs genre, structure, register and voice. Follow it.
+Do NOT default to "a third-person story about two people talking" unless FORM asks.
 
 VOCABULARY LEVEL — write for a reader who comfortably knows about the {rank}
 most common Russian words ({cefr}). {guide}
 - Keep words the reader would likely NOT know to about 1 in 50 (~2%). A light
-  sprinkle is how they learn; a wall of them is not. (A FORM note may ask for
-  specific vocabulary — honour it, but keep the density in this range.)
-- Natural, idiomatic Russian in the register the FORM calls for.
-- NEVER use stress marks (they are added afterwards). NEVER write any English.
+  sprinkle is how they learn; a wall of them is not. (FORM may ask for specific
+  vocabulary — honour it, but keep density in this range.)
+- Natural, idiomatic Russian in the register FORM calls for.
+- NEVER use stress marks (added afterwards). NEVER write any English.
 - Always write ё with its dots (её, всё, ещё, идёт) — never as е.
 
-CONTINUITY — you get "SO FAR" (what the piece has covered / where it is).
-Continue smoothly; do NOT recap. If it is empty, open naturally and get going.
+CONTINUITY — "SO FAR" is what earlier parts established. Continue seamlessly; do
+NOT recap. If SO FAR is empty this is part 1 — open on the hook, fast.
 
-GROUNDING — if a "GROUNDING" note is given, follow it: build the passage on real,
-verifiable facts (real countries, organisations, named people, dates, findings,
-and the actual positions real figures hold), not invented stand-ins. Stay within
-what you actually know; if unsure of a detail, stay general rather than inventing
-a specific. Never fabricate a quote, statistic, law, or person. No grounding note
-means ordinary invented content is fine.
+GROUNDING — if a "GROUNDING" note is given: real countries, organisations, named
+people, dates, findings, real positions. Stay within what you know; stay general
+rather than invent a specific; never fabricate a quote, statistic, law or person.
 
-SEED WORDS — these are words the reader has recently started learning and hasn't
-locked in yet; another natural encounter helps them stick. If any are listed, try
-to work a natural form of one or two into this passage WHERE IT GENUINELY FITS.
-It is much better to use none than to bend a sentence around one. Never force
-them, never list them, never mention that they are special.
+SEED WORDS — words the reader is mid-learning. Try to slip a natural form of one
+or two in WHERE IT GENUINELY FITS. Better none than a bent sentence. Never force,
+list, or flag them.
 
-LENGTH — 2 to 3 short paragraphs, about 110-150 words total.
+LENGTH — 2 to 3 short paragraphs, about 120-150 words.
 
 Output ONE raw JSON object:
 {{"text": ["paragraph one", "paragraph two", ...],
-  "summary": "where the piece is / what it has covered, <= 45 words, for your own continuity next call"}}"""
+  "summary": "everything a reader needs to follow the next part: who/what/where + where things stand, <= 55 words"}}"""
 
 
 def reading_flow_chunk(topic, prompt, summary, rank_est, seed_words=(),
-                       grounding="", style="", model=None):
+                       grounding="", style="", plan=None, part=1, total=5,
+                       model=None):
     """-> {"text": [paragraphs], "summary": str}. Raises LLMError on failure."""
     cefr, guide = _reading_level_line(rank_est)
     sys = _READING_FLOW_SYSTEM.format(rank=rank_est, cefr=cefr, guide=guide)
@@ -1913,6 +1975,16 @@ def reading_flow_chunk(topic, prompt, summary, rank_est, seed_words=(),
         parts.append("FORM: " + style.strip())
     if grounding and grounding.strip():
         parts.append("GROUNDING: " + grounding.strip())
+    if plan and plan.get("beats"):
+        beats = plan["beats"]
+        lines = "\n".join(f"  {i + 1}. {b}" for i, b in enumerate(beats))
+        parts.append(f"PLAN — «{plan.get('title', '')}»\n{lines}")
+        bi = min(max(1, part), len(beats)) - 1
+        tag = "FINAL PART" if part >= total else f"PART {part} of {total}"
+        parts.append(f"WRITE NOW — {tag}. Its beat: {beats[bi]}")
+    else:
+        tag = "the FINAL part — resolve it" if part >= total else f"part {part} of {total}"
+        parts.append(f"WRITE NOW — this is {tag}.")
     parts.append("SO FAR: " + ((summary or "").strip() or "(nothing yet — begin)"))
     if seed_words:
         parts.append("SEED WORDS (optional, work in 1-2 naturally): "

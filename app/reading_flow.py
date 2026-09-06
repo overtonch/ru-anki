@@ -120,21 +120,74 @@ def suggested_topics():
     ]
 
 
+PARTS = 5                       # a piece is this many parts, then it ends
+
+
+def _plan_dict(s):
+    try:
+        return json.loads(s["plan"]) if s["plan"] else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def create(topic="", prompt="", domain=""):
     topic = (topic or "").strip()
     prompt = (prompt or "").strip()
     domain = (domain or "").strip() or proficiency.classify(topic, prompt)
     start = proficiency.starting_rank(domain)
+    cefr = _level_label(start)
+    try:
+        plan = llm.reading_flow_plan(
+            topic, prompt, style=proficiency.domain_style(domain),
+            grounding=proficiency.domain_grounding(domain), cefr=cefr, parts=PARTS)
+    except Exception:  # noqa: BLE001
+        plan = None
+    label = (plan.get("title") if plan else "") or topic or (prompt[:60] if prompt else "Free reading")
     c = _c()
     cur = c.execute(
-        "INSERT INTO reading_flow_sessions(topic, prompt, domain, rank_est) VALUES(?,?,?,?)",
-        (topic or (prompt[:60] if prompt else "Free reading"), prompt or None,
-         domain, start))
+        "INSERT INTO reading_flow_sessions(topic, prompt, domain, rank_est, plan, total_parts) "
+        "VALUES(?,?,?,?,?,?)",
+        (label, prompt or None, domain, start,
+         json.dumps(plan, ensure_ascii=False) if plan else None, PARTS))
     sid = cur.lastrowid
     c.commit()
     c.close()
     _generate(sid)
     return sid
+
+
+def sequel(sid):
+    """A linked follow-up piece — same world, moved forward, opening on a twist."""
+    c = _c()
+    p = c.execute("SELECT * FROM reading_flow_sessions WHERE id=?", (sid,)).fetchone()
+    c.close()
+    if not p:
+        return None
+    base = _plan_dict(p)
+    prev_title = (base.get("title") if base else None) or p["topic"] or "the last piece"
+    domain = p["domain"]
+    start = p["rank_est"] or proficiency.starting_rank(domain)
+    try:
+        plan = llm.reading_flow_plan(
+            p["topic"] or prev_title, p["prompt"] or "",
+            style=proficiency.domain_style(domain),
+            grounding=proficiency.domain_grounding(domain),
+            cefr=_level_label(start), parts=PARTS,
+            sequel_of={"title": prev_title, "summary": (p["summary"] or "")[:400]})
+    except Exception:  # noqa: BLE001
+        plan = None
+    label = (plan.get("title") if plan else "") or (prev_title + " — продолжение")
+    c = _c()
+    cur = c.execute(
+        "INSERT INTO reading_flow_sessions(topic, prompt, domain, rank_est, plan, total_parts, parent_id) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (label, p["prompt"], domain, start,
+         json.dumps(plan, ensure_ascii=False) if plan else None, PARTS, sid))
+    new_sid = cur.lastrowid
+    c.commit()
+    c.close()
+    _generate(new_sid)
+    return new_sid
 
 
 def _generate(sid):
@@ -145,10 +198,15 @@ def _generate(sid):
     if not s:
         c.close()
         return
-    rank_est = _retune(c, s)
+    total = s["total_parts"] or PARTS
     seq = (s["chunks"] or 0) + 1
+    if seq > total:                       # every part already written — nothing to add
+        c.close()
+        return
+    rank_est = _retune(c, s)
     known = _known_set(c)
     seeds = _seed_words(c)
+    plan = _plan_dict(s)
     c.close()
     grounding = proficiency.domain_grounding(s["domain"])
     style = proficiency.domain_style(s["domain"])
@@ -159,9 +217,10 @@ def _generate(sid):
             hint = rank_est if attempt == 1 else max(_RANK_MIN, int(rank_est * 0.55))
             d = llm.reading_flow_chunk(s["topic"], s["prompt"], s["summary"],
                                        hint, seeds if attempt == 1 else (),
-                                       grounding=grounding, style=style)
+                                       grounding=grounding, style=style,
+                                       plan=plan, part=seq, total=total)
             text = _join(d.get("text"))
-            summary = (d.get("summary") or s["summary"] or "").strip()[:400]
+            summary = (d.get("summary") or s["summary"] or "").strip()[:600]
         except Exception as e:  # noqa: BLE001
             if attempt == 2:
                 _set(sid, status="error", error=str(e)[:300])
@@ -228,21 +287,26 @@ def _retune(c, s):
 
 def next_chunk(sid, read_seq=None, read_words=0):
     c = _c()
+    s = c.execute("SELECT chunks, total_parts FROM reading_flow_sessions WHERE id=?",
+                  (sid,)).fetchone()
     if read_seq:
         c.execute(
             "UPDATE reading_flow_chunks SET read=1, n_words=MAX(n_words,?) "
             "WHERE session_id=? AND seq=?", (int(read_words or 0), sid, int(read_seq)))
+        done = s and int(read_seq) >= (s["total_parts"] or PARTS)
         c.execute(
             "UPDATE reading_flow_sessions SET words_read = ("
             "  SELECT COALESCE(SUM(n_words),0) FROM reading_flow_chunks WHERE session_id=? AND read=1), "
-            "  last_read_at=datetime('now') WHERE id=?", (sid, sid))
+            "  last_read_at=datetime('now'), status=? WHERE id=?",
+            (sid, "done" if done else "active", sid))
         c.commit()
     c.close()
     try:
         proficiency.note_session(sid)
     except Exception:  # noqa: BLE001
         pass
-    _generate(sid)
+    if not s or (s["chunks"] or 0) < (s["total_parts"] or PARTS):
+        _generate(sid)
     return _chunk(sid, "last")
 
 
@@ -329,8 +393,8 @@ def _chunk(sid, which="last"):
     else:
         r = c.execute("SELECT * FROM reading_flow_chunks WHERE session_id=? AND seq=?",
                       (sid, int(which))).fetchone()
-    s = c.execute("SELECT status, error, rank_est FROM reading_flow_sessions WHERE id=?",
-                  (sid,)).fetchone()
+    s = c.execute("SELECT status, error, rank_est, total_parts, chunks, plan "
+                  "FROM reading_flow_sessions WHERE id=?", (sid,)).fetchone()
     c.close()
     if not s:
         return None
@@ -338,9 +402,13 @@ def _chunk(sid, which="last"):
         return {"error": s["error"] or "generation failed"}
     if not r:
         return {"error": "no chunk"}
+    total = s["total_parts"] or PARTS
+    plan = _plan_dict(s)
     return {"seq": r["seq"], "text": r["text_accented"] or r["text"],
             "plain": r["text"], "n_words": r["n_words"],
-            "level": _level_label(s["rank_est"]), "rank_est": s["rank_est"]}
+            "level": _level_label(s["rank_est"]), "rank_est": s["rank_est"],
+            "part": r["seq"], "total": total, "title": (plan or {}).get("title"),
+            "done": s["status"] == "done" or (s["chunks"] or 0) >= total}
 
 
 def session(sid):
@@ -360,9 +428,16 @@ def session(sid):
                for r in c.execute(
                    "SELECT * FROM reading_flow_unknown WHERE session_id=? ORDER BY at", (sid,))]
     c.close()
+    plan = _plan_dict(s)
+    total = s["total_parts"] or PARTS
     return {"id": s["id"], "topic": s["topic"], "prompt": s["prompt"],
             "domain": s["domain"], "domain_label": proficiency.domain_label(s["domain"]),
             "status": s["status"], "error": s["error"],
+            "title": (plan or {}).get("title") or s["topic"],
+            "hook": (plan or {}).get("hook"),
+            "total": total, "parts_made": s["chunks"] or 0,
+            "done": s["status"] == "done" or (s["chunks"] or 0) >= total,
+            "parent_id": s["parent_id"],
             "level": _level_label(s["rank_est"]), "rank_est": s["rank_est"],
             "words_read": s["words_read"], "unknown_seen": s["unknown_seen"],
             "created_at": s["created_at"], "last_read_at": s["last_read_at"],
@@ -372,14 +447,16 @@ def session(sid):
 def recent(limit=40):
     c = _c()
     rows = c.execute(
-        "SELECT id, topic, prompt, domain, status, chunks, words_read, unknown_seen, "
-        "rank_est, created_at, last_read_at "
+        "SELECT id, topic, prompt, domain, status, chunks, total_parts, parent_id, "
+        "words_read, unknown_seen, rank_est, created_at, last_read_at "
         "FROM reading_flow_sessions ORDER BY COALESCE(last_read_at, created_at) DESC LIMIT ?",
         (limit,)).fetchall()
     c.close()
     return [{"id": r["id"], "topic": r["topic"], "status": r["status"],
              "domain": r["domain"], "domain_label": proficiency.domain_label(r["domain"]),
              "level": _level_label(r["rank_est"]), "chunks": r["chunks"],
+             "total": r["total_parts"] or PARTS, "parent_id": r["parent_id"],
+             "done": r["status"] == "done" or (r["chunks"] or 0) >= (r["total_parts"] or PARTS),
              "words_read": r["words_read"], "unknown_seen": r["unknown_seen"],
              "created_at": r["created_at"], "last_read_at": r["last_read_at"]}
             for r in rows]

@@ -456,10 +456,11 @@ CREATE TABLE IF NOT EXISTS verb_aspect (
 );
 
 -- ===================================================================
--- Flow reading (app/reading_flow.py) — an endless, LLM-generated reading
--- session on a topic the learner picks. Difficulty auto-tunes chunk by chunk
--- from which words they tap as unknown, aiming to hold ~97% known-word coverage
--- (comprehensible input). One row per session; each generated stretch a chunk.
+-- Flow reading (app/reading_flow.py) — a fixed-length (default 5-part) LLM piece
+-- on a topic the learner picks: a plan with a real arc is drawn first, then each
+-- part written to a plan beat. Difficulty auto-tunes part by part from which
+-- words the reader taps as unknown, aiming to hold ~98% known-word coverage.
+-- When it ends the reader can spawn a sequel (a linked session, with a twist).
 -- ===================================================================
 CREATE TABLE IF NOT EXISTS reading_flow_sessions (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -467,6 +468,9 @@ CREATE TABLE IF NOT EXISTS reading_flow_sessions (
     prompt        TEXT,                          -- the learner's own words, if any
     domain        TEXT,                          -- subject area (proficiency.DOMAINS id)
     rank_est      INTEGER NOT NULL DEFAULT 3500, -- freq rank the reader is estimated to know up to
+    plan          TEXT,                          -- JSON {title, hook, beats:[...]} — the arc
+    total_parts   INTEGER NOT NULL DEFAULT 5,
+    parent_id     INTEGER,                       -- set on a sequel — the session it follows
     chunks        INTEGER NOT NULL DEFAULT 0,
     words_read    INTEGER NOT NULL DEFAULT 0,
     unknown_seen  INTEGER NOT NULL DEFAULT 0,

@@ -2410,6 +2410,16 @@ def reading_next(sid: int, body: ReadingNextIn):
     return out
 
 
+@app.post("/reading/sessions/{sid}/sequel")
+def reading_sequel(sid: int):
+    if not reading_flow.session(sid):
+        raise HTTPException(404, "no such session")
+    new_sid = reading_flow.sequel(sid)
+    if not new_sid:
+        raise HTTPException(502, "couldn’t start a sequel")
+    return {"id": new_sid, "chunk": reading_flow._chunk(new_sid, "last")}
+
+
 class ReadingTapIn(BaseModel):
     surface: str
     sentence: str = ""

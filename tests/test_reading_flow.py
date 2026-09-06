@@ -75,6 +75,38 @@ def test_make_cards_from_tapped_words(client, db):
                        json={"lemmas": ["шумный"]}).json()["made"] == 0
 
 
+def test_piece_is_fixed_length_and_ends(client, db):
+    import reading_flow
+    d = client.post("/reading/sessions", json={"topic": "a landowner returns home"}).json()
+    sid = d["id"]
+    assert d["chunk"]["part"] == 1 and d["chunk"]["total"] == reading_flow.PARTS
+    assert not d["chunk"]["done"]
+    seq = 1
+    for _ in range(reading_flow.PARTS + 2):          # keep asking well past the end
+        r = client.post(f"/reading/sessions/{sid}/next",
+                        json={"read_seq": seq, "read_words": 130}).json()["chunk"]
+        seq = r["part"]
+    assert seq == reading_flow.PARTS                 # never generated a 6th part
+    full = client.get(f"/reading/sessions/{sid}").json()
+    assert full["done"] and full["status"] == "done"
+    assert len(full["chunks"]) == reading_flow.PARTS
+    assert full["title"]
+
+
+def test_sequel_is_a_linked_new_session(client, db):
+    import reading_flow
+    sid = client.post("/reading/sessions", json={"topic": "the clockmaker"}).json()["id"]
+    for s in range(1, reading_flow.PARTS + 1):
+        client.post(f"/reading/sessions/{sid}/next", json={"read_seq": s, "read_words": 130})
+    r = client.post(f"/reading/sessions/{sid}/sequel")
+    assert r.status_code == 200
+    new_sid = r.json()["id"]
+    assert new_sid != sid
+    seq = client.get(f"/reading/sessions/{new_sid}").json()
+    assert seq["parent_id"] == sid and seq["chunks"] and not seq["done"]
+    assert any(x["parent_id"] == sid for x in client.get("/reading/sessions").json()["sessions"])
+
+
 def test_delete(client, db):
     sid = client.post("/reading/sessions", json={"topic": "x"}).json()["id"]
     assert client.delete(f"/reading/sessions/{sid}").json()["deleted"] is True
