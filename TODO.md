@@ -69,10 +69,16 @@ library + proficiency graphs all ride on this.
 
 ## TTS
 
-- ElevenLabs is **disabled** (2026-09-05, to avoid a metered bill). Conversation
-  + Speech Lab audio use local Silero only. To re-enable: set
-  `RU_TTS_ALLOW_ELEVENLABS=1` **and** `ELEVENLABS_API_KEY=…` in the plist /
+- Default voice is now Apple `say` / **Milena (compact)**. For a big quality
+  jump: System Settings › Accessibility › Spoken Content › System Voice ›
+  Manage Voices › Russian → download **Milena (Enhanced)** or a Siri voice,
+  then set `RU_TTS_SAY_VOICE="Milena (Enhanced)"` in the plist and
+  `launchctl kickstart -k`. Everything (reading, Speech Lab, convo) picks it up.
+- ElevenLabs is **disabled** (2026-09-05, to avoid a metered bill). To re-enable:
+  set `RU_TTS_ALLOW_ELEVENLABS=1` **and** `ELEVENLABS_API_KEY=…` in the plist /
   secrets.env. The key alone does nothing without the allow flag.
+- Silero fallback stays for non-macOS. To force it: `RU_TTS_SAY_VOICE` to a
+  bogus value, or `prefer="silero"`.
 
 ## Decided but not built
 
