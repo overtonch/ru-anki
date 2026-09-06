@@ -1,19 +1,23 @@
-"""Russian TTS for the Speech Lab + conversation partner:
+"""Russian TTS for the Speech Lab, conversation partner and flow reading:
 
-  Silero v4   — local, offline, no key, no bill. The default and only backend.
+  Apple `say`  — the macOS system voice (Milena, or an Enhanced/Siri voice once
+                 downloaded in System Settings). Natural, on-device, no bill,
+                 fast. The default on this Mac.
+  Silero v4    — local neural TTS via torch; the fallback where `say` isn't
+                 available. Reads the dictionary stress (U+0301 -> '+' hints).
 
-ElevenLabs (hosted, more natural, but METERED) is wired up but OFF by default so
-it can never run up a bill. To re-enable it, set both
-`RU_TTS_ALLOW_ELEVENLABS=1` and `ELEVENLABS_API_KEY=…` in
-`~/Library/Application Support/ru-anki/secrets.env`. Without the allow flag the
-key is ignored entirely and every call uses Silero.
+ElevenLabs (hosted, METERED) is wired up but OFF unless BOTH
+`RU_TTS_ALLOW_ELEVENLABS=1` and `ELEVENLABS_API_KEY=…` are set — the key alone
+does nothing, so it can't run up a bill.
 
-`synth_to_file(text, out_path)` returns (out_path, backend_label). It always
+`synth_to_file(text, out_path[, prefer])` -> (out_path, backend_label). Always
 produces a small AAC .m4a via ffmpeg so everything downstream is uniform.
+Env: RU_TTS_SAY_VOICE (default "Milena"), RU_TTS_SAY_RATE (words/min).
 """
 import os
 import re
 import subprocess
+import sys
 import threading
 
 import ytdlp  # for MEDIA_DIR
@@ -41,11 +45,19 @@ EL_VOICE = os.environ.get("ELEVENLABS_VOICE_ID", "pNInz6obpgDQGcFmaJgB").strip()
 EL_MODEL = os.environ.get("ELEVENLABS_MODEL", "eleven_multilingual_v2").strip()
 EL_URL = "https://api.elevenlabs.io/v1/text-to-speech/{vid}"
 
+# --- Apple `say` (macOS system voice — natural, on-device, no bill) ---
+# Point RU_TTS_SAY_VOICE at an Enhanced / Siri Russian voice once you've
+# downloaded one in System Settings › Accessibility › Spoken Content for a big
+# quality jump (e.g. "Milena (Enhanced)").
+SAY_VOICE = os.environ.get("RU_TTS_SAY_VOICE", "Milena").strip()
+SAY_RATE = os.environ.get("RU_TTS_SAY_RATE", "").strip()   # words/min, e.g. "170"
+
 # --- Silero (local fallback) ---
 SILERO_SPEAKER = os.environ.get("RU_TTS_HQ_SPEAKER", "eugene")
 _SR = 48000
 _silero = None
 _silero_lock = threading.Lock()
+_say_voice_ok = None
 
 _SENT = re.compile(r"[^.!?…\n]+[.!?…»\"']*", re.U)
 
@@ -64,18 +76,53 @@ def _silero_ok():
         return False
 
 
+def _say_ok():
+    """macOS `say` present with a usable Russian voice."""
+    global _say_voice_ok
+    if os.environ.get("RU_TEST") or not sys.platform.startswith("darwin"):
+        return False
+    if _say_voice_ok is None:
+        try:
+            out = subprocess.run(["say", "-v", "?"], capture_output=True,
+                                 text=True, timeout=10).stdout
+            _say_voice_ok = SAY_VOICE.lower() in out.lower() or "ru_ru" in out.lower()
+        except Exception:  # noqa: BLE001
+            _say_voice_ok = False
+    return bool(_say_voice_ok)
+
+
+def _say_voice():
+    """The configured voice if it exists, else any installed ru_RU voice."""
+    try:
+        out = subprocess.run(["say", "-v", "?"], capture_output=True,
+                             text=True, timeout=10).stdout
+    except Exception:  # noqa: BLE001
+        return SAY_VOICE
+    for ln in out.splitlines():
+        if ln.strip().lower().startswith(SAY_VOICE.lower()):
+            return SAY_VOICE
+    for ln in out.splitlines():
+        if "ru_RU" in ln:
+            return ln.split()[0]
+    return SAY_VOICE
+
+
 def backend(prefer=None):
-    """The concrete backend for a given preference — 'elevenlabs', 'silero', or
-    'none'. prefer: 'elevenlabs' | 'silero' | None (auto: ElevenLabs if keyed)."""
+    """The concrete backend — 'elevenlabs' | 'apple' | 'silero' | 'none'.
+    prefer: force one; None auto-picks the best available (Apple `say`, then
+    Silero). ElevenLabs only when explicitly keyed + allowed."""
     if os.environ.get("RU_TEST"):        # never touch a real API from the test suite
         return "none"
-    if prefer == "elevenlabs" and EL_KEY:
-        return "elevenlabs"
+    if prefer == "elevenlabs":
+        return "elevenlabs" if EL_KEY else backend(None)
+    if prefer == "apple":
+        return "apple" if _say_ok() else backend(None)
     if prefer == "silero":
-        return "silero" if _silero_ok() else "none"
+        return "silero" if _silero_ok() else backend(None)
     if EL_KEY:
         return "elevenlabs"
-    # ElevenLabs unavailable (disabled or unkeyed) — always fall back to local
+    if _say_ok():
+        return "apple"
     return "silero" if _silero_ok() else "none"
 
 
@@ -147,10 +194,24 @@ def _load_silero():
     return _silero
 
 
+def _to_plus_stress(text):
+    """U+0301-after-the-vowel  ->  Silero's '+'-before-the-vowel stress format."""
+    out = []
+    for ch in text or "":
+        if ch == "́" and out and out[-1].lower() in "аеиоуыэюяё":
+            v = out.pop()
+            out.append("+")
+            out.append(v)
+        elif ch not in ("́", "̀"):
+            out.append(ch)
+    return "".join(out)
+
+
 def _silero_synth(text, out_path):
     import numpy as np
     import scipy.io.wavfile as wav
 
+    text = _to_plus_stress(text)          # speak the dictionary stress, not the guess
     m = _load_silero()
     gap = np.zeros(int(_SR * 0.35), dtype=np.float32)
     para_gap = np.zeros(int(_SR * 0.75), dtype=np.float32)
@@ -180,6 +241,25 @@ def _silero_synth(text, out_path):
     return "silero:" + SILERO_SPEAKER
 
 
+# ---------------------------------------------------------------- Apple `say`
+
+def _say_synth(text, out_path):
+    voice = _say_voice()
+    aiff = out_path + ".src.aiff"
+    # `say` wants plain text — its Russian voice has its own prosody; combining
+    # stress marks confuse it, so strip them
+    clean = (text or "").replace("́", "").replace("̀", "").strip()
+    cmd = ["say", "-v", voice, "-o", aiff, "--file-format=AIFF"]
+    if SAY_RATE.isdigit():
+        cmd += ["-r", SAY_RATE]
+    cmd += [clean]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    if r.returncode != 0 or not os.path.exists(aiff):
+        raise RuntimeError(f"say failed: {(r.stderr or '')[-200:]}")
+    _to_m4a(aiff, out_path)
+    return "apple:" + voice
+
+
 # ---------------------------------------------------------------- shared
 
 def _to_m4a(src, out_path):
@@ -197,18 +277,24 @@ def _to_m4a(src, out_path):
 
 
 def synth_to_file(text, out_path, prefer=None):
-    """-> (out_path, backend_label). prefer: 'elevenlabs' | 'silero' | None.
-    Raises RuntimeError on failure. An explicit 'silero' never touches credits;
-    'elevenlabs' falls back to Silero only on a transient API error."""
+    """-> (out_path, backend_label). prefer: 'elevenlabs' | 'apple' | 'silero' |
+    None (auto). Raises RuntimeError on failure. Apple `say` and Silero both fall
+    back to each other on error; nothing here touches paid credits."""
     b = backend(prefer)
     if b == "elevenlabs":
         try:
             return out_path, _elevenlabs(text, out_path)
         except Exception as e:  # noqa: BLE001
-            print(f"[tts_hq] ElevenLabs failed ({e}) — trying Silero", flush=True)
+            print(f"[tts_hq] ElevenLabs failed ({e}) — falling back", flush=True)
+            b = "apple" if _say_ok() else "silero"
+    if b == "apple":
+        try:
+            return out_path, _say_synth(text, out_path)
+        except Exception as e:  # noqa: BLE001
+            print(f"[tts_hq] say failed ({e}) — trying Silero", flush=True)
             if _silero_ok():
                 return out_path, _silero_synth(text, out_path)
             raise
     if b == "silero":
         return out_path, _silero_synth(text, out_path)
-    raise RuntimeError("no TTS backend available (local Silero needs torch)")
+    raise RuntimeError("no TTS backend available")

@@ -20,14 +20,15 @@ import srs
 import store
 import tts_hq
 
-_BACKENDS = ("elevenlabs", "silero")
+_BACKENDS = ("elevenlabs", "apple", "silero")
 
 
 def default_backend():
-    """The TTS backend for new speeches and the plain 'rebuild' button."""
-    v = srs.get_setting("speech_tts_backend",
-                        "elevenlabs" if tts_hq.has_elevenlabs() else "silero")
-    return v if v in _BACKENDS else "silero"
+    """The TTS backend for new speeches and the plain 'rebuild' button — the
+    stored choice, or auto (the best available: Apple `say` then Silero)."""
+    auto = tts_hq.backend(None)
+    v = srs.get_setting("speech_tts_backend", auto)
+    return v if v in _BACKENDS else (auto if auto in _BACKENDS else "silero")
 
 
 def set_default_backend(v):

@@ -468,13 +468,13 @@ def chunk_audio(sid, seq):
         return None
     if r["audio_path"] and os.path.exists(r["audio_path"]):
         return r["audio_path"]
-    src = accent.to_silero(r["text_accented"] or r["text"] or "")
-    if not src.strip():
+    src = (r["text_accented"] or r["text"] or "").strip()   # keep the stress marks
+    if not src:
         return None
     os.makedirs(_AUDIO_DIR, exist_ok=True)
     out = os.path.join(_AUDIO_DIR, f"read-{sid}-{seq}.m4a")
     try:
-        tts_hq.synth_to_file(src, out, prefer="silero")
+        tts_hq.synth_to_file(src, out)          # auto: Apple `say`, then Silero
     except Exception as e:  # noqa: BLE001
         print(f"[reading] tts {sid}/{seq}: {e}", flush=True)
         return None

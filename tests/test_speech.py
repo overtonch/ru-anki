@@ -99,9 +99,9 @@ def test_tts_hq_backend_prefers_elevenlabs_when_keyed(monkeypatch):
     monkeypatch.delenv("RU_TEST", raising=False)   # exercise real selection logic
     monkeypatch.setattr(tts_hq, "EL_KEY", "sk_fake")
     assert tts_hq.backend() == "elevenlabs" and tts_hq.available() is True
-    # no key -> never dead-ends on "elevenlabs"; falls back to the local voice
+    # no key -> never dead-ends on "elevenlabs"; falls back to a local voice
     monkeypatch.setattr(tts_hq, "EL_KEY", "")
-    assert tts_hq.backend("elevenlabs") in ("silero", "none")
+    assert tts_hq.backend("elevenlabs") in ("apple", "silero", "none")
 
 
 def test_tts_hq_ignores_elevenlabs_key_without_the_allow_flag(monkeypatch):
