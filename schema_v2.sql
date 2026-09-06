@@ -559,5 +559,6 @@ CREATE TABLE IF NOT EXISTS proficiency_snapshots (
     comprehension REAL,
     retention    REAL,
     domains      TEXT,
+    ak_coverage  REAL,                            -- share of Anna Karenina's running words known
     created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );

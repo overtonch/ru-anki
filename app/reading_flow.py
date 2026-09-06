@@ -210,6 +210,12 @@ def _generate(sid):
     c.close()
     grounding = proficiency.domain_grounding(s["domain"])
     style = proficiency.domain_style(s["domain"])
+    target = []
+    if s["domain"] == "fiction":
+        try:
+            target = proficiency.fiction_target_words(limit=8)
+        except Exception:  # noqa: BLE001
+            target = []
 
     text, summary, pred = "", s["summary"], None
     for attempt in (1, 2):
@@ -218,7 +224,8 @@ def _generate(sid):
             d = llm.reading_flow_chunk(s["topic"], s["prompt"], s["summary"],
                                        hint, seeds if attempt == 1 else (),
                                        grounding=grounding, style=style,
-                                       plan=plan, part=seq, total=total)
+                                       plan=plan, part=seq, total=total,
+                                       target_words=target if attempt == 1 else ())
             text = _join(d.get("text"))
             summary = (d.get("summary") or s["summary"] or "").strip()[:600]
         except Exception as e:  # noqa: BLE001

@@ -124,6 +124,9 @@ def init_db():
         if _has_column(c, "reading_flow_sessions", "id") and not _has_column(
                 c, "reading_flow_sessions", _col.split()[0]):
             c.execute(f"ALTER TABLE reading_flow_sessions ADD COLUMN {_col}")
+    if _has_column(c, "proficiency_snapshots", "day") and not _has_column(
+            c, "proficiency_snapshots", "ak_coverage"):
+        c.execute("ALTER TABLE proficiency_snapshots ADD COLUMN ak_coverage REAL")
     # Fold any legacy known_lexicon rows into resolved_words.
     c.execute(
         """INSERT OR IGNORE INTO resolved_words(normalized_text, reason, video_id, resolved_at)
@@ -734,6 +737,27 @@ def word_occurrences(lemma, per_video=10, also=()):
             "youtube_id": youtube_id(v["url"]),
             "thumbnail_url": _thumb(v["url"], v["thumbnail_url"]),
             "count": len(hits), "hits": hits[:per_video]})
+
+    # flow-reading stories: a word carded there should still show its source
+    sents, meta, ridx = _reading_flow_index()
+    by_session = {}
+    for w in want:
+        for si in ridx.get(w, ()):
+            m = meta[si]
+            grp = by_session.setdefault(m["session_id"],
+                                        {"title": m["title"], "seen": set(), "hits": []})
+            by_lemma[w] += 1
+            key = (si, w)
+            if key in grp["seen"]:
+                continue
+            grp["seen"].add(key)
+            grp["hits"].append({"t": "¶", "w": w, "text": _hit_window(sents[si], w)})
+    for sid_, grp in by_session.items():
+        out.append({
+            "video_id": None, "session_id": sid_, "title": grp["title"],
+            "kind": "reading", "youtube_id": None, "thumbnail_url": None,
+            "count": len(grp["hits"]), "hits": grp["hits"][:per_video]})
+
     return {"videos": out, "by_lemma": {k: n for k, n in by_lemma.items() if n}}
 
 
@@ -755,6 +779,47 @@ def word_status(lemma):
 
 _TS_CYR = _re.compile(r"[А-Яа-яЁё][А-Яа-яЁё-]*")
 _LEMMA_IDX = {}          # video_id -> (line_texts, line_times, {lemma: [line idx]})
+
+
+_READ_IDX = None          # (sentences, meta_per_sentence, {lemma: [sent idx]}, n_chunks)
+
+
+def _reading_flow_index():
+    """Inverted index over every flow-reading chunk (sentence -> lemmas), so a
+    word carded from the reading mode still shows its sources on the word page.
+    Rebuilt when the chunk count changes."""
+    global _READ_IDX
+    c = connect()
+    try:
+        n = c.execute("SELECT COUNT(*) n FROM reading_flow_chunks").fetchone()["n"]
+    except sqlite3.OperationalError:
+        return [], [], {}
+    if _READ_IDX and _READ_IDX[3] == n:
+        return _READ_IDX[0], _READ_IDX[1], _READ_IDX[2]
+    rows = c.execute(
+        """SELECT ch.text, s.id sid, COALESCE(s.plan, s.topic) label, s.topic
+           FROM reading_flow_chunks ch JOIN reading_flow_sessions s ON s.id = ch.session_id
+           ORDER BY ch.session_id, ch.seq""").fetchall()
+    c.close()
+    sents, meta, idx = [], [], {}
+    for r in rows:
+        title = r["topic"] or "reading"
+        if r["label"] and r["label"].startswith("{"):
+            try:
+                title = (_json.loads(r["label"]).get("title") or title)
+            except Exception:  # noqa: BLE001
+                pass
+        for raw in _re.split(r"(?<=[.!?…»])\s+", (r["text"] or "").replace("\n", " ")):
+            s = raw.strip()
+            if len(s) < 4 or not _re.search(r"[А-Яа-яЁё]", s):
+                continue
+            si = len(sents)
+            sents.append(s)
+            meta.append({"session_id": r["sid"], "title": title})
+            for tok in _TS_CYR.findall(s):
+                idx.setdefault(lemma_key(tok), []).append(si)
+    _READ_IDX = (sents, meta, idx, n)
+    return sents, meta, idx
 
 
 def _lemma_index(video_id):

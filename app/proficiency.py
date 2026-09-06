@@ -27,6 +27,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+import books       # noqa: E402
 import llm         # noqa: E402
 import srs         # noqa: E402
 import store       # noqa: E402
@@ -139,6 +140,21 @@ DOMAINS = [
      "kw": ["health", "doctor", "hospital", "sick", "illness", "symptom", "body",
             "pain", "medicine", "pharmacy", "injury", "dentist", "clinic",
             "nurse", "exercise", "sleep"]},
+    {"id": "religion", "label": "Religion & philosophy",
+     "blurb": "essays on world religions, Hindu & Buddhist thought",
+     "topics": ["Vivekananda and the idea that all religions point to one truth",
+                "Ramakrishna's parables, and what they were teaching",
+                "Advaita Vedanta in plain terms: the self and the absolute",
+                "Where Buddhism and classical Hindu philosophy actually disagree",
+                "The Bhagavad Gita: what Krishna tells Arjuna, and why",
+                "How the Hare Krishna movement grew from a Bengali tradition",
+                "A short, fair introduction to one of the world's religions"],
+     "kw": ["religion", "religious", "hindu", "hinduism", "buddhism", "buddhist",
+            "vedanta", "advaita", "vivekananda", "ramakrishna", "krishna",
+            "dharma", "karma", "nirvana", "moksha", "upanishad", "gita", "sutra",
+            "meditation", "monk", "monastery", "philosophy", "soul", "god",
+            "faith", "spiritual", "prayer", "church", "temple", "islam",
+            "christianity", "judaism", "orthodox", "theology", "mysticism"]},
     {"id": "smalltalk", "label": "Small talk",
      "blurb": "the light conversation that carries a relationship",
      "topics": ["Small talk that goes surprisingly deep on a long train ride",
@@ -184,6 +200,12 @@ _GROUNDING = {
     "travel": (
         "Use real cities, real neighbourhoods, real stations and lines, real "
         "landmarks — geographically accurate."),
+    "religion": (
+        "Represent every tradition accurately and fairly — real teachings, real "
+        "history, real figures and texts, real doctrinal differences. Attribute "
+        "claims to the tradition or thinker that holds them. No invented "
+        "scriptures, gurus, or doctrines; no flattening one tradition into "
+        "another."),
 }
 
 
@@ -230,19 +252,46 @@ _STYLE = {
         "unless the topic explicitly asks for one."),
     "fiction": (
         "Write it as literary prose in the manner of the 19th-century Russian "
-        "novel — Tolstoy, Dostoevsky, Turgenev, and Bulgakov's «Мастер и "
-        "Маргарита» at the later edge. Third-person narration with scenes, "
-        "gesture and interiority. Deliberately use the vocabulary a reader meets "
-        "in those books but rarely in speech, always in a context that makes the "
-        "meaning plain: literary narration verbs (промолвил, пробормотал, "
-        "усмехнулся, вздохнул, нахмурился, побрёл, поморщился, спохватился), "
-        "manner adverbs (нехотя, украдкой, чинно, робко, поспешно, досадливо), "
-        "and the objects and life of the period (извозчик, лакей, "
-        "сюртук, папироса, самовар, депеша, флигель, гувернантка, крыльцо, "
-        "усадьба). One or two new such words per paragraph — enough to build the "
+        "novel — Tolstoy, Dostoevsky, Turgenev, Chekhov, and Bulgakov's «Мастер и "
+        "Маргарита» at the later edge. Third-person narration with real scenes, "
+        "gesture and interiority. This is preparation for reading the classics, "
+        "so deliberately exercise the vocabulary a reader meets THERE but rarely "
+        "in speech — always in a context that makes the meaning plain:\n"
+        "  • narration & speech verbs: промолвил, пробормотал, возразил, "
+        "усмехнулся, вздохнул, нахмурился, поморщился, спохватился, побрёл, "
+        "потупился, вспыхнул, отшатнулся;\n"
+        "  • manner adverbs: нехотя, украдкой, чинно, робко, поспешно, "
+        "досадливо, снисходительно, рассеянно;\n"
+        "  • DESCRIBING PEOPLE — face, build, bearing, dress, expression: "
+        "сутулый, дородный, худощавый, смуглый, веснушчатый, приземистый, "
+        "осанистый, бакенбарды, проседь, впалые щёки, надменный, приветливый;\n"
+        "  • DESCRIBING ROOMS & places — furnishings, light, air, order: "
+        "гостиная, кабинет, передняя, обои, портьеры, кресло, канделябр, "
+        "полумрак, духота, натёртый паркет, изразцовая печь;\n"
+        "  • THE PHYSICAL WORLD a scene is built from — materials (дуб, "
+        "дубовый, кожа, бархат, ситец, холст, чугун, жесть, позолота), "
+        "everyday-but-not-basic colours (бурый, сизый, багровый, лиловый, "
+        "русый, вороной, седой, смуглый), smells (пахло сыростью / прелью / "
+        "дымом / ладаном; тянуло холодом), textures and light (шершавый, "
+        "липкий, тусклый, ослепительный);\n"
+        "  • NATURE nearby — trees, undergrowth, weather: осина, ольха, "
+        "верба, папоротник, вереск, крапива, репейник, мох, валежник, "
+        "просека, овраг, изморозь, зной, сумерки;\n"
+        "  • the objects and daily life of the period: извозчик, лакей, "
+        "горничная, сюртук, пенсне, папироса, самовар, депеша, флигель, "
+        "гувернантка, усадьба, крыльцо, дрожки.\n"
+        "One or two genuinely new such words per paragraph — enough to build the "
         "world, not a costume parade. Setting: pre-revolutionary Russia unless "
-        "the topic says otherwise. The aim is that the classics feel familiar "
-        "before the reader opens one."),
+        "the topic says otherwise."),
+    "religion": (
+        "Write it as an accessible essay on religious thought or history — the "
+        "register of a good popular guide to religion, respectful and precise. "
+        "Lay out what a tradition actually teaches, how it developed, and where "
+        "traditions differ, attributively («по учению адвайты…», «буддийские "
+        "школы, напротив, считают…»). Name the real figures, texts and movements "
+        "(Вивекананда, Рамакришна, Шанкара, Будда, Упанишады, «Бхагавадгита»). "
+        "Introduce each specialised term with a short gloss the first time. Not a "
+        "sermon, not a story, not advocacy — explanation."),
     "scifi": (
         "Write it as a science-fiction short story — scene, character, a sense of "
         "wonder or unease. Modern narrative Russian."),
@@ -258,7 +307,7 @@ def domain_style(did):
 
 _FORM_TAG = {
     "work": "article", "politics": "article", "nature": "article",
-    "culture": "essay", "health": "explainer",
+    "culture": "essay", "health": "explainer", "religion": "essay",
     "fiction": "classic prose", "scifi": "short story", "smalltalk": "dialogue",
 }
 
@@ -363,6 +412,102 @@ def known_rank():
         return max(_stored_rank(), _card_floor(c))
     finally:
         c.close()
+
+
+# ---------------------------------------------------------------- target books
+
+# how token-coverage of a whole book maps to "could you actually read it"
+# (Hu & Nation 2000 / Laufer & Ravenhorst-Kalovski 2010 coverage thresholds)
+_READINESS = [
+    (0.985, "ready", "you'd read it comfortably, looking up the odd word"),
+    (0.965, "almost", "readable with a dictionary next to you"),
+    (0.930, "not yet", "hard going — you'd stop to look things up constantly"),
+    (0.000, "a way to go", "too much unknown vocabulary to enjoy it right now"),
+]
+
+
+_book_cache = {}          # book -> (computed_at, result)
+
+
+def book_readiness(book="anna_karenina"):
+    """How much of `book` the learner could read now: token coverage (share of
+    running words known), a difficulty read, and the frequent unknowns to target.
+    Cached ~90s — the inputs (cards, known_rank) move slowly."""
+    import time
+    hit = _book_cache.get(book)
+    if hit and time.time() - hit[0] < 90:
+        return hit[1]
+    try:
+        fq = books.freq(book)
+        m = books.meta(book)
+    except Exception:  # noqa: BLE001
+        return None
+    c = store.connect()
+    have = _known_lemmas(c)
+    kr = max(_stored_rank(), _card_floor(c))
+    todo = [l for l in fq if l not in have]
+    ranks = store.rank_map(set(todo))
+    # the 13k-word common stoplist counts as "known" — a B2 reader has these
+    ph = ",".join("?" * len(todo)) if todo else "''"
+    common = {r["normalized_text"] for r in c.execute(
+        f"SELECT normalized_text FROM stoplist WHERE normalized_text IN ({ph})",
+        todo)} if todo else set()
+    c.close()
+
+    def known(lem):
+        if lem in have or lem in common:
+            return True
+        r = ranks.get(lem)
+        return r is not None and r <= kr
+
+    total = sum(fq.values()) or 1
+    known_tok = sum(cnt for lem, cnt in fq.items() if known(lem))
+    gaps = sorted(((cnt, lem) for lem, cnt in fq.items() if not known(lem)), reverse=True)
+    coverage = known_tok / total
+    types_known = 1 - len(gaps) / max(1, len(fq))
+    for cut, verdict, feel in _READINESS:
+        if coverage >= cut:
+            break
+    # a clean "words to target" list: real dictionary words only (drops leftover
+    # names, lemmatiser noise), commonest first
+    c = store.connect()
+    top = [l for _, l in gaps[:400]]
+    ph = ",".join("?" * len(top)) if top else "''"
+    indict = {r["headword"] for r in c.execute(
+        f"SELECT headword FROM dict_ru WHERE headword IN ({ph})", top)} if top else set()
+    c.close()
+    clean = [(n, l) for n, l in gaps if l in indict and len(l) > 3][:60]
+    out = {
+        "book": book, "title": m.get("title"), "author": m.get("author"),
+        "coverage": round(coverage, 4),
+        "types_known": round(types_known, 3),
+        "unknown_lemmas": len(gaps),
+        "key_words_to_go": sum(1 for cnt, _ in gaps if cnt >= 4),
+        "verdict": verdict, "feels_like": feel,
+        "top_gaps": [{"lemma": l, "count": n} for n, l in clean],
+    }
+    _book_cache[book] = (__import__("time").time(), out)
+    return out
+
+
+def fiction_target_words(limit=10, book="anna_karenina"):
+    """The classic-novel words worth rehearsing in a fiction story: the frequent
+    unknowns from the target book, with a couple of rarer content words mixed in
+    so distinctive-but-uncommon vocabulary gets an airing too."""
+    r = book_readiness(book)
+    if not r or not r["top_gaps"]:
+        return []
+    _noise = {"утром", "вечером", "днем", "ночью", "деньга", "спасть", "старое",
+              "конченый", "родный", "белые"}
+    gaps = [g for g in r["top_gaps"] if g["lemma"] not in _noise and g["count"] >= 3]
+    picks = [g["lemma"] for g in gaps[:max(1, limit - 3)]]
+    mid = [g["lemma"] for g in gaps if 3 <= g["count"] <= 8][3:6]
+    seen, out = set(), []
+    for w in picks + mid:
+        if w not in seen and len(w) > 3:
+            seen.add(w)
+            out.append(w)
+    return out[:limit]
 
 
 def starting_rank(domain=None):
@@ -502,6 +647,8 @@ def estimate():
     except Exception:  # noqa: BLE001
         retention = None
 
+    book = book_readiness("anna_karenina")
+
     # vocabulary size: the cutoff is "knows most words this common"; scale down a
     # little because nobody knows every word above their cutoff, then add cards
     # that sit beyond it.
@@ -519,6 +666,7 @@ def estimate():
         "comprehension": comp,
         "retention": retention,
         "domains": domains,
+        "book": book,
         "day": _iso_day(),
     }
 
@@ -543,20 +691,22 @@ def snapshot(force=True):
     if exists and not force:
         c.close()
         return e
+    ak_cov = (e.get("book") or {}).get("coverage")
     c.execute(
         """INSERT INTO proficiency_snapshots
              (day, known_words, known_rank, cefr, cards_total, cards_word,
-              cards_mature, words_read, comprehension, retention, domains)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?)
+              cards_mature, words_read, comprehension, retention, domains, ak_coverage)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(day) DO UPDATE SET
              known_words=excluded.known_words, known_rank=excluded.known_rank,
              cefr=excluded.cefr, cards_total=excluded.cards_total,
              cards_word=excluded.cards_word, cards_mature=excluded.cards_mature,
              words_read=excluded.words_read, comprehension=excluded.comprehension,
-             retention=excluded.retention, domains=excluded.domains""",
+             retention=excluded.retention, domains=excluded.domains,
+             ak_coverage=excluded.ak_coverage""",
         (day, e["known_words"], e["known_rank"], e["cefr"], e["cards_total"],
          e["cards_word"], e["cards_mature"], e["words_read"], e["comprehension"],
-         e["retention"], dom_json))
+         e["retention"], dom_json, ak_cov))
     c.commit()
     c.close()
     return e
@@ -583,4 +733,5 @@ def overview(days=180):
     """Everything the stats page needs in one call."""
     e = snapshot(force=True)
     return {**e, "history": history(days),
+            "books": books.all_meta(),
             "domain_labels": {d["id"]: d["label"] for d in DOMAINS}}

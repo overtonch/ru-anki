@@ -47,6 +47,24 @@ def test_family_false_limits_to_the_exact_lemma(client, db):
     assert set(just["by_lemma"]) == {"презирать"}
 
 
+def test_flow_reading_stories_are_a_word_source(client, db):
+    """A word carded from the endless-reading mode still shows its context on the
+    word page (regression: reading chunks weren't indexed at all)."""
+    import store
+    sid = client.post("/reading/sessions", json={"topic": "шумный город"}).json()["id"]
+    c = store.connect()
+    c.execute("INSERT INTO reading_flow_chunks(session_id, seq, text, n_words) VALUES(?,?,?,?)",
+              (sid, 9, "Извозчик гнал лошадей по мостовой. Кучер обернулся и что-то крикнул.", 11))
+    c.commit(); c.close()
+    store._READ_IDX = None
+    d = client.get("/words/кучер").json()
+    rd = [v for v in d["videos"] if v["kind"] == "reading"]
+    assert rd, "flow-reading source missing from the word page"
+    assert d["by_lemma"].get("кучер")
+    assert any("**Кучер**" in h["text"] or "**кучер**" in h["text"].lower()
+               for h in rd[0]["hits"])
+
+
 def test_long_book_paragraph_hit_is_trimmed_to_a_window(client, db):
     v = db.upsert_video("http://x.test/d", "Книга", "text", "ru", "WEBVTT\n")
     para = ("Много лет спустя, стоя у стены в ожидании расстрела, " * 6

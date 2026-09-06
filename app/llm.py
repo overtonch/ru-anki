@@ -1955,6 +1955,10 @@ SEED WORDS — words the reader is mid-learning. Try to slip a natural form of o
 or two in WHERE IT GENUINELY FITS. Better none than a bent sentence. Never force,
 list, or flag them.
 
+TARGET VOCAB — if listed, these are words that recur in the classic novel the
+reader is preparing for. Same rule as seed words: use a natural form of one or
+two only where the scene genuinely calls for it, never forced.
+
 LENGTH — 2 to 3 short paragraphs, about 120-150 words.
 
 Output ONE raw JSON object:
@@ -1964,7 +1968,7 @@ Output ONE raw JSON object:
 
 def reading_flow_chunk(topic, prompt, summary, rank_est, seed_words=(),
                        grounding="", style="", plan=None, part=1, total=5,
-                       model=None):
+                       target_words=(), model=None):
     """-> {"text": [paragraphs], "summary": str}. Raises LLMError on failure."""
     cefr, guide = _reading_level_line(rank_est)
     sys = _READING_FLOW_SYSTEM.format(rank=rank_est, cefr=cefr, guide=guide)
@@ -1989,6 +1993,9 @@ def reading_flow_chunk(topic, prompt, summary, rank_est, seed_words=(),
     if seed_words:
         parts.append("SEED WORDS (optional, work in 1-2 naturally): "
                      + ", ".join(seed_words))
+    if target_words:
+        parts.append("TARGET VOCAB (from the classic novel; optional, 1-2 only if the scene fits): "
+                     + ", ".join(target_words))
     prompt_text = "\n\n".join(parts)
     m = model or TRANSLATE_MODEL
     last = None

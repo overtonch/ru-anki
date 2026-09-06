@@ -40,6 +40,58 @@ def test_reading_moves_the_domain_estimate_and_snapshot(client, db):
     assert nature["comprehension"] is not None
 
 
+def _seed_ref(db):
+    """A little freq / dict reference data (the test DB ships these tables empty)."""
+    import books
+    c = db.connect()
+    # mark the 30 commonest AK lemmas as "known" via freq rank, and give the next
+    # 40 a dict_ru entry so they can surface as real word gaps
+    top = sorted(books.freq("anna_karenina").items(), key=lambda kv: -kv[1])
+    for i, (lem, _) in enumerate(top[:30]):
+        c.execute("INSERT OR IGNORE INTO freq(normalized_text, rank) VALUES(?,?)", (lem, i + 1))
+    for lem, _ in top[30:120]:
+        c.execute("INSERT OR IGNORE INTO dict_ru(headword, gloss) VALUES(?,?)", (lem, "x"))
+    c.commit(); c.close()
+
+
+def test_anna_karenina_readiness(client, db):
+    import proficiency
+    _seed_ref(db)
+    proficiency._book_cache.clear()
+    r = proficiency.book_readiness("anna_karenina")
+    assert r and 0 < r["coverage"] < 1
+    assert r["verdict"] and r["feels_like"]
+    assert r["top_gaps"] and all(g["count"] >= 1 for g in r["top_gaps"])
+    d = client.get("/proficiency").json()
+    assert d["book"]["book"] == "anna_karenina"
+    h = client.get("/proficiency/history").json()["history"]
+    assert any(x.get("ak_coverage") is not None for x in h)
+
+
+def test_book_endpoint_and_making_cards_from_gaps(client, db):
+    import proficiency
+    _seed_ref(db)
+    proficiency._book_cache.clear()
+    gaps = client.get("/reading/books/anna_karenina").json()["top_gaps"]
+    assert gaps
+    lemmas = [g["lemma"] for g in gaps[:3]]
+    made = client.post("/reading/books/anna_karenina/cards", json={"lemmas": lemmas}).json()
+    assert made["made"] >= 1
+    names = {c["span_text"] for c in client.get("/srs/cards?filter=all").json()["cards"]}
+    assert set(lemmas) & names
+
+
+def test_religion_domain_exists(client, db):
+    d = client.get("/reading/topics").json()
+    ids = {g["id"] for g in d["domains"]}
+    assert "religion" in ids
+    rel = next(g for g in d["domains"] if g["id"] == "religion")
+    assert rel["topics"] and rel["form"] == "essay"
+    sid = client.post("/reading/sessions",
+                      json={"prompt": "the teachings of Advaita Vedanta and Vivekananda"}).json()["id"]
+    assert client.get(f"/reading/sessions/{sid}").json()["domain"] == "religion"
+
+
 def test_history_endpoint(client, db):
     client.get("/proficiency")
     h = client.get("/proficiency/history").json()["history"]

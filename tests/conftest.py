@@ -280,7 +280,7 @@ def stub_llm(monkeypatch):
 
     def _reading_flow_chunk(topic, prompt, summary, rank_est, seed_words=(),
                             grounding="", style="", plan=None, part=1, total=5,
-                            model=None):
+                            target_words=(), model=None):
         seeded = (" " + " ".join(seed_words[:2])) if seed_words else ""
         body = ("Максим медленно шёл по широкой шумной улице и думал о своей работе "
                 "и о том большом незнакомом городе вокруг него каждый день. "

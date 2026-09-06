@@ -186,8 +186,8 @@ GIT_TABLES = (
      "FROM convo_turns ORDER BY id"),
     # proficiency history — the level graphs; small and worth keeping
     ("proficiency_snapshots", "SELECT day, known_words, known_rank, cefr, cards_total, "
-     "cards_word, cards_mature, words_read, comprehension, retention, domains, created_at "
-     "FROM proficiency_snapshots ORDER BY day"),
+     "cards_word, cards_mature, words_read, comprehension, retention, domains, "
+     "ak_coverage, created_at FROM proficiency_snapshots ORDER BY day"),
 )
 
 

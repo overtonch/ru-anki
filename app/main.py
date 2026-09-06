@@ -2471,6 +2471,45 @@ def reading_cards(sid: int, body: ReadingCardsIn):
     return {"made": len(made)}
 
 
+@app.get("/reading/books/{book}")
+def reading_book(book: str):
+    r = proficiency.book_readiness(book)
+    if not r:
+        raise HTTPException(404, "no such book")
+    # which of the top gaps already have a card
+    c = store.connect()
+    have = {row["normalized_text"] for row in c.execute(
+        "SELECT normalized_text FROM srs_cards WHERE is_phrase=0")}
+    c.close()
+    for g in r["top_gaps"]:
+        g["carded"] = g["lemma"] in have
+    return r
+
+
+@app.post("/reading/books/{book}/cards")
+def reading_book_cards(book: str, body: ReadingCardsIn):
+    if not proficiency.book_readiness(book):
+        raise HTTPException(404, "no such book")
+    made = []
+    for lem in body.lemmas[:60]:
+        span = store.lemma_key(lem) or lem
+        try:
+            acc, dacc = _accent_sync(span, f"Слово: {span}.", False)
+            card, _ = _commit_card(
+                sentence=f"Слово: {span}.", span_text=span, normalized_text=span,
+                is_phrase=False, translation="",
+                source_html=anki.source_html_manual(f"target: {book}"),
+                accented=acc, dict_accented=dacc, source="reading",
+                tags=["ru-anki", "reading", book])
+            made.append(card["id"])
+        except Exception as e:  # noqa: BLE001
+            print(f"[book] card {lem}: {e}", flush=True)
+    if made:
+        threading.Thread(target=_rank_new_cards, daemon=True).start()
+        backup.snapshot_async("book-cards")
+    return {"made": len(made)}
+
+
 @app.delete("/reading/sessions/{sid}")
 def reading_delete(sid: int):
     reading_flow.delete(sid)
