@@ -25,6 +25,10 @@ import llm         # noqa: E402
 import proficiency  # noqa: E402
 import srs         # noqa: E402,F401  (kept for parity / future use)
 import store       # noqa: E402
+import tts_hq      # noqa: E402
+import ytdlp       # noqa: E402  (MEDIA_DIR)
+
+_AUDIO_DIR = os.path.join(ytdlp.MEDIA_DIR, "reading-audio")
 
 TARGET_UNKNOWN = 0.02          # aim: ~98% of running words already known
                               # (Hu & Nation 2000 / Nation 2006 — the coverage
@@ -425,7 +429,8 @@ def session(sid):
         c.close()
         return None
     chunks = [{"seq": r["seq"], "text": r["text_accented"] or r["text"],
-               "plain": r["text"], "n_words": r["n_words"]}
+               "plain": r["text"], "n_words": r["n_words"],
+               "has_audio": bool(r["audio_path"])}
               for r in c.execute(
                   "SELECT * FROM reading_flow_chunks WHERE session_id=? ORDER BY seq", (sid,))]
     unknown = [{"lemma": r["lemma"], "surface": r["surface"], "sentence": r["sentence"],
@@ -449,6 +454,36 @@ def session(sid):
             "words_read": s["words_read"], "unknown_seen": s["unknown_seen"],
             "created_at": s["created_at"], "last_read_at": s["last_read_at"],
             "chunks": chunks, "unknown": unknown}
+
+
+def chunk_audio(sid, seq):
+    """Path to the spoken version of one chunk — synthesised on first request
+    (local Silero, with the dictionary stress) and cached. None on failure."""
+    c = _c()
+    r = c.execute(
+        "SELECT text, text_accented, audio_path FROM reading_flow_chunks "
+        "WHERE session_id=? AND seq=?", (sid, int(seq))).fetchone()
+    c.close()
+    if not r:
+        return None
+    if r["audio_path"] and os.path.exists(r["audio_path"]):
+        return r["audio_path"]
+    src = accent.to_silero(r["text_accented"] or r["text"] or "")
+    if not src.strip():
+        return None
+    os.makedirs(_AUDIO_DIR, exist_ok=True)
+    out = os.path.join(_AUDIO_DIR, f"read-{sid}-{seq}.m4a")
+    try:
+        tts_hq.synth_to_file(src, out, prefer="silero")
+    except Exception as e:  # noqa: BLE001
+        print(f"[reading] tts {sid}/{seq}: {e}", flush=True)
+        return None
+    c = _c()
+    c.execute("UPDATE reading_flow_chunks SET audio_path=? WHERE session_id=? AND seq=?",
+              (out, sid, int(seq)))
+    c.commit()
+    c.close()
+    return out
 
 
 def recent(limit=40):
@@ -480,6 +515,12 @@ def mark_carded(sid, lemmas):
 
 def delete(sid):
     c = _c()
+    for r in c.execute("SELECT audio_path FROM reading_flow_chunks WHERE session_id=?", (sid,)):
+        if r["audio_path"] and os.path.exists(r["audio_path"]):
+            try:
+                os.remove(r["audio_path"])
+            except OSError:
+                pass
     for t in ("reading_flow_unknown", "reading_flow_chunks", "reading_flow_sessions"):
         col = "id" if t.endswith("sessions") else "session_id"
         c.execute(f"DELETE FROM {t} WHERE {col}=?", (sid,))

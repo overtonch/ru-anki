@@ -120,6 +120,8 @@ def init_db():
         c.execute("ALTER TABLE reading_flow_sessions ADD COLUMN domain TEXT")
     if _has_column(c, "reading_flow_chunks", "id") and not _has_column(c, "reading_flow_chunks", "text_accented"):
         c.execute("ALTER TABLE reading_flow_chunks ADD COLUMN text_accented TEXT")
+    if _has_column(c, "reading_flow_chunks", "id") and not _has_column(c, "reading_flow_chunks", "audio_path"):
+        c.execute("ALTER TABLE reading_flow_chunks ADD COLUMN audio_path TEXT")
     for _col in ("plan TEXT", "total_parts INTEGER NOT NULL DEFAULT 5", "parent_id INTEGER"):
         if _has_column(c, "reading_flow_sessions", "id") and not _has_column(
                 c, "reading_flow_sessions", _col.split()[0]):

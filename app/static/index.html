@@ -722,8 +722,10 @@
                /* system fonts compose the U+0301 stress mark over Cyrillic
                   correctly; Georgia / Times on iOS do NOT (mark floats off) */
                font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif; }
-  .flow-body .fp { margin:0 0 1.15rem; }
+  .flow-body .fp { margin:0 0 1.15rem; transition:opacity .2s; }
+  .flow-body.listening .fp:not(.playing) { opacity:.5; }
   .flow-body .fw { cursor:pointer; border-radius:.2rem; padding:0 .03em; }
+  #flowListenBtn.on { color:var(--accent); }
   .flow-body .fw:active { background:var(--accent-soft); }
   .flow-body .fw.unknown { background:rgba(230,185,60,.24); box-shadow:inset 0 -2px 0 #e6b93c; }
   .flow-body .fw.seed { border-bottom:1px dotted var(--accent); }
@@ -2282,6 +2284,7 @@
     <div class="studybar">
       <button class="backlink" onclick="history.back()">← end</button>
       <div class="prog" id="flowProg" onclick="flowOpenWords()"></div>
+      <button class="sbtn" id="flowListenBtn" onclick="flowListenToggle()" title="listen">🔊</button>
       <button class="sbtn" id="flowNewBtn" onclick="flowNew()">＋</button>
     </div>
     <div class="flow-body" id="flowBody"></div>
@@ -6407,7 +6410,9 @@ function loopStartAll() {
 }
 function _loopPlayCurrent() {
   const cur = LOOP.queue[LOOP.i]; if (!cur) return loopStop();
+  if (typeof flowListenStop === 'function') flowListenStop();
   const a = $('#loopAudio');
+  a.dataset.owner = 'loop';
   a.loop = LOOP.single;
   a.src = `/speeches/${cur.id}/audio?v=${cur.ver || 0}`;
   a.play().catch(() => {});
@@ -6435,7 +6440,7 @@ function loopNext() {
   _loopPlayCurrent();
 }
 function loopStop() {
-  const a = $('#loopAudio'); a.pause(); a.removeAttribute('src'); a.load();
+  const a = $('#loopAudio'); a.pause(); a.removeAttribute('src'); a.load(); delete a.dataset.owner;
   LOOP.queue = []; _lb().hidden = true;
 }
 function loopOpenCurrent() {
@@ -6450,11 +6455,97 @@ $('#loopAudio') && $('#loopAudio').addEventListener('play', () => { $('#loopPlay
 let FLOW = null, FLOW_LIB = [];
 function closeFlow() {
   if (FLOW && FLOW._io) { try { FLOW._io.disconnect(); } catch {} }
+  flowListenStop();
   $('#flowView').hidden = true; FLOW = null;
   $('#flowPop').hidden = true;
   $('#flowReviewTag') && $('#flowReviewTag').remove();
   $('#flowEnd') && $('#flowEnd').remove();
 }
+
+/* ---- listen (background TTS) ---- */
+let FLOW_LISTEN = { on: false, seq: null };
+function flowChunkAudioUrl(seq) { return `/reading/sessions/${FLOW.id}/chunks/${seq}/audio`; }
+function flowListenToggle() {
+  if (!FLOW || !FLOW.id) return;
+  if (FLOW_LISTEN.on) { flowListenStop(); return; }
+  // start from the earliest chunk still on screen near the top, else chunk 1
+  const seqs = [...$('#flowBody').querySelectorAll('[data-seq]')].map(d => +d.dataset.seq);
+  if (!seqs.length) return;
+  const bodyTop = $('#flowBody').scrollTop;
+  let start = seqs[0];
+  for (const d of $('#flowBody').querySelectorAll('[data-seq]')) {
+    if (d.offsetTop + d.offsetHeight > bodyTop + 40) { start = +d.dataset.seq; break; }
+  }
+  FLOW_LISTEN.on = true;
+  $('#flowListenBtn').classList.add('on');
+  $('#flowBody').classList.add('listening');
+  flowListenPlay(start);
+}
+function flowListenStop() {
+  FLOW_LISTEN = { on: false, seq: null };
+  const b = $('#flowListenBtn'); if (b) { b.classList.remove('on'); b.textContent = '🔊'; }
+  $('#flowBody') && $('#flowBody').classList.remove('listening');
+  const a = $('#loopAudio');
+  if (a && a.dataset.owner === 'flow') { a.pause(); a.removeAttribute('src'); a.load(); delete a.dataset.owner; }
+  $('#flowBody') && $('#flowBody').querySelectorAll('.fp.playing').forEach(p => p.classList.remove('playing'));
+  if ('mediaSession' in navigator) try { navigator.mediaSession.playbackState = 'none'; } catch {}
+}
+async function flowListenPlay(seq) {
+  if (!FLOW_LISTEN.on || !FLOW) return;
+  try { if (LOOP && LOOP.queue && LOOP.queue.length) loopStop(); } catch {}
+  FLOW_LISTEN.seq = seq;
+  const a = $('#loopAudio');
+  a.dataset.owner = 'flow';
+  a.loop = false;
+  $('#flowListenBtn').textContent = '…';
+  const wrap = $('#flowBody').querySelector(`[data-seq="${seq}"]`);
+  if (wrap) wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  a.src = flowChunkAudioUrl(seq);
+  try { await a.play(); } catch (e) { /* autoplay guard — user gesture already happened */ }
+  $('#flowListenBtn').textContent = a.paused ? '▶' : '❚❚';
+  $('#flowBody').querySelectorAll('.fp.playing').forEach(p => p.classList.remove('playing'));
+  wrap && wrap.querySelectorAll('.fp').forEach(p => p.classList.add('playing'));
+  flowListenMeta();
+  // warm the next chunk's audio so playback stays gapless
+  const next = FLOW.chunks.find(c => c.seq === seq + 1);
+  if (next) fetch(flowChunkAudioUrl(seq + 1)).catch(() => {});
+}
+function flowListenMeta() {
+  if (!('mediaSession' in navigator)) return;
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: FLOW.title || 'Flow reading',
+      artist: `part ${FLOW_LISTEN.seq}/${FLOW.total} · ru-anki`,
+    });
+    navigator.mediaSession.playbackState = 'playing';
+    const set = (k, fn) => { try { navigator.mediaSession.setActionHandler(k, fn); } catch {} };
+    set('play', () => { $('#loopAudio').play(); });
+    set('pause', () => { $('#loopAudio').pause(); });
+    set('nexttrack', () => flowListenNext());
+    set('previoustrack', FLOW_LISTEN.seq > 1 ? () => flowListenPlay(FLOW_LISTEN.seq - 1) : null);
+  } catch {}
+}
+async function flowListenNext() {
+  if (!FLOW_LISTEN.on) return;
+  const seq = FLOW_LISTEN.seq;
+  if (FLOW.chunks.some(c => c.seq === seq + 1)) { flowListenPlay(seq + 1); return; }
+  if (!FLOW.done) {
+    $('#flowListenBtn').textContent = '…';
+    await flowMore(true);
+    if (FLOW.chunks.some(c => c.seq === seq + 1)) { flowListenPlay(seq + 1); return; }
+  }
+  flowListenStop();               // end of the piece
+  toast('finished — that’s the whole piece', 2500);
+}
+$('#loopAudio') && $('#loopAudio').addEventListener('ended', () => {
+  if ($('#loopAudio').dataset.owner === 'flow') flowListenNext();
+});
+$('#loopAudio') && $('#loopAudio').addEventListener('play', () => {
+  if ($('#loopAudio').dataset.owner === 'flow') $('#flowListenBtn').textContent = '❚❚';
+});
+$('#loopAudio') && $('#loopAudio').addEventListener('pause', () => {
+  if ($('#loopAudio').dataset.owner === 'flow' && FLOW_LISTEN.on) $('#flowListenBtn').textContent = '▶';
+});
 async function openFlow() {
   $('#flowView').hidden = false;
   $('#flowSheet').hidden = true; $('#flowWords').hidden = true; $('#flowPop').hidden = true;
@@ -6463,6 +6554,7 @@ async function openFlow() {
   flowNew();
 }
 async function flowNew() {
+  flowListenStop();
   $('#flowSheet').hidden = false;
   $('#flowWords').hidden = true;
   $('#flowSheet').innerHTML = `<div class="f-load"><span class="spin"></span></div>`;
@@ -6526,6 +6618,7 @@ async function flowLibrary() {
     <button class="flow-cancel" onclick="flowNew()">← back</button>`;
 }
 async function flowStart(topic, domain) {
+  flowListenStop();
   const prompt = topic ? '' : ($('#flowPrompt') ? $('#flowPrompt').value.trim() : '');
   if (!topic && !prompt) { toast('give it a topic', 1600); return; }
   $('#flowSheet').querySelectorAll('button').forEach(b => b.disabled = true);
@@ -6557,6 +6650,7 @@ function flowMaybeMore() {
   }, 150);
 }
 async function flowResume(id, review) {
+  flowListenStop();
   $('#flowSheet').hidden = true; $('#flowWords').hidden = true;
   $('#flowBody').innerHTML = SPINNER;
   let s;

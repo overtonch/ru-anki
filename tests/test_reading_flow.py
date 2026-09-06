@@ -107,6 +107,19 @@ def test_sequel_is_a_linked_new_session(client, db):
     assert any(x["parent_id"] == sid for x in client.get("/reading/sessions").json()["sessions"])
 
 
+def test_chunk_audio_is_synthesised_and_cached(client, db, stub_tts):
+    import store
+    sid = client.post("/reading/sessions", json={"topic": "город"}).json()["id"]
+    r = client.get(f"/reading/sessions/{sid}/chunks/1/audio")
+    assert r.status_code == 200 and r.headers["content-type"] == "audio/mp4"
+    c = store.connect()
+    ap = c.execute("SELECT audio_path FROM reading_flow_chunks WHERE session_id=? AND seq=1",
+                   (sid,)).fetchone()["audio_path"]
+    c.close()
+    assert ap                                         # path cached on the chunk
+    assert any(ch.get("has_audio") for ch in client.get(f"/reading/sessions/{sid}").json()["chunks"])
+
+
 def test_delete(client, db):
     sid = client.post("/reading/sessions", json={"topic": "x"}).json()["id"]
     assert client.delete(f"/reading/sessions/{sid}").json()["deleted"] is True

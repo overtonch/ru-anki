@@ -329,6 +329,22 @@ def client(db, stub_llm, monkeypatch):
 
 
 @pytest.fixture()
+def stub_tts(monkeypatch):
+    """Fake local TTS — writes a tiny file instead of running Silero."""
+    import tts_hq
+
+    def _synth(text, out_path, prefer=None):
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        with open(out_path, "wb") as f:
+            f.write(b"\x00\x00\x00\x18ftypmp42")
+        return out_path, "silero:test"
+
+    monkeypatch.setattr(tts_hq, "synth_to_file", _synth)
+    monkeypatch.setattr(tts_hq, "available", lambda prefer=None: True)
+    monkeypatch.setattr(tts_hq, "backend", lambda prefer=None: "silero")
+
+
+@pytest.fixture()
 def seeded_video(db):
     """One kind='video' with a short VTT transcript, indexed."""
     vtt = ("WEBVTT\n\n"

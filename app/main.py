@@ -2452,6 +2452,17 @@ def reading_next(sid: int, body: ReadingNextIn):
     return out
 
 
+@app.get("/reading/sessions/{sid}/chunks/{seq}/audio")
+async def reading_chunk_audio(sid: int, seq: int):
+    """Spoken version of one chunk — Silero TTS with the dictionary stress,
+    synthesised on first request (a few seconds) then cached."""
+    path = await asyncio.to_thread(reading_flow.chunk_audio, sid, seq)
+    if not path or not os.path.exists(path):
+        raise HTTPException(503, "couldn’t synthesise audio")
+    return FileResponse(path, media_type="audio/mp4",
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+
 @app.post("/reading/sessions/{sid}/sequel")
 def reading_sequel(sid: int):
     if not reading_flow.session(sid):

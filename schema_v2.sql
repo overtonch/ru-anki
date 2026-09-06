@@ -487,6 +487,7 @@ CREATE TABLE IF NOT EXISTS reading_flow_chunks (
     seq         INTEGER NOT NULL,
     text        TEXT NOT NULL,                    -- plain (no stress marks) — used for all analysis
     text_accented TEXT,                           -- stress-marked, shown to the reader
+    audio_path  TEXT,                             -- local TTS m4a (Silero), built on demand
     rank_est    INTEGER,                         -- the level this chunk was generated for
     n_words     INTEGER NOT NULL DEFAULT 0,
     pred_unknown REAL,                           -- server's pre-check unknown-rate estimate

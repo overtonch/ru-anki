@@ -164,6 +164,21 @@ def strip(text):
     return (text or "").replace(_ACUTE, "")
 
 
+def to_silero(text):
+    """Convert U+0301-after-the-vowel stress marks into Silero TTS's own
+    '+'-before-the-vowel format, so the reader is spoken with the dictionary
+    stress instead of the model's guess."""
+    out = []
+    for ch in text or "":
+        if ch == _ACUTE and out and out[-1].lower() in "аеиоуыэюяё":
+            v = out.pop()
+            out.append("+")
+            out.append(v)
+        elif ch != _ACUTE:
+            out.append(ch)
+    return "".join(out)
+
+
 # ---------------------------------------------------------------- stress paradigm
 
 def _lookup(form):
