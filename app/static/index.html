@@ -6552,7 +6552,8 @@ function flowAppendChunk(chunk, silent) {
       sp.textContent = tok;
       sp.dataset.s = bare;
       sp.dataset.para = para;
-      if (FLOW.unknown[rlemmaGuess(bare)]) sp.classList.add('unknown');
+      const u = flowUnkEntry(bare);
+      if (u) { sp.classList.add('unknown'); sp.dataset.lem = u.lemma; }
       sp.onclick = ev => flowTapWord(sp, ev);
       p.appendChild(sp);
     });
@@ -6564,6 +6565,16 @@ function flowAppendChunk(chunk, silent) {
   if (FLOW._io && !FLOW.review) FLOW._io.observe(sent);
 }
 function rlemmaGuess(w) { return (w || '').toLowerCase().replace(/ё/g, 'е'); }
+// FLOW.unknown is keyed by the server's lemma, which differs from an inflected
+// surface form — resolve an entry by lemma hint, then bare form, then a scan.
+function flowUnkEntry(bare, lemHint) {
+  if (!FLOW || !FLOW.unknown) return null;
+  if (lemHint && FLOW.unknown[lemHint]) return FLOW.unknown[lemHint];
+  const g = rlemmaGuess(bare);
+  if (FLOW.unknown[g]) return FLOW.unknown[g];
+  return Object.values(FLOW.unknown).find(u =>
+    rlemmaGuess(u.lemma || '') === g || rlemmaGuess(u.surface || '') === g) || null;
+}
 function flowWireScroll() {
   if (FLOW._io) { try { FLOW._io.disconnect(); } catch {} }
   if (FLOW.review) return;
@@ -6604,17 +6615,20 @@ async function flowTapWord(sp, ev) {
   }
   const r = document.querySelector('#flowPop');
   const rect = sp.getBoundingClientRect();
-  const u0 = FLOW.unknown[rlemmaGuess(surface)] || {};
+  const u0 = flowUnkEntry(surface, sp.dataset.lem) || {};
   if (already && u0.gloss) { flowShowPop(sp, u0.accented || surface, u0.gloss, true); return; }
   sp.classList.add('unknown');
   flowShowPop(sp, surface, u0.gloss || 'looking up…', true);
   try {
     const d = await api(`/reading/sessions/${FLOW.id}/tap`, { method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ surface, sentence, chunk_seq: +(sp.closest('[data-seq]') || {}).dataset?.seq || null }) });
-    FLOW.unknown[d.lemma] = { lemma: d.lemma, surface, sentence, gloss: d.gloss, accented: d.accented, rank: d.rank };
+    FLOW.unknown[d.lemma] = { ...u0, lemma: d.lemma, surface, sentence, gloss: d.gloss, accented: d.accented, rank: d.rank };
+    sp.dataset.lem = d.lemma;
     // mark every occurrence
     $('#flowBody').querySelectorAll('.fw').forEach(x => {
-      if (rlemmaGuess(x.dataset.s) === d.lemma || rlemmaGuess(x.dataset.s) === rlemmaGuess(surface)) x.classList.add('unknown');
+      if (rlemmaGuess(x.dataset.s) === d.lemma || rlemmaGuess(x.dataset.s) === rlemmaGuess(surface)) {
+        x.classList.add('unknown'); x.dataset.lem = d.lemma;
+      }
     });
     // only replace the popover if it's still showing this word
     const pop = $('#flowPop');
@@ -6631,23 +6645,25 @@ function flowShowPop(sp, word, gloss, tapd) {
   const pop = $('#flowPop');
   const bare = sp.dataset.s;
   pop.dataset.for = rlemmaGuess(bare);
-  const carded = (FLOW.unknown[rlemmaGuess(bare)] || {}).carded;
+  const u = flowUnkEntry(bare, sp.dataset.lem) || {};
+  const lem = u.lemma || sp.dataset.lem || bare;
+  const busy = !gloss || gloss === 'looking up…';
   pop.innerHTML = `<span class="fp-w">${escapeHtml(word)}</span>
     <span class="fp-g">${escapeHtml(gloss || '')}</span>
     ${tapd ? `<div class="fp-acts">
-      ${carded ? '<span class="fp-done">✓ card added</span>'
-        : `<button class="fp-card" onclick="flowCardWord('${escapeHtml(bare)}')">＋ make a card</button>`}
-      <button class="fp-x" onclick="flowUntap('${escapeHtml(bare)}')">I know this one</button>
+      ${u.carded ? '<span class="fp-done">✓ card added</span>'
+        : `<button class="fp-card"${busy ? ' disabled' : ''} onclick="flowCardWord('${escapeHtml(lem)}')">＋ make a card</button>`}
+      <button class="fp-x" onclick="flowUntap('${escapeHtml(bare)}','${escapeHtml(lem)}')">I know this one</button>
     </div>` : ''}`;
   pop.hidden = false;
   const r = sp.getBoundingClientRect();
   pop.style.left = Math.max(8, Math.min(r.left, innerWidth - pop.offsetWidth - 8)) + 'px';
   pop.style.top = (r.bottom + 6 > innerHeight - 140 ? r.top - pop.offsetHeight - 6 : r.bottom + 6) + 'px';
 }
-async function flowCardWord(bare) {
-  const lem = rlemmaGuess(bare);
-  const u = FLOW.unknown[lem];
-  if (!u || u.carded) return;
+async function flowCardWord(lem) {
+  const u = FLOW.unknown[lem] || flowUnkEntry(lem);
+  if (!u) { toast('tap the word first', 1600); return; }
+  if (u.carded) return;
   const btn = $('#flowPop') && $('#flowPop').querySelector('.fp-card');
   if (btn) { btn.disabled = true; btn.textContent = 'adding…'; }
   try {
@@ -6659,10 +6675,16 @@ async function flowCardWord(bare) {
   } catch (e) { toast('couldn’t — ' + e.message, 2500); if (btn) { btn.disabled = false; btn.textContent = '＋ make a card'; } }
   refreshFlowProg();
 }
-async function flowUntap(surface) {
-  const lem = rlemmaGuess(surface);
-  delete FLOW.unknown[lem];
-  $('#flowBody').querySelectorAll('.fw').forEach(x => { if (rlemmaGuess(x.dataset.s) === lem) x.classList.remove('unknown'); });
+async function flowUntap(surface, lem) {
+  const u = (lem && FLOW.unknown[lem]) || flowUnkEntry(surface, lem);
+  const key = u ? u.lemma : (lem || rlemmaGuess(surface));
+  delete FLOW.unknown[key];
+  const g = rlemmaGuess(surface), lg = rlemmaGuess(key);
+  $('#flowBody').querySelectorAll('.fw').forEach(x => {
+    if (x.dataset.lem === key || rlemmaGuess(x.dataset.s) === g || rlemmaGuess(x.dataset.s) === lg) {
+      x.classList.remove('unknown'); delete x.dataset.lem;
+    }
+  });
   $('#flowPop').hidden = true;
   try { await api(`/reading/sessions/${FLOW.id}/untap`, { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ surface }) }); } catch {}
