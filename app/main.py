@@ -189,7 +189,31 @@ def _commit_card(*, sentence, span_text, normalized_text, is_phrase, translation
     if not _TESTING:
         _refine_new_card_async(card["id"])
         _resolve_aspect_one_async(dict(card))
+        _audit_card_async(card["id"])
     return card, anki_result
+
+
+def _audit_card_async(card_id):
+    """Background structural check + repair right after a card is made / edited —
+    catches a front_word that came out wrong, a phrase/word mismatch, a missing
+    stress form, before the card is ever seen. A '!' issue (needs the model) is
+    handed to the recheck path."""
+    def _run():
+        try:
+            found = srs.audit_card(card_id, apply=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"[audit] card {card_id}: {e}", flush=True)
+            return
+        if found:
+            print(f"[audit] card {card_id}: fixed {found}", flush=True)
+        if any(f.startswith("!") for f in found):
+            card = srs.get_card(card_id)
+            if card:
+                try:
+                    _recheck_card(card)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[audit] recheck {card_id}: {e}", flush=True)
+    threading.Thread(target=_run, daemon=True).start()
 
 
 def _accent_sync(span_text, sentence, is_phrase):
@@ -1797,6 +1821,7 @@ def _study_card_view(card, with_preview=True, titles=None):
 def srs_stats():
     _maybe_rank_new()
     _maybe_reformat_imminent()
+    _maybe_card_audit()
     _maybe_prof_snapshot()
     s = srs.stats()
     s["anki_dual_write"] = srs.anki_dual_write()
@@ -2925,6 +2950,31 @@ def srs_fix_cards(background: BackgroundTasks):
     return {"span_stress_stripped": stressed, "unbolded_queued": unbolded}
 
 
+@app.post("/srs/cards/audit")
+def srs_audit_cards(background: BackgroundTasks):
+    """Structural sweep over every card: fix front_word drift, phrase/word
+    mismatches, stray stress, missing stress forms; queue an LLM recheck for
+    cards whose target isn't in the sentence."""
+    ids = [r["id"] for r in srs.list_cards("all", limit=20000)["cards"]]
+
+    def _run():
+        fixed, rechecks = 0, 0
+        for cid in ids:
+            f = srs.audit_card(cid, apply=True)
+            if f:
+                fixed += 1
+            if any(x.startswith("!") for x in f):
+                card = srs.get_card(cid)
+                if card and _recheck_card(card):
+                    rechecks += 1
+        _sync_soon()
+        backup.snapshot_async("card-audit")
+        print(f"[audit] manual sweep: {fixed} cards touched, {rechecks} rechecked", flush=True)
+
+    background.add_task(_run)
+    return {"cards": len(ids), "queued": True}
+
+
 _REFORMAT_LOCK = threading.Lock()
 
 
@@ -3227,6 +3277,34 @@ def _maybe_reformat_imminent():
     def _run():
         _reformat_cards(limit=max(80, srs.new_per_day() * 2))
         srs.set_setting("reformat_day", srs._day_start_iso()[:10])
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+_last_audit_kick = 0.0
+
+
+def _maybe_card_audit():
+    """Once a day, structurally audit + repair the cards about to be introduced
+    (and a rolling slice of the rest), so a card can't quietly drift into a bad
+    state between reviews."""
+    global _last_audit_kick
+    if _TESTING or time.time() - _last_audit_kick < 300:
+        return
+    today = srs._day_start_iso()[:10]
+    if srs.get_setting("audit_day") == today:
+        return
+    _last_audit_kick = time.time()
+
+    def _run():
+        try:
+            n = max(120, srs.new_per_day() * 3)
+            hits = srs.audit_recent(limit=n, apply=True)
+            if hits:
+                print(f"[audit] daily: repaired {len(hits)} cards", flush=True)
+            srs.set_setting("audit_day", srs._day_start_iso()[:10])
+        except Exception as e:  # noqa: BLE001
+            print(f"[audit] daily failed: {e}", flush=True)
 
     threading.Thread(target=_run, daemon=True).start()
 

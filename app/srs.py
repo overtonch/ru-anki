@@ -292,6 +292,104 @@ def _strip_stress(s):
     return (s or "").replace("́", "").replace("̀", "")
 
 
+def audit_card(card_id, apply=True):
+    """Structural sanity pass on one card. Fixes the mechanical inconsistencies
+    in place (stray stress in the target, is_phrase vs the span, a front_word
+    that drifted to the whole sentence or a wrong form, a stale normalized_text,
+    a missing dictionary stress form). Returns the list of things it found.
+
+    Content problems that need the model (target not in the sentence, no
+    translation) are reported with a leading '!' so a caller can queue a
+    recheck — they are NOT touched here."""
+    c = store.connect()
+    r = c.execute("SELECT * FROM srs_cards WHERE id=?", (card_id,)).fetchone()
+    if not r:
+        c.close()
+        return []
+    d = dict(r)
+    found, sets, args = [], [], []
+
+    sp0 = (d["span_text"] or "").strip()
+    sp = _strip_stress(sp0)
+    if sp0 != sp and sp:
+        found.append("stress marks in the target word")
+        sets.append("span_text=?")
+        args.append(sp)
+
+    is_ph = 1 if " " in sp else 0
+    if int(bool(d["is_phrase"])) != is_ph and sp:
+        found.append("is_phrase / phrase-vs-word mismatch")
+        sets.append("is_phrase=?")
+        args.append(is_ph)
+
+    nt_want = sp if is_ph else (store.lemma_key(sp) or sp)
+    if sp and _strip_stress(d["normalized_text"] or "") != nt_want:
+        found.append("normalized_text didn't match the target")
+        sets.append("normalized_text=?")
+        args.append(nt_want)
+
+    sent = _strip_stress((d["sentence"] or "").strip())
+    dacc = (d["dict_accented"] or "").strip()
+    fw = (d["front_word"] or "").strip()
+    fw_bare = _strip_stress(fw).lower()
+    fw_ok = bool(fw) and not (
+        (sent and fw_bare == sent.lower()) or                       # became the sentence
+        (not is_ph and " " in fw_bare) or                            # multi-word on a word card
+        (is_ph and fw_bare != sp.lower()) or                         # phrase card: must be the phrase
+        (not is_ph and fw_bare not in (sp.lower(), nt_want.lower())
+         and (store.lemma_key(fw_bare) or fw_bare) != nt_want.lower()))
+    if sp and not fw_ok:
+        want_fw = sp if is_ph else (dacc or store.yo_form(nt_want) or nt_want)
+        found.append("front_word had drifted")
+        sets.append("front_word=?")
+        args.append(want_fw)
+
+    if not is_ph and not dacc and not (d["accented"] or ""):
+        try:
+            import accent as _accent
+            marked, _u = _accent.mark_text(store.yo_form(nt_want) or nt_want)
+            if "́" in marked:
+                found.append("no dictionary stress form")
+                sets.append("dict_accented=?")
+                args.append(marked)
+                # if front_word wasn't already being rewritten, upgrade the bare
+                # form to the accented one so the study front shows the stress
+                if "front_word=?" not in sets and (not fw or fw_bare == (
+                        _strip_stress(marked).lower())):
+                    sets.append("front_word=?")
+                    args.append(marked)
+        except Exception:  # noqa: BLE001
+            pass
+
+    if sp:
+        _, bolded = anki.front_html(d["sentence"] or "", sp, bool(is_ph))
+        if not bolded and (d["sentence"] or "").strip():
+            found.append("! target not found in the sentence")
+    if not (d["translation"] or "").strip() and d["last_review"] is not None:
+        found.append("! no translation")
+
+    if apply and sets:
+        c.execute(f"UPDATE srs_cards SET {', '.join(sets)} WHERE id=?", (*args, card_id))
+        c.commit()
+    c.close()
+    return found
+
+
+def audit_recent(limit=40, apply=True):
+    """Audit the most-recently created / edited cards — cheap to run on a timer
+    and after every card creation."""
+    c = store.connect()
+    ids = [row["id"] for row in c.execute(
+        "SELECT id FROM srs_cards ORDER BY id DESC LIMIT ?", (limit,))]
+    c.close()
+    hits = {}
+    for cid in ids:
+        f = audit_card(cid, apply=apply)
+        if f:
+            hits[cid] = f
+    return hits
+
+
 def create_card(sentence, span_text, normalized_text, is_phrase, translation,
                 *, candidate_id=None, accented=None, dict_accented=None,
                 front_word=None, video_id=None, timestamp=None, anki_note_id=None,
@@ -943,13 +1041,14 @@ def stats():
     now = _iso(_now)
     soon = _iso(_now + LEARNING_HORIZON)
     eod = _day_end_iso()
+    day0 = _day_start_iso()
     due = c.execute(
         """SELECT COUNT(*) n FROM srs_cards
            WHERE suspended=0 AND last_review IS NOT NULL
-             AND ( (fsrs_state = 2 AND due <= :eod)
+             AND ( (fsrs_state = 2 AND due <= :eod AND last_review < :day0)
                    OR (fsrs_state IN (1,3) AND due <= :soon)
-                   OR due <= :now )""",
-        {"now": now, "soon": soon, "eod": eod}).fetchone()["n"]
+                   OR (due <= :now AND last_review < :day0) )""",
+        {"now": now, "soon": soon, "eod": eod, "day0": day0}).fetchone()["n"]
     new_total = c.execute(
         "SELECT COUNT(*) n FROM srs_cards WHERE suspended=0 AND last_review IS NULL"
     ).fetchone()["n"]
@@ -1076,23 +1175,24 @@ def list_cards(filt="all", sort="added", q="", limit=1000, video=None):
 
 
 def queue(limit=80):
-    """The study order: cards genuinely due now, PLUS learning-step cards due
-    within the next 30 min (so a session flows in one chunk instead of making
-    you wait out a 1-minute step or come back later), then fresh cards up to the
-    daily budget."""
+    """The study order: today's whole batch of graduated reviews (surfaced from
+    the day's start), PLUS learning-step cards due within the next 30 min, then
+    fresh cards up to the daily budget. A card already reviewed today never comes
+    back the same day through here — no matter what its next `due` is."""
     c = store.connect()
     now = _utc()
     soon = _iso(now + LEARNING_HORIZON)
     eod = _day_end_iso()
+    day0 = _day_start_iso()
     now_i = _iso(now)
     due = [dict(r) for r in c.execute(
         """SELECT * FROM srs_cards
            WHERE suspended=0 AND last_review IS NOT NULL
-             AND ( (fsrs_state = 2 AND due <= :eod)          -- whole day's reviews up front
-                   OR (fsrs_state IN (1,3) AND due <= :soon) -- learning steps stay minute-scale
-                   OR due <= :now )
+             AND ( (fsrs_state = 2 AND due <= :eod AND last_review < :day0)  -- today's batch, once
+                   OR (fsrs_state IN (1,3) AND due <= :soon)                 -- learning steps: minute-scale
+                   OR (due <= :now AND last_review < :day0) )
            ORDER BY due ASC LIMIT :lim""",
-        {"now": now_i, "soon": soon, "eod": eod, "lim": limit})]
+        {"now": now_i, "soon": soon, "eod": eod, "day0": day0, "lim": limit})]
     # fresh cards up to the daily budget: aim for prod_per_day() production of
     # new_per_day() total, each type backfilling the other when it runs short.
     total_left, prod_budget = _new_plan(c)
@@ -1120,6 +1220,7 @@ def offline_bundle(days=3):
     horizon = _iso(now + _dt.timedelta(days=max(0, days)))
     now_i = _iso(now)
     eod = _day_end_iso()
+    day0 = _day_start_iso()
     rows = [dict(r) for r in c.execute(
         """SELECT * FROM srs_cards
            WHERE suspended=0 AND last_review IS NOT NULL AND due <= :h
@@ -1131,9 +1232,10 @@ def offline_bundle(days=3):
     out = []
     for r in rows:
         d = _card_dict_from_plain(r)
-        # "due now" = new, a learning-step card that has come up, or any graduated
-        # card due some time today (surfaced as one daily batch)
-        d["due_now"] = (d["last_review"] is None) or (d["due"] is not None and (
+        # "due now" = new, a learning-step card that's come up, or a graduated
+        # card due today that hasn't been reviewed yet today (one daily batch)
+        done_today = d["last_review"] is not None and d["last_review"] >= day0
+        d["due_now"] = (d["last_review"] is None) or (not done_today and d["due"] is not None and (
             d["due"] <= eod if d.get("fsrs_state") == 2 else d["due"] <= now_i))
         out.append(d)
     return {"generated_at": now_i, "days": days, "day_end": eod, "cards": out}

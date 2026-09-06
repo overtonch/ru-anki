@@ -176,25 +176,35 @@ def test_queue_excludes_future_but_bundle_includes_them(db):
 
 def test_a_whole_days_reviews_are_available_from_the_start(db):
     """Graduated cards due any time later today show up in the queue now, so
-    reviews land in one daily batch instead of trickling in."""
+    reviews land in one daily batch instead of trickling in — but only if you
+    haven't already reviewed them today."""
     import srs, store
     later = _make_card(srs, span="позже")
     tomorrow = _make_card(srs, span="завтра")
-    srs.review(later["id"], 3)
-    srs.review(tomorrow["id"], 3)
+    done = _make_card(srs, span="сделано")
+    srs.review(later["id"], 3); srs.review(tomorrow["id"], 3); srs.review(done["id"], 3)
     eod = dt.datetime.fromisoformat(srs._day_end_iso())
+    yesterday = srs._iso(dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1))
+    today = srs._iso(dt.datetime.now(dt.timezone.utc))
     c = store.connect()
-    # one due in a few hours (still today), one due well after the day cutoff
-    c.execute("UPDATE srs_cards SET fsrs_state=2, due=? WHERE id=?",
-              (srs._iso(eod - dt.timedelta(hours=2)), later["id"]))
-    c.execute("UPDATE srs_cards SET fsrs_state=2, due=? WHERE id=?",
-              (srs._iso(eod + dt.timedelta(hours=8)), tomorrow["id"]))
+    # due later today, last reviewed yesterday -> in today's batch
+    c.execute("UPDATE srs_cards SET fsrs_state=2, due=?, last_review=? WHERE id=?",
+              (srs._iso(eod - dt.timedelta(hours=2)), yesterday, later["id"]))
+    # due after the day cutoff -> tomorrow's batch
+    c.execute("UPDATE srs_cards SET fsrs_state=2, due=?, last_review=? WHERE id=?",
+              (srs._iso(eod + dt.timedelta(hours=8)), yesterday, tomorrow["id"]))
+    # due later today BUT already reviewed today -> must NOT come back today
+    c.execute("UPDATE srs_cards SET fsrs_state=2, due=?, last_review=? WHERE id=?",
+              (srs._iso(eod - dt.timedelta(hours=1)), today, done["id"]))
     c.commit(); c.close()
     ids = {x["id"] for x in srs.queue(limit=50)}
-    assert later["id"] in ids and tomorrow["id"] not in ids
-    assert srs.stats()["due"] >= 1
+    assert later["id"] in ids
+    assert tomorrow["id"] not in ids
+    assert done["id"] not in ids                    # reviewed today = done for the day
     bundle = {x["id"]: x for x in srs.offline_bundle(days=3)["cards"]}
-    assert bundle[later["id"]]["due_now"] and not bundle[tomorrow["id"]]["due_now"]
+    assert bundle[later["id"]]["due_now"]
+    assert not bundle[tomorrow["id"]]["due_now"]
+    assert not bundle[done["id"]]["due_now"]
 
 
 def test_refresher_includes_every_fumbled_card_not_just_the_far_future_ones(db):
@@ -219,6 +229,35 @@ def test_refresher_includes_every_fumbled_card_not_just_the_far_future_ones(db):
               (srs._iso(srs._utc() - __import__('datetime').timedelta(minutes=1)), soon["id"]))
     c.commit(); c.close()
     assert soon["id"] not in {c["id"] for c in srs.missed_review_cards(days=7)}
+
+
+def test_audit_card_repairs_structural_drift(db):
+    import srs, store
+    c = _make_card(srs, span="искупить", sentence="Разве это могут искупить минуты?")
+    cid = c["id"]
+    con = store.connect()
+    # simulate the drift the user saw: front_word became the whole sentence,
+    # a stray stress mark in the target, is_phrase flipped on
+    con.execute("UPDATE srs_cards SET front_word=?, span_text=?, is_phrase=1 WHERE id=?",
+                ("Разве это могут искупить минуты?", "искупи́ть", cid))
+    con.commit(); con.close()
+
+    found = srs.audit_card(cid, apply=True)
+    assert found                                   # it noticed
+    got = srs.get_card(cid)
+    assert got["is_phrase"] == 0                    # single word again
+    assert "́" not in got["span_text"]              # stress mark stripped
+    assert " " not in got["front_word"]             # front_word is a headword, not the sentence
+    assert srs._strip_stress(got["front_word"]).lower() in ("искупить",)
+    # idempotent
+    assert not any(f for f in srs.audit_card(cid, apply=True) if not f.startswith("!"))
+
+
+def test_audit_flags_target_missing_from_sentence(db):
+    import srs, store
+    c = _make_card(srs, span="кот", sentence="Собака бежала по улице.")
+    found = srs.audit_card(c["id"], apply=True)
+    assert any(f.startswith("!") for f in found)
 
 
 def test_list_filter_orphan(db, seeded_video):

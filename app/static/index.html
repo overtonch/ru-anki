@@ -4252,6 +4252,15 @@ function prefetchStudyNext() {
   if (nx && nx.seconds != null) fetch(`/videos/${nx.video_id}/frame?t=${Math.round(nx.seconds)}`).catch(() => {});
 }
 
+// derive the front from the card's own fields — a stale `front_html` (cached
+// from before a setting change / edit) can't then show the wrong thing
+function studyFrontHtml(c) {
+  if (c.front_mode === 'word') {
+    const hw = (c.front_word || c.dict_accented || c.normalized_text || c.span_text || '').trim();
+    if (hw) return `<div class="hw">${escapeHtml(hw)}</div>`;
+  }
+  return c.front_html || '';
+}
 function renderStudyCard() {
   const c = studyCard();
   _trSwapMore = null;                    // fresh translation options per card
@@ -4291,7 +4300,7 @@ function renderStudyCard() {
          <button class="listen-btn" onclick="event.stopPropagation();playStudyAudio()">🔊 listen</button>
          <div class="listen-hint">tap anywhere to reveal</div>
        </div>`
-    : `<div class="study-q">${c.front_html}</div>`;
+    : `<div class="study-q">${studyFrontHtml(c)}</div>`;
   $('#studyBody').innerHTML = `
     <div class="study-scroll study-tap" onclick="studyReveal()">${q}</div>
     <div class="study-foot"><button class="study-show" onclick="studyReveal()">Show answer</button></div>`;
@@ -4702,6 +4711,8 @@ async function setCardFront(v) {
     toast(v === 'word'
       ? 'cards now show just the word — sentence moves to the back'
       : 'cards now show the full sentence', 3000);
+    if (STUDY && !$('#studyView').hidden) await loadStudyQueue();   // refresh loaded cards
+    syncOfflineSRS(true);                                          // and the offline bundle
   } catch (e) { toast('couldn’t save — ' + e.message, 3000); }
 }
 async function setNewPerDay(v) {
