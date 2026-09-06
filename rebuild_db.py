@@ -27,7 +27,8 @@ TABLES = ("videos", "candidates", "resolved_words", "texts", "text_chapters",
           "drill_lapse", "drill_items", "motion_lapse", "motion_items",
           "chunk_stage", "chunk_lapse", "chunk_items", "journal_sessions", "speeches",
           "reading_flow_sessions", "reading_flow_chunks", "reading_flow_unknown",
-          "convo_sessions", "convo_turns", "proficiency_snapshots")
+          "convo_sessions", "convo_turns", "proficiency_snapshots",
+          "activate_items", "activate_log")
 
 
 def rows(path):

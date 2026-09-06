@@ -544,6 +544,49 @@ CREATE TABLE IF NOT EXISTS convo_turns (
 );
 
 -- ===================================================================
+-- Speaking activation (app/activate.py) — turning passive vocabulary active. A
+-- silent drill: the app names a target (a verb + its government, or a common
+-- word) and a concrete thought to express; the learner forms the Russian in
+-- their head or types it, then checks. Items are SRS-scheduled (SM-2-lite).
+-- `activate_verbs` is the curriculum (bundled, app/data/activate/); items are
+-- introduced from it + the frequency list.
+-- ===================================================================
+CREATE TABLE IF NOT EXISTS activate_verbs (
+    verb        TEXT PRIMARY KEY,               -- infinitive
+    rank        INTEGER,
+    gloss       TEXT,
+    aspect_pair TEXT,
+    government   TEXT,                           -- JSON [{gov, role, ex}]
+    trap        TEXT
+);
+
+CREATE TABLE IF NOT EXISTS activate_items (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind          TEXT NOT NULL,                 -- 'verb' | 'word'
+    target        TEXT NOT NULL,
+    gloss         TEXT,
+    introduced_at TEXT NOT NULL DEFAULT (datetime('now')),
+    reps          INTEGER NOT NULL DEFAULT 0,
+    lapses        INTEGER NOT NULL DEFAULT 0,
+    streak        INTEGER NOT NULL DEFAULT 0,
+    ease          REAL NOT NULL DEFAULT 2.3,
+    interval_d    REAL NOT NULL DEFAULT 0,
+    due           TEXT NOT NULL DEFAULT (datetime('now')),
+    last_seen     TEXT,
+    angles        TEXT,                          -- JSON list of task angles used
+    UNIQUE(kind, target)
+);
+
+CREATE TABLE IF NOT EXISTS activate_log (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id   INTEGER NOT NULL REFERENCES activate_items(id),
+    at        TEXT NOT NULL DEFAULT (datetime('now')),
+    rating    INTEGER,
+    produced  TEXT,
+    category  TEXT
+);
+
+-- ===================================================================
 -- Proficiency history (app/proficiency.py) — one row per day, a snapshot of the
 -- learner's estimated level so the stats page can graph progress over time.
 -- `domains` is JSON {domain_id: {rank_est, comprehension, words_read}}.

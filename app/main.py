@@ -41,6 +41,7 @@ import speech  # noqa: E402
 import reading_flow  # noqa: E402
 import convo  # noqa: E402
 import proficiency  # noqa: E402
+import activate  # noqa: E402
 import grammar  # noqa: E402
 import journal  # noqa: E402
 import motion  # noqa: E402
@@ -2579,6 +2580,46 @@ def proficiency_now(days: int = 180):
 @app.get("/proficiency/history")
 def proficiency_hist(days: int = 180):
     return {"history": proficiency.history(days=max(14, min(730, days)))}
+
+
+# ------------------------------------------------------- speaking activation
+
+@app.get("/activate/next")
+async def activate_next():
+    item = await asyncio.to_thread(activate.next_item)
+    if not item:
+        return {"item": None, "stats": activate.stats()}
+    return {"item": item, "active_count": activate.active_count()}
+
+
+class ActivateGradeIn(BaseModel):
+    rating: int
+    produced: str | None = None
+    task: str = ""
+    government: str = ""
+
+
+@app.post("/activate/items/{item_id}/grade")
+async def activate_grade(item_id: int, body: ActivateGradeIn):
+    r = await asyncio.to_thread(
+        activate.grade, item_id, body.rating, body.produced, body.task, body.government)
+    return {**r, "active_count": activate.active_count()}
+
+
+@app.get("/activate/stats")
+def activate_stats():
+    return activate.stats()
+
+
+class ActivateSettingsIn(BaseModel):
+    level: str | None = None
+    mix: float | None = None
+    per_day: int | None = None
+
+
+@app.post("/activate/settings")
+def activate_settings(body: ActivateSettingsIn):
+    return activate.set_settings(body.level, body.mix, body.per_day)
 
 
 # ------------------------------------------------------- conversation partner

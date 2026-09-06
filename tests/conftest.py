@@ -63,6 +63,25 @@ def stub_llm(monkeypatch):
     # homograph/OOV resolver: just hand back the dictionary's own guess unchanged
     monkeypatch.setattr(llm, "stress_resolve",
                         lambda items: [w for w, _ in items])
+
+    # --- speaking activation ---
+    monkeypatch.setattr(llm, "verb_government", lambda verbs, model=None: {
+        "verbs": [{"verb": v, "gloss": f"to {v}", "aspect_pair": None,
+                   "patterns": [{"gov": "acc", "role": "the object", "ex": f"Я {v} это."}],
+                   "trap": None} for v in verbs]})
+
+    def _act_prompt(target, gloss, kind="verb", government="", level="standard",
+                    avoid=(), model=None):
+        return {"task": f"Say something with «{target}» ({len(avoid)}).",
+                "model": f"Я {target} каждый день.", "note": government or None}
+    monkeypatch.setattr(llm, "activate_prompt", _act_prompt)
+
+    def _act_check(target, task, government, produced, model=None):
+        used = target.replace("ь", "") in produced
+        return {"ok": used, "used_target": used,
+                "fix": None if used else f"use «{target}»", "why": None,
+                "better": None, "category": "none" if used else "lexical"}
+    monkeypatch.setattr(llm, "activate_check", _act_check)
     monkeypatch.setattr(llm, "explain_lyric",
                         lambda line, lyr, title="", artist="", model=None:
                         {"translation": f"EN: {line}", "gist": "the gist", "notes": []})

@@ -2106,3 +2106,98 @@ def convo_debrief(persona, situation, history, level="b1", model=None):
     sys = _CONVO_DEBRIEF_SYSTEM.format(level=level)
     return _parse_obj(run_claude("\n".join(lines), sys,
                                  model=model or TRANSLATE_MODEL, timeout=120)[0])
+
+
+# ============================================================ speaking activation
+
+_VERB_GOV_SYSTEM = """You annotate Russian verbs with their GOVERNMENT (the case
+and/or preposition each argument takes) for a learner turning passive vocabulary
+into active speaking skill. The learner is a strong reader but weak speaker; the
+thing that trips him is not knowing which preposition/case a verb wants.
+
+For EACH verb given, output the 1–3 argument patterns a speaker genuinely must
+know — the object(s) beyond a bare subject. Skip patterns that are obvious to an
+English speaker (many verbs just take a direct object in the accusative — say so
+briefly and move on). Prioritise the non-obvious ones: за + acc, от + gen,
+к + dat, о + prep, на + acc/prep, bare dative, bare instrumental, bare genitive.
+
+Output ONE raw JSON object:
+{"verbs": [
+  {"verb": "<infinitive>", "gloss": "<short English>", "aspect_pair": "<the other aspect, or null>",
+   "patterns": [
+     {"gov": "<e.g. 'от + gen' or 'acc' or 'dat (no prep)'>",
+      "role": "<what that argument is, plain English, e.g. 'the thing you depend on'>",
+      "ex": "<one short natural Russian sentence using it — everyday register>"}
+   ],
+   "trap": "<the one thing an English speaker gets wrong, one line, or null>"}
+]}
+Everyday casual Russian in the examples. No stress marks."""
+
+
+def verb_government(verbs, model=None):
+    """verbs: [infinitive] -> {"verbs": [{verb, gloss, aspect_pair, patterns[], trap}]}."""
+    body = "VERBS:\n" + "\n".join(f"- {v}" for v in verbs)
+    obj = _parse_obj(run_claude(body, _VERB_GOV_SYSTEM,
+                                model=model or TRANSLATE_MODEL, timeout=120)[0])
+    return obj if isinstance(obj, dict) else {"verbs": []}
+
+
+_ACTIVATE_PROMPT_SYSTEM = """You run a silent, phone-only speaking-activation
+drill. The learner reads Russian well but retrieves words slowly when producing;
+he practises by forming a sentence in his head (or typing it), then checking.
+
+You are given ONE target (a verb or a word), what it means, and — for a verb —
+its government. Produce ONE tiny production task: a concrete thing to express in
+Russian that FORCES the target and, for a verb, its tricky government.
+
+RULES
+- The task is in English, one line, concrete and everyday — ideally about the
+  learner's own life (he's a mid-20s American man, girlfriend's Russian family,
+  works in tech, lives in a city). Vary it each time: about you / about someone
+  else / in the past / negated / a hypothetical / a question to someone.
+- LEVEL: "gentle" = 4–6 word thought, present tense. "standard" = a normal
+  sentence. "stretch" = add a condition, a subordinate clause, or a second verb.
+- Do NOT give away the Russian. Do NOT restate the target word in the task.
+- `model` = the natural Russian sentence you'd expect (everyday register, no
+  stress marks). `note` = the ONE thing to watch (the government, an aspect
+  choice), ≤ 12 words, or null.
+
+Output ONE raw JSON object: {"task": "...", "model": "...", "note": "..."}"""
+
+
+def activate_prompt(target, gloss, kind="verb", government="", level="standard",
+                    avoid=(), model=None):
+    parts = [f"TARGET ({kind}): {target}", f"MEANS: {gloss}"]
+    if government:
+        parts.append(f"GOVERNMENT: {government}")
+    parts.append(f"LEVEL: {level}")
+    if avoid:
+        parts.append("ALREADY USED THESE ANGLES (pick a different one): "
+                     + "; ".join(avoid))
+    return _parse_obj(run_claude("\n\n".join(parts), _ACTIVATE_PROMPT_SYSTEM,
+                                 model=model or TRANSLATE_MODEL, timeout=60)[0])
+
+
+_ACTIVATE_CHECK_SYSTEM = """You give FAST, FOCUSED feedback on one attempt in a
+speaking-activation drill. The learner was asked to express a thought in Russian
+that requires a target word/verb.
+
+Judge ONLY: did they use the target, and (for a verb) is its government right?
+Then at most ONE more high-value fix (aspect, a case error, an unnatural choice).
+Ignore punctuation, capitalisation, missing stress marks, and stylistic nitpicks.
+
+Output ONE raw JSON object:
+{"ok": true/false,              // did the core thing (target + its government) land?
+ "used_target": true/false,
+ "fix": "<the single most useful correction, or null>",
+ "why": "<≤ 12 words, or null>",
+ "better": "<a natural full-sentence version, or null if theirs was fine>",
+ "category": "<government|case|aspect|conjugation|agreement|word-order|lexical|none>"}"""
+
+
+def activate_check(target, task, government, produced, model=None):
+    body = (f"TARGET: {target}\nGOVERNMENT: {government or '(none special)'}\n"
+            f"TASK: {task}\nLEARNER SAID: {produced}")
+    obj = _parse_obj(run_claude(body, _ACTIVATE_CHECK_SYSTEM,
+                                model=model or TRANSLATE_MODEL, timeout=60)[0])
+    return obj if isinstance(obj, dict) else {"ok": True, "used_target": True}

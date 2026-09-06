@@ -805,6 +805,56 @@
                      font-size:.72rem; padding:.2rem .7rem; border-radius:1rem; }
 
   /* ---- conversation partner ---- */
+  /* ---- speaking activation ---- */
+  #activateView { position:fixed; inset:0; z-index:15; background:var(--bg); flex-direction:column;
+                  padding:var(--safe-top) 0 env(safe-area-inset-bottom); }
+  #activateView:not([hidden]) { display:flex; }
+  #actProg { flex:1; text-align:center; font-size:.78rem; color:var(--muted); cursor:pointer; }
+  #actProg b { color:var(--fg); }
+  .act-body { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+  .act-load { margin:auto; text-align:center; color:var(--muted); }
+  .act-load p { margin-top:1rem; font-size:.9rem; }
+  .act-scroll { flex:1; overflow-y:auto; padding:1.6rem 1.3rem 1rem; max-width:34rem; margin:0 auto; width:100%;
+                display:flex; flex-direction:column; align-items:center; text-align:center; }
+  .act-kind { font-size:.68rem; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin-bottom:1rem; }
+  .act-target { font-size:2rem; font-weight:750; line-height:1.2; }
+  .act-target .act-gloss { display:block; font-size:.95rem; font-weight:400; color:var(--muted); margin-top:.3rem; }
+  .act-govhint { font-size:.85rem; color:var(--accent); margin-top:.5rem; font-weight:600; }
+  .act-task { font-size:1.15rem; line-height:1.5; margin:1.6rem 0 .3rem; color:var(--fg); }
+  .act-task.sm { font-size:.9rem; color:var(--muted); margin:.4rem 0 1rem; }
+  .act-hint { font-size:.78rem; color:var(--muted); margin-bottom:1.4rem; }
+  .act-input { width:100%; min-height:3.5rem; background:var(--card); border:1px solid var(--line);
+               border-radius:10px; padding:.7rem .8rem; font:inherit; font-size:1.05rem; color:var(--fg);
+               -webkit-appearance:none; text-align:left; }
+  .act-go { margin-top:1rem; padding:.8rem 1.6rem; border-radius:2rem; border:0; background:var(--ok);
+            color:#0b1016; font:inherit; font-weight:700; cursor:pointer; }
+  .act-modeswap { margin-top:1.3rem; background:none; border:0; color:var(--accent); font:inherit;
+                  font-size:.8rem; cursor:pointer; }
+  .act-model { font-size:1.25rem; font-weight:650; line-height:1.4; margin:.6rem 0; color:var(--fg); }
+  .act-note { font-size:.85rem; color:#e6b93c; margin:.3rem 0 .6rem; }
+  .act-yours { font-size:.95rem; color:var(--muted); margin-bottom:.5rem; }
+  .act-yours b { color:var(--fg); font-weight:600; }
+  .act-verdict { font-size:.95rem; font-weight:700; margin:.2rem 0 .6rem; }
+  .act-verdict.ok { color:var(--ok); } .act-verdict.off { color:#e07a6d; }
+  .act-fix { font-size:.95rem; margin:.4rem 0; } .act-fix b { color:#e07a6d; } .act-fix span { color:var(--muted); }
+  .act-gov { width:100%; margin-top:.8rem; text-align:left; }
+  .act-gov .agp { padding:.5rem 0; border-top:1px solid var(--line-soft); }
+  .act-gov .agp b { color:var(--accent); font-size:.95rem; }
+  .act-gov .agp span { color:var(--muted); font-size:.85rem; margin-left:.4rem; }
+  .act-gov .agp i { display:block; font-style:normal; font-size:.9rem; color:var(--fg-dim); margin-top:.2rem; }
+  .act-gov .act-trap { font-size:.82rem; color:#e6b93c; margin-top:.5rem; }
+  .act-selfgrade { font-size:.8rem; color:var(--muted); margin:1.4rem 0 .3rem; }
+  .study-rate.act-rate button .rl { font-size:.82rem; }
+  #actSheet { position:absolute; inset:0; z-index:8; background:var(--bg); overflow-y:auto;
+              padding:1.1rem 1.15rem calc(2rem + env(safe-area-inset-bottom)); }
+  #actSheet[hidden] { display:none; }
+  #actSheet h3 { font-size:1.05rem; margin:.2rem 0 .8rem; }
+  #actSheet .dsk-row { display:flex; justify-content:space-between; align-items:center; gap:1rem;
+                       padding:.6rem 0; border-top:1px solid var(--line-soft); font-size:.9rem; }
+  #actSheet select, #actSheet input { background:var(--card); border:1px solid var(--line); color:var(--fg);
+                                      border-radius:8px; padding:.45rem .6rem; font:inherit; -webkit-appearance:none; }
+  #actSheet input[type=number] { width:4rem; text-align:center; }
+
   #convoView { position:fixed; inset:0; z-index:15; background:var(--bg); flex-direction:column;
                padding:var(--safe-top) 0 env(safe-area-inset-bottom); }
   #convoView:not([hidden]) { display:flex; }
@@ -1978,6 +2028,12 @@
       <span class="sb-main"><span id="newReserveT"></span>
         <span class="nr-sub" id="newReserveM"></span></span>
     </div>
+    <button id="activateBanner" class="hb-new" onclick="openActivate()">
+      <span class="sb-ico">🗣️</span>
+      <span class="sb-main"><span class="sb-t">Activate</span>
+        <span class="sb-m">turn words you can read into words you can say — silent 5-min drills on verbs &amp; their cases</span></span>
+      <span class="sb-go">→</span>
+    </button>
     <button id="convoBanner" class="hb-new" onclick="openConvo()">
       <span class="sb-ico">💬</span>
       <span class="sb-main"><span class="sb-t">Conversation</span>
@@ -2291,6 +2347,17 @@
     <div id="flowSheet" hidden></div>
     <div id="flowWords" hidden></div>
     <div id="flowPop" class="flow-pop" hidden></div>
+  </div>
+
+  <!-- SPEAKING ACTIVATION -->
+  <div id="activateView" hidden>
+    <div class="studybar">
+      <button class="backlink" onclick="history.back()">← end</button>
+      <div class="prog" id="actProg" onclick="actOpenStats()"></div>
+      <button class="sbtn" id="actSetBtn" onclick="actSettings()">⚙</button>
+    </div>
+    <div class="act-body" id="actBody"></div>
+    <div id="actSheet" hidden></div>
   </div>
 
   <!-- CONVERSATION PARTNER -->
@@ -6451,6 +6518,181 @@ function loopOpenCurrent() {
 $('#loopAudio') && $('#loopAudio').addEventListener('pause', () => { $('#loopPlay').textContent = '▶'; });
 $('#loopAudio') && $('#loopAudio').addEventListener('play', () => { $('#loopPlay').textContent = '▮▮'; });
 
+/* ==================== speaking activation ==================== */
+let ACT = null;
+function closeActivate() { $('#activateView').hidden = true; ACT = null; }
+async function openActivate() {
+  $('#activateView').hidden = false;
+  $('#actSheet').hidden = true;
+  ACT = { item: null, revealed: false, done: 0, mode: actMode() };
+  $('#actBody').innerHTML = SPINNER;
+  actNext();
+}
+function actMode() { try { return localStorage.getItem('actMode') || 'think'; } catch { return 'think'; } }
+function setActMode(m) { ACT.mode = m; try { localStorage.setItem('actMode', m); } catch {} actRenderFront(); }
+async function actNext() {
+  ACT.revealed = false;
+  $('#actBody').innerHTML = `<div class="act-load"><span class="spin"></span><p>writing the next one…</p></div>`;
+  let d;
+  try { d = await api('/activate/next'); }
+  catch (e) { $('#actBody').innerHTML = `<div class="empty">couldn’t load — ${escapeHtml(e.message)}</div>
+    <button class="flow-cancel" onclick="actNext()">try again</button>`; return; }
+  if (!d.item) {
+    $('#actBody').innerHTML = `<div class="study-done"><div class="big">✅</div>
+      <div class="msg">nothing due right now</div>
+      <div class="sub">${ACT.done} done today · come back later, or bump the daily new count in ⚙</div></div>`;
+    $('#actProg').textContent = `${ACT.done} done`;
+    return;
+  }
+  ACT.item = d.item; ACT.active = d.active_count; ACT._graded = false; ACT._produced = null;
+  actRenderFront();
+}
+function actGovHtml(it) {
+  if (it.kind !== 'verb' || !it.patterns || !it.patterns.length) return '';
+  return `<div class="act-gov">
+    ${it.patterns.map(p => `<div class="agp"><b>${escapeHtml(p.gov || '')}</b>
+      <span>${escapeHtml(p.role || '')}</span>
+      ${p.ex ? `<i>${escapeHtml(p.ex)}</i>` : ''}</div>`).join('')}
+    ${it.trap ? `<div class="act-trap">⚠ ${escapeHtml(it.trap)}</div>` : ''}</div>`;
+}
+function actRenderFront() {
+  const it = ACT.item; if (!it) return;
+  $('#actProg').innerHTML = `<b>${ACT.done}</b> done${ACT.active != null ? ` · ${ACT.active} active` : ''}`;
+  const kindTag = it.kind === 'verb' ? 'verb + its case' : 'word';
+  const typeRow = ACT.mode === 'type'
+    ? `<textarea id="actInput" class="act-input" placeholder="type your Russian sentence" autocomplete="off" autocapitalize="off"></textarea>
+       <button class="act-go" onclick="actCheck()">check →</button>`
+    : `<button class="act-go" onclick="actReveal()">reveal answer</button>`;
+  $('#actBody').innerHTML = `
+    <div class="act-scroll">
+      <div class="act-kind">${kindTag}</div>
+      <div class="act-target">${escapeHtml(it.target)}<span class="act-gloss">${escapeHtml(it.gloss || '')}</span></div>
+      ${it.kind === 'verb' && it.government ? `<div class="act-govhint">${escapeHtml(it.government)}</div>` : ''}
+      <div class="act-task">${escapeHtml(it.task || '')}</div>
+      <div class="act-hint">say it in your head${ACT.mode === 'type' ? ' or type it' : ''}, then check</div>
+      ${typeRow}
+      <button class="act-modeswap" onclick="setActMode('${ACT.mode === 'type' ? 'think' : 'type'}')">
+        ${ACT.mode === 'type' ? 'just think it instead' : 'type it instead'}</button>
+    </div>`;
+}
+function actReveal() {
+  ACT.revealed = true;
+  const it = ACT.item;
+  $('#actBody').innerHTML = `
+    <div class="act-scroll">
+      <div class="act-target">${escapeHtml(it.target)}<span class="act-gloss">${escapeHtml(it.gloss || '')}</span></div>
+      <div class="act-task sm">${escapeHtml(it.task || '')}</div>
+      ${it.model ? `<div class="act-model">${escapeHtml(it.model)}</div>` : ''}
+      ${it.note ? `<div class="act-note">${escapeHtml(it.note)}</div>` : ''}
+      ${actGovHtml(it)}
+      <div class="act-selfgrade">how did that go?</div>
+    </div>
+    <div class="study-foot"><div class="study-rate act-rate">
+      <button class="again" onclick="actGrade(1)"><span class="rl">Missed it</span></button>
+      <button onclick="actGrade(2)"><span class="rl">Shaky</span></button>
+      <button class="good" onclick="actGrade(3)"><span class="rl">Got it</span></button>
+      <button onclick="actGrade(4)"><span class="rl">Easy</span></button>
+    </div></div>`;
+}
+async function actCheck() {
+  const produced = ($('#actInput') && $('#actInput').value || '').trim();
+  if (!produced) { actReveal(); return; }
+  ACT._produced = produced;
+  $('#actBody').innerHTML = `<div class="act-load"><span class="spin"></span><p>checking…</p></div>`;
+  let r;
+  try {
+    r = await api(`/activate/items/${ACT.item.id}/grade`, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rating: 3, produced, task: ACT.item.task || '', government: ACT.item.government || '' }) });
+  } catch (e) { toast('couldn’t check — ' + e.message, 2500); actReveal(); return; }
+  ACT._graded = true;
+  const c = r.check || {};
+  const it = ACT.item;
+  if (r.active_count != null) ACT.active = r.active_count;
+  $('#actBody').innerHTML = `
+    <div class="act-scroll">
+      <div class="act-yours">you said: <b>${escapeHtml(produced)}</b></div>
+      <div class="act-verdict ${c.ok ? 'ok' : 'off'}">${c.ok ? '✓ core is right' : '✗ needs a fix'}${c.used_target === false ? ' · didn’t use the word' : ''}</div>
+      ${c.fix ? `<div class="act-fix"><b>fix:</b> ${escapeHtml(c.fix)}${c.why ? ` <span>— ${escapeHtml(c.why)}</span>` : ''}</div>` : ''}
+      ${c.better ? `<div class="act-model">${escapeHtml(c.better)}</div>` : (it.model ? `<div class="act-model">${escapeHtml(it.model)}</div>` : '')}
+      ${actGovHtml(it)}
+      <div class="act-selfgrade">adjust if that felt harder/easier:</div>
+    </div>
+    <div class="study-foot"><div class="study-rate act-rate">
+      <button class="again" onclick="actGrade(1)"><span class="rl">Missed it</span></button>
+      <button onclick="actGrade(2)"><span class="rl">Shaky</span></button>
+      <button class="good" onclick="actGrade(3)"><span class="rl">Got it</span></button>
+      <button onclick="actGrade(4)"><span class="rl">Easy</span></button>
+    </div></div>`;
+}
+async function actGrade(rating) {
+  const it = ACT.item;
+  ACT.done++;
+  if (!ACT._graded) {
+    try {
+      const r = await api(`/activate/items/${it.id}/grade`, { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ rating, task: it.task || '', government: it.government || '',
+          produced: ACT._produced || null }) });
+      if (r && r.active_count != null) ACT.active = r.active_count;
+    } catch (e) { toast('couldn’t save — ' + e.message, 2500); }
+  } else if (rating !== 3) {
+    try {
+      await api(`/activate/items/${it.id}/grade`, { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ rating, task: '', government: '' }) });
+    } catch {}
+  }
+  actNext();
+}
+async function actOpenStats() {
+  let s;
+  try { s = await api('/activate/stats'); } catch { return; }
+  $('#actSheet').hidden = false;
+  $('#actSheet').innerHTML = `
+    <h3>Activation progress</h3>
+    <div class="stat-grid">
+      <div class="stat-cell"><div class="v">${s.active}</div><div class="k">active words</div></div>
+      <div class="stat-cell"><div class="v">${s.total}</div><div class="k">in rotation</div></div>
+      <div class="stat-cell"><div class="v">${(s.by_kind && s.by_kind.verb) || 0}</div><div class="k">verbs</div></div>
+      <div class="stat-cell"><div class="v">${s.done_today}</div><div class="k">done today</div></div>
+      <div class="stat-cell"><div class="v">${s.due}</div><div class="k">due now</div></div>
+      <div class="stat-cell"><div class="v">${s.verb_pool}</div><div class="k">verb pool</div></div>
+    </div>
+    ${s.weak_spots && s.weak_spots.length ? `<div class="stat-h">what's tripping you (30d)</div>
+      <div class="prof-dom">${s.weak_spots.map(w => `<div class="pd-row"><div class="pd-top">
+        <span class="pd-l">${escapeHtml(w.category)}</span><span class="pd-c">${w.n}×</span></div></div>`).join('')}</div>` : ''}
+    <button class="flow-cancel" onclick="$('#actSheet').hidden=true">back</button>`;
+}
+async function actSettings() {
+  let s;
+  try { s = await api('/activate/stats'); } catch { return; }
+  $('#actSheet').hidden = false;
+  $('#actSheet').innerHTML = `
+    <h3>Activate settings</h3>
+    <label class="dsk-row">difficulty
+      <select id="actLevel" onchange="actSaveSettings()">
+        ${['gentle', 'standard', 'stretch'].map(l => `<option value="${l}" ${s.level === l ? 'selected' : ''}>${l}</option>`).join('')}
+      </select></label>
+    <p class="dsk-hint">gentle: short present-tense thoughts · standard: normal sentences · stretch: conditions, subordinate clauses, harder angles</p>
+    <label class="dsk-row">verbs vs words
+      <select id="actMix" onchange="actSaveSettings()">
+        <option value="1" ${s.mix >= 0.95 ? 'selected' : ''}>verbs only</option>
+        <option value="0.7" ${s.mix >= 0.6 && s.mix < 0.95 ? 'selected' : ''}>mostly verbs (recommended early)</option>
+        <option value="0.5" ${s.mix >= 0.4 && s.mix < 0.6 ? 'selected' : ''}>even split</option>
+        <option value="0.25" ${s.mix < 0.4 ? 'selected' : ''}>mostly words</option>
+      </select></label>
+    <label class="dsk-row">new per day
+      <input id="actPerDay" type="number" min="0" max="40" value="${s.per_day}" onchange="actSaveSettings()"></label>
+    <button class="flow-cancel" onclick="$('#actSheet').hidden=true">done</button>`;
+}
+async function actSaveSettings() {
+  const body = {
+    level: $('#actLevel') ? $('#actLevel').value : undefined,
+    mix: $('#actMix') ? parseFloat($('#actMix').value) : undefined,
+    per_day: $('#actPerDay') ? parseInt($('#actPerDay').value, 10) : undefined,
+  };
+  try { await api('/activate/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); }
+  catch (e) { toast('couldn’t save — ' + e.message, 2000); }
+}
+
 /* ==================== flow reading ==================== */
 let FLOW = null, FLOW_LIB = [];
 function closeFlow() {
@@ -7710,14 +7952,15 @@ function renderProf(d) {
     </div>
     <div class="stat-grid">
       <div class="stat-cell"><div class="v">${d.known_words.toLocaleString()}</div><div class="k">words known ≈</div></div>
+      <div class="stat-cell tap" onclick="openActivate()"><div class="v">${(d.active_words || 0).toLocaleString()}</div><div class="k">active (can say)</div></div>
       <div class="stat-cell"><div class="v">${comp}</div><div class="k">reading comprehension</div></div>
       <div class="stat-cell"><div class="v">${ret}</div><div class="k">SRS retention</div></div>
       <div class="stat-cell tap" onclick="openCardList('all','All cards')"><div class="v">${d.cards_total.toLocaleString()}</div><div class="k">cards</div></div>
       <div class="stat-cell tap" onclick="openCardList('mature','Mature')"><div class="v">${d.cards_mature.toLocaleString()}</div><div class="k">mature words</div></div>
-      <div class="stat-cell"><div class="v">${(d.words_read || 0).toLocaleString()}</div><div class="k">words read</div></div>
     </div>
     <div class="stat-h">progress over time</div>
-    ${profCard('vocabulary size', d.known_words.toLocaleString(), hist, 'known_words', v => Math.round(v).toLocaleString())}
+    ${profCard('vocabulary size (passive)', d.known_words.toLocaleString(), hist, 'known_words', v => Math.round(v).toLocaleString())}
+    ${(d.active_words || hist.some(h => h.active_words)) ? profCard('active vocabulary (can say)', (d.active_words || 0).toLocaleString(), hist, 'active_words', v => Math.round(v).toLocaleString()) : ''}
     ${profCard('reading comprehension', comp, hist.map(h => ({ ...h, _c: h.comprehension != null ? h.comprehension * 100 : null })), '_c', v => Math.round(v) + '%')}
     ${profCard('mature words', d.cards_mature.toLocaleString(), hist, 'cards_mature', v => Math.round(v).toLocaleString())}
     ${d.book ? profBook(d.book, hist) : ''}
@@ -10578,6 +10821,7 @@ const _NAV_LAYERS = [
   ['#convoView', () => { if (!$('#convoDebrief').hidden) { $('#convoDebrief').hidden = true; return; }
                          if (!$('#convoSheet').hidden && CONVO && CONVO.id) { $('#convoSheet').hidden = true; return; }
                          closeConvo(); }],
+  ['#activateView', () => { if (!$('#actSheet').hidden) { $('#actSheet').hidden = true; return; } closeActivate(); }],
   ['#chunkView', () => closeChunks()],
   ['#journalView', () => closeJournal()],
   ['#speakView', () => closeSpeak()],
@@ -10692,7 +10936,7 @@ addEventListener('popstate', () => {
 
 /* ---------------- boot ---------------- */
 // belt-and-suspenders: full-screen overlays must never be left showing
-['#studyView', '#statsView', '#cardsView', '#vidDelView', '#readView', '#pasteWrap', '#shareWrap', '#tocPanel', '#transSheet', '#lyricSheet', '#verdictWrap', '#wordsView', '#manualWrap', '#cardView', '#aspectView', '#flowView', '#convoView']
+['#studyView', '#statsView', '#cardsView', '#vidDelView', '#readView', '#pasteWrap', '#shareWrap', '#tocPanel', '#transSheet', '#lyricSheet', '#verdictWrap', '#wordsView', '#manualWrap', '#cardView', '#aspectView', '#flowView', '#convoView', '#activateView']
   .forEach(s => { const e = $(s); if (e) e.hidden = true; });
 
 if ('serviceWorker' in navigator) {

@@ -187,7 +187,12 @@ GIT_TABLES = (
     # proficiency history — the level graphs; small and worth keeping
     ("proficiency_snapshots", "SELECT day, known_words, known_rank, cefr, cards_total, "
      "cards_word, cards_mature, words_read, comprehension, retention, domains, "
-     "ak_coverage, created_at FROM proficiency_snapshots ORDER BY day"),
+     "ak_coverage, active_words, created_at FROM proficiency_snapshots ORDER BY day"),
+    # speaking activation — the per-item SRS state + attempt log are real progress
+    ("activate_items", "SELECT id, kind, target, gloss, introduced_at, reps, lapses, "
+     "streak, ease, interval_d, due, last_seen, angles FROM activate_items ORDER BY id"),
+    ("activate_log", "SELECT id, item_id, at, rating, produced, category "
+     "FROM activate_log ORDER BY id"),
 )
 
 
