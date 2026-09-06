@@ -164,6 +164,92 @@ def strip(text):
     return (text or "").replace(_ACUTE, "")
 
 
+# ---------------------------------------------------------------- stress paradigm
+
+def _lookup(form):
+    """The dictionary's accented spelling for one wordform, or None."""
+    row = _db().execute("SELECT accented FROM stress WHERE form=?",
+                        (form.lower().replace("ё", "е"),)).fetchone()
+    return _apply(form, row[0]) if row else None
+
+
+def _stressed_syllable(accented):
+    """0-based index of the stressed syllable in a marked word."""
+    n = 0
+    for i, ch in enumerate(accented):
+        if ch in "ёЁ":
+            return n
+        if ch in _VOWELS:
+            if i + 1 < len(accented) and accented[i + 1] == _ACUTE:
+                return n
+            n += 1
+    return -1
+
+
+_NOUN_SLOTS = [
+    ("nom sg", {"nomn", "sing"}), ("gen sg", {"gent", "sing"}),
+    ("dat sg", {"datv", "sing"}), ("acc sg", {"accs", "sing"}),
+    ("ins sg", {"ablt", "sing"}), ("prep sg", {"loct", "sing"}),
+    ("nom pl", {"nomn", "plur"}), ("gen pl", {"gent", "plur"}),
+]
+_VERB_SLOTS = [
+    ("я", {"1per", "sing", "pres"}), ("ты", {"2per", "sing", "pres"}),
+    ("он", {"3per", "sing", "pres"}), ("они", {"3per", "plur", "pres"}),
+    ("он (past)", {"masc", "sing", "past"}), ("она (past)", {"femn", "sing", "past"}),
+    ("они (past)", {"plur", "past"}),
+]
+
+
+_PARADIGM_CACHE = {}
+
+
+def paradigm(word):
+    """Whether a word's stress MOVES as it inflects, and the key forms if so.
+    -> {"pattern": "mobile", "forms": [{"label", "form"}]} or None (fixed / n/a).
+    Nouns and verbs only."""
+    key = strip(word or "").lower().replace("ё", "е")
+    if key in _PARADIGM_CACHE:
+        return _PARADIGM_CACHE[key]
+    r = _paradigm(key)
+    if len(_PARADIGM_CACHE) < 20000:
+        _PARADIGM_CACHE[key] = r
+    return r
+
+
+def _paradigm(word):
+    import db as _rootdb
+    try:
+        p = _rootdb._morph().parse(strip(word).lower().replace("ё", "е"))[0]
+    except Exception:  # noqa: BLE001
+        return None
+    tag = str(p.tag)
+    slots = _NOUN_SLOTS if "NOUN" in tag else (
+        _VERB_SLOTS if ("VERB" in tag or "INFN" in tag) else None)
+    if not slots:
+        return None
+    out, idxs = [], set()
+    for label, gram in slots:
+        try:
+            f = p.inflect(gram)
+        except Exception:  # noqa: BLE001
+            f = None
+        if not f or not f.word:
+            continue
+        if _syllables(f.word) < 2:
+            out.append({"label": label, "form": f.word})
+            continue
+        acc = _lookup(f.word)
+        if not acc:
+            return None                         # incomplete data — don't half-show
+        si = _stressed_syllable(acc)
+        if si >= 0:
+            idxs.add(si)
+        out.append({"label": label, "form": acc})
+    if len(idxs) <= 1 or len(out) < 3:
+        return None                             # fixed stress (or too little to say)
+    return {"pattern": "mobile", "forms": out}
+
+
 _SENT_SPLIT = re.compile(r"(?<=[.!?…»])\s+")
 
 

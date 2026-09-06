@@ -263,6 +263,22 @@ def _family_for(card):
     return store.family_for_card(lemma) if lemma else None
 
 
+def _stress_for(card):
+    """Mobile-stress paradigm for a recognition card's back — the key inflected
+    forms, shown only when the stress actually moves. None otherwise."""
+    if not card or card.get("is_phrase") or card.get("card_type") == "production":
+        return None
+    import accent
+    lemma = (card.get("dict_accented") or card.get("front_word")
+             or card.get("normalized_text") or "").replace("́", "").strip()
+    if not lemma or " " in lemma:
+        return None
+    try:
+        return accent.paradigm(lemma)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _prewarm_family_async(cards):
     """cards: study-view dicts. Learn the word-family for any recognition card
     whose lemma isn't resolved yet, so a later session shows it."""
@@ -1802,6 +1818,7 @@ def _study_card_view(card, with_preview=True, titles=None):
         "tr_alts": _tr_alts(card),
         "aspect": aspect.for_card(card),
         "family": _family_for(card),
+        "stress": _stress_for(card),
         "meaning_contextual": bool(card.get("meaning_contextual")),
         "reformatted": bool(card.get("alt_meanings") or card.get("sentence_full")),
         "normalized_text": card["normalized_text"], "accented": card["accented"],

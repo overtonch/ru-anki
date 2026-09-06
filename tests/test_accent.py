@@ -29,6 +29,16 @@ def test_strip_removes_marks():
     assert accent.strip("письмо́ роди́телям") == "письмо родителям"
 
 
+def test_paradigm_flags_mobile_stress_only():
+    голова = accent.paradigm("голова")
+    assert голова and голова["pattern"] == "mobile"
+    forms = {f["form"] for f in голова["forms"]}
+    assert "голова́" in forms and "го́лову" in forms      # stress on ending vs stem
+    assert accent.paradigm("работа") is None             # fixed stress — nothing to show
+    писать = accent.paradigm("писать")
+    assert писать and any("пи́шет" in f["form"] for f in писать["forms"])
+
+
 def test_accent_paragraphs_keeps_structure(stub_llm):
     out = accent.accent_paragraphs(["Первый абзац о городе.", "Второй абзац о работе."])
     assert len(out) == 2 and "́" in out[0]

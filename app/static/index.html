@@ -1582,6 +1582,10 @@
   .study-a .a-acc { color:var(--fg-dim); font-size:1.15rem; font-weight:600; margin-top:.35rem;
                     letter-spacing:.01em; }
   .study-a .a-acc .a-dict { color:var(--muted); font-weight:400; font-size:.95rem; }
+  .study-a .a-stress { margin-top:.5rem; display:flex; flex-wrap:wrap; gap:.15rem .7rem; align-items:baseline; }
+  .study-a .a-stress-h { font-size:.68rem; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); width:100%; }
+  .study-a .a-stress .asf { font-size:1rem; color:var(--fg-dim); font-weight:600; }
+  .study-a .a-stress .asf i { font-style:normal; font-size:.66rem; color:var(--muted); font-weight:400; margin-right:.28rem; }
   .tr-swap-btn { background:none; border:0; color:var(--accent); font:inherit; font-size:.7rem;
                  cursor:pointer; margin-left:.5rem; vertical-align:.15em; opacity:.8; }
   .tr-swap { margin:.55rem auto 0; max-width:24rem; }
@@ -4339,12 +4343,17 @@ function prodAnswerHtml(c) {
 /* card back: the target word stressed as it appears, and its dictionary form */
 function accLine(c) {
   const sf = (c.accented || '').trim(), df = (c.dict_accented || '').trim();
-  if (!sf && !df) return '';
+  const st = c.stress && c.stress.forms && c.stress.forms.length ? c.stress : null;
+  if (!sf && !df && !st) return '';
   const bare = s => s.toLowerCase().replace(/[́]/g, '');
   const main = sf || df;
   const dict = df && bare(df) !== bare(main)
     ? ` <span class="a-dict">→ ${escapeHtml(df)}</span>` : '';
-  return `<div class="a-acc">${escapeHtml(main)}${dict}</div>`;
+  const par = st ? `<div class="a-stress">
+      <span class="a-stress-h">stress moves:</span>
+      ${st.forms.map(f => `<span class="asf"><i>${escapeHtml(f.label)}</i>${escapeHtml(f.form)}</span>`).join('')}
+    </div>` : '';
+  return `${main ? `<div class="a-acc">${escapeHtml(main)}${dict}</div>` : ''}${par}`;
 }
 /* card back: verb aspect + the other-aspect partner, linking to the explainer */
 function aspectLine(c) {
