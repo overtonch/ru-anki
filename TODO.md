@@ -67,6 +67,13 @@ library + proficiency graphs all ride on this.
       space < ~1 GB (currently a full disk just logs a caught exception).
 - [ ] Occasional `git -C data-git gc` — ~4k loose objects, ~110 MB, never gc'd.
 
+## TTS
+
+- ElevenLabs is **disabled** (2026-09-05, to avoid a metered bill). Conversation
+  + Speech Lab audio use local Silero only. To re-enable: set
+  `RU_TTS_ALLOW_ELEVENLABS=1` **and** `ELEVENLABS_API_KEY=…` in the plist /
+  secrets.env. The key alone does nothing without the allow flag.
+
 ## Decided but not built
 
 - (done 2026-09-01) **Card format v2** — `CARDS.md` is the spec. Back = one clean

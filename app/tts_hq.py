@@ -1,8 +1,12 @@
-"""High-quality Russian TTS for the Speech Lab, pluggable:
+"""Russian TTS for the Speech Lab + conversation partner:
 
-  1. ElevenLabs  — hosted, the most natural option. Used when ELEVENLABS_API_KEY
-     is set (put it in `~/Library/Application Support/ru-anki/secrets.env`).
-  2. Silero v4   — local, offline, no key. The fallback.
+  Silero v4   — local, offline, no key, no bill. The default and only backend.
+
+ElevenLabs (hosted, more natural, but METERED) is wired up but OFF by default so
+it can never run up a bill. To re-enable it, set both
+`RU_TTS_ALLOW_ELEVENLABS=1` and `ELEVENLABS_API_KEY=…` in
+`~/Library/Application Support/ru-anki/secrets.env`. Without the allow flag the
+key is ignored entirely and every call uses Silero.
 
 `synth_to_file(text, out_path)` returns (out_path, backend_label). It always
 produces a small AAC .m4a via ffmpeg so everything downstream is uniform.
@@ -29,8 +33,10 @@ if os.path.exists(_SECRETS):
     except OSError:
         pass
 
-# --- ElevenLabs ---
-EL_KEY = os.environ.get("ELEVENLABS_API_KEY", "").strip()
+# --- ElevenLabs (metered — OFF unless explicitly allowed, so it can't bill) ---
+_ALLOW_EL = os.environ.get("RU_TTS_ALLOW_ELEVENLABS", "").strip().lower() in (
+    "1", "true", "yes", "on")
+EL_KEY = os.environ.get("ELEVENLABS_API_KEY", "").strip() if _ALLOW_EL else ""
 EL_VOICE = os.environ.get("ELEVENLABS_VOICE_ID", "pNInz6obpgDQGcFmaJgB").strip()  # "Adam"
 EL_MODEL = os.environ.get("ELEVENLABS_MODEL", "eleven_multilingual_v2").strip()
 EL_URL = "https://api.elevenlabs.io/v1/text-to-speech/{vid}"
@@ -63,12 +69,13 @@ def backend(prefer=None):
     'none'. prefer: 'elevenlabs' | 'silero' | None (auto: ElevenLabs if keyed)."""
     if os.environ.get("RU_TEST"):        # never touch a real API from the test suite
         return "none"
-    if prefer == "elevenlabs":
-        return "elevenlabs" if EL_KEY else "none"
+    if prefer == "elevenlabs" and EL_KEY:
+        return "elevenlabs"
     if prefer == "silero":
         return "silero" if _silero_ok() else "none"
     if EL_KEY:
         return "elevenlabs"
+    # ElevenLabs unavailable (disabled or unkeyed) — always fall back to local
     return "silero" if _silero_ok() else "none"
 
 
@@ -204,6 +211,4 @@ def synth_to_file(text, out_path, prefer=None):
             raise
     if b == "silero":
         return out_path, _silero_synth(text, out_path)
-    if prefer == "elevenlabs":
-        raise RuntimeError("ElevenLabs not configured (no ELEVENLABS_API_KEY)")
-    raise RuntimeError("no TTS backend available")
+    raise RuntimeError("no TTS backend available (local Silero needs torch)")

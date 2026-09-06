@@ -6113,9 +6113,8 @@ function speechRenderList() {
         <button class="${SPEECH.tts === 'elevenlabs' ? 'on' : ''}" onclick="speechSetBackend('elevenlabs')">ElevenLabs · credits</button>
       </span></div>`;
   } else if (!SPEECH.hasEleven) {
-    ctrl = `<div class="sp-flag">Audio is the local voice. For the natural one, put
-      <code>ELEVENLABS_API_KEY=…</code> in <code>~/Library/Application Support/ru-anki/secrets.env</code>,
-      restart, then rebuild a speech's audio.</div>`;
+    ctrl = `<div class="sp-flag">Audio uses the free local voice (Silero). Hosted
+      TTS is disabled so it can't run up a bill.</div>`;
   }
   $('#speechBody').innerHTML = ctrl +
     (anyAudio ? `<button class="sp-loopall" onclick="loopStartAll()">🔁 loop all in the background</button>` : '') +
@@ -6735,7 +6734,6 @@ async function convoPickScenario() {
     $('#convoSheet').innerHTML = `<div class="empty">couldn’t load — ${escapeHtml(e.message)}</div>`; return; }
   $('#convoSheet').innerHTML = `
     <h3>Who do you want to talk to?</h3>
-    ${!d.has_elevenlabs ? `<div class="sp-flag" style="margin-bottom:.8rem">No natural voice configured — replies will use the local voice. Add <code>ELEVENLABS_API_KEY</code> to secrets.env for better audio.</div>` : ''}
     <div class="cv-scen">${(d.scenarios || []).map(s =>
       `<button onclick="convoStart('${s.id}')">${escapeHtml(s.label)}<span class="cvs-b">${escapeHtml(s.brief)}</span></button>`).join('')}</div>
     <textarea id="convoPrompt" placeholder="…or describe your own: who they are, where you are, what you're trying to do"

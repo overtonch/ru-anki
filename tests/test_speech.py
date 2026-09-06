@@ -99,8 +99,23 @@ def test_tts_hq_backend_prefers_elevenlabs_when_keyed(monkeypatch):
     monkeypatch.delenv("RU_TEST", raising=False)   # exercise real selection logic
     monkeypatch.setattr(tts_hq, "EL_KEY", "sk_fake")
     assert tts_hq.backend() == "elevenlabs" and tts_hq.available() is True
+    # no key -> never dead-ends on "elevenlabs"; falls back to the local voice
     monkeypatch.setattr(tts_hq, "EL_KEY", "")
-    assert tts_hq.backend("elevenlabs") == "none"
+    assert tts_hq.backend("elevenlabs") in ("silero", "none")
+
+
+def test_tts_hq_ignores_elevenlabs_key_without_the_allow_flag(monkeypatch):
+    """ELEVENLABS_API_KEY alone must NOT enable metered TTS — needs the explicit
+    RU_TTS_ALLOW_ELEVENLABS opt-in, so it can't silently run up a bill."""
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "sk_real_looking")
+    monkeypatch.delenv("RU_TTS_ALLOW_ELEVENLABS", raising=False)
+    import importlib
+    import tts_hq
+    importlib.reload(tts_hq)
+    try:
+        assert tts_hq.EL_KEY == "" and tts_hq.has_elevenlabs() is False
+    finally:
+        importlib.reload(tts_hq)
 
 
 def test_tts_hq_never_calls_out_under_test():
