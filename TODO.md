@@ -82,21 +82,22 @@ library + proficiency graphs all ride on this.
 
 ## Decided but not built
 
-- **Speaking activation modes** — `LEARNING.md` has the rationale + a design
-  checklist. The passive→active gap is the biggest hole (reading B2+/C1−,
-  speaking A2/B1). Planned, in priority order:
-  1. **Verb-government gym** — curated ~400-verb frequency list, drill each
-     verb's case/preposition through personalized micro-prompts, SRS-spaced.
-     Silent, 5-min. The ~150 non-obvious-government verbs first.
-  2. **Productive-vocabulary ladder** — walk the top ~2.5k content words minus
-     what's already active; each word: frame-fill → own sentence → link to the
-     previous word. The recognition SRS's missing productive twin.
-  3. **Transformation chains** — timed single-element swaps, morphology
-     automatization, 60-sec warm-up.
-  4. **"Say it another way"** — one concept, produce it 3 ways (drop a word /
-     change register / change tense) — circumlocution + retrieval flexibility.
-  Plus an **active-word count** on the Level tab next to passive `known_words`.
-  Format for all: type OR think-then-reveal-and-self-grade.
+- **Speaking activation** — `app/activate.py`, the "Activate" mode.
+  `LEARNING.md` has the rationale. One mode, `kind`-tagged tracks, `mix` slider.
+  - (done 2026-09-06) **verb-government gym** — 220-verb bundled curriculum
+    (`app/data/activate/verbs.json.gz`, `build_activate_verbs.py`), personalized
+    micro-prompts, SM-2-lite, focused LLM check on typed attempts.
+  - (done 2026-09-06) **productive-vocabulary track** — words introduced
+    newest-frequent from `freq`, same loop. Active-word count on the Level tab
+    (`proficiency_snapshots.active_words`).
+  - **track 3 — construction / frame gym** (`kind='frame'`) — curated ~40–60
+    high-value structures (если…то, чтобы+inf, то, что…, не только…но и,
+    чем…тем, кое-/-нибудь, participial/gerund phrases), each drilled by "express
+    X using this structure" across varied contexts. Same scheduler + loop; needs
+    a `activate_frames` bundle + `_introduce` branch + a frame prompt in llm.py.
+  - later: word "rungs" (frame-fill → own sentence → link to previous word);
+    "say it another way" (produce one concept 3 ways); transformation chains
+    (timed morphology warm-up).
 
 - (done 2026-09-01) **Card format v2** — `CARDS.md` is the spec. Back = one clean
   bold `translation` + concise `alt_meanings` + a one-clause `sentence` (full
