@@ -3,6 +3,8 @@ import subs
 import music
 import db as ru_db
 import tts
+import lrcfix
+import llm
 
 
 # ---------------------------------------------------------------- subs.py
@@ -130,6 +132,85 @@ def test_bold_marks_inflected_forms():
 def test_bold_phrase():
     out = ru_db.bold("Он сошёл с ума от радости.", "сойти с ума", True, "**")
     assert out.count("**") == 2
+
+
+# ---------------------------------------------------------------- llm._parse_obj
+
+def test_parse_obj_clean():
+    assert llm._parse_obj('{"a": 1, "b": [2, 3]}') == {"a": 1, "b": [2, 3]}
+
+
+def test_parse_obj_prose_and_fence():
+    assert llm._parse_obj('Here you go:\n```json\n{"x": true}\n```') == {"x": True}
+
+
+def test_parse_obj_trailing_comma():
+    assert llm._parse_obj('{"a": [1, 2,], "b": {"c": 3},}') == {"a": [1, 2], "b": {"c": 3}}
+
+
+def test_parse_obj_missing_comma_between_elements():
+    # the failure seen in the speaking drill: no comma between two array objects
+    bad = ('{ "reformulations": [ {"text": "раз", "register": "neutral"}\n'
+           '  {"text": "два", "register": "formal"} ], "meaning": "ok" }')
+    got = llm._parse_obj(bad)
+    assert [r["text"] for r in got["reformulations"]] == ["раз", "два"]
+
+
+def test_parse_obj_stops_at_first_object():
+    assert llm._parse_obj('{"a": 1}\n{"b": 2}') == {"a": 1}
+
+
+def test_speak_levels_present():
+    assert set(llm.SPEAK_LEVELS) == {"a2", "a2plus", "b1", "b2", "c1"}
+
+
+def test_speak_scene_seed_varies():
+    import random
+    seeds = {llm.speak_scene_seed(random.Random(i)) for i in range(60)}
+    assert len(seeds) > 40                       # combinatorial, not a fixed rotation
+    assert any("surprise me" in s for s in seeds)
+    assert any(s.startswith("moment:") for s in seeds)   # place sometimes omitted
+
+
+def test_speak_drops_punctuation_only_corrections():
+    import speak
+    fb = {
+        "corrections": [
+            {"original": "я думаю что", "corrected": "я думаю, что",   # punctuation only
+             "severity": "style", "category": "other"},
+            {"original": "делал", "corrected": "сделал",               # real fix
+             "severity": "hard", "category": "aspect"},
+        ],
+        "diff": [{"c": 1}, {"s": " весь день "}, {"c": 2}, {"s": " всё."}],
+    }
+    speak._drop_punct_only(fb)
+    assert len(fb["corrections"]) == 1
+    assert fb["corrections"][0]["corrected"] == "сделал"
+    # the dropped correction's text is folded back into a verbatim run; the real
+    # one is renumbered to index 1
+    rebuilt = "".join(d.get("s", "") if "s" in d else "делал" for d in fb["diff"])
+    assert rebuilt == "я думаю что весь день делал всё."
+    assert [d for d in fb["diff"] if "c" in d] == [{"c": 1}]
+
+
+# ---------------------------------------------------------------- lrcfix.py
+
+def test_lrcfix_deltas_and_slope_flat_offset():
+    # lyrics run a constant 2s early vs the transcript; each line has its own words
+    words = ["солнце ветер море берег", "город дождь асфальт неон",
+             "поезд рельсы север утро", "костёр дорога звёзды дым"]
+    lyrics = [(t, lrcfix._toks(w)) for t, w in zip((10, 20, 30, 40), words)]
+    segs = [(t + 2.0, lrcfix._toks(w)) for t, w in zip((10, 20, 30, 40), words)]
+    m = lrcfix._deltas(lyrics, segs)
+    assert len(m) == 4
+    assert all(abs(d - 2.0) < 0.01 for _t, _s, d in m)
+    assert abs(lrcfix._slope([t for t, _, _ in m], [d for _, _, d in m])) < 1e-6
+
+
+def test_lrcfix_slope_detects_drift():
+    xs = [0, 30, 60, 90]
+    ys = [0.0, 2.0, 4.0, 6.0]        # +2s per 30s
+    assert lrcfix._slope(xs, ys) > 0.06
 
 
 # ---------------------------------------------------------------- tts.py

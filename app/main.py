@@ -29,13 +29,25 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 import anki  # noqa: E402
+import aspect  # noqa: E402
 import backup  # noqa: E402
 import epub  # noqa: E402
 import heartbeat  # noqa: E402
 import llm  # noqa: E402
 import music  # noqa: E402
+import drill  # noqa: E402
+import chunks  # noqa: E402
+import speech  # noqa: E402
+import reading_flow  # noqa: E402
+import convo  # noqa: E402
+import proficiency  # noqa: E402
+import grammar  # noqa: E402
+import journal  # noqa: E402
+import motion  # noqa: E402
+import speak  # noqa: E402
 import srs  # noqa: E402
 import tts  # noqa: E402
+import tts_hq  # noqa: E402
 import whisper_rt  # noqa: E402
 import store  # noqa: E402
 import subs  # noqa: E402
@@ -174,6 +186,9 @@ def _commit_card(*, sentence, span_text, normalized_text, is_phrase, translation
         candidate_id=candidate_id, accented=accented, dict_accented=dict_accented,
         video_id=video_id, timestamp=timestamp, source=source,
         anki_note_id=(anki_result or {}).get("note_id"))
+    if not _TESTING:
+        _refine_new_card_async(card["id"])
+        _resolve_aspect_one_async(dict(card))
     return card, anki_result
 
 
@@ -187,16 +202,22 @@ def _accent_sync(span_text, sentence, is_phrase):
 
 def _learn_family(lemma):
     """After a card is made, learn its word-formation family so работа/рабочий/…
-    count as known too. Fire-and-forget."""
+    count as known too. Fire-and-forget.
+
+    No stoplist pre-check here (there used to be one): every caller already
+    passes the lemma of a word the learner actually carded, and the stoplist is
+    a raw top-13k frequency cutoff, not a "definitely already known" list — it
+    was silently blocking family resolution for a large share of ordinary
+    carded vocabulary (презирать, расстаться, покойник, …). `set_word_family`'s
+    own stoplist guard on the OTHER proposed members still protects against a
+    true function word (что/это/как) sneaking into a family."""
     lemma = (lemma or "").strip()
     if not lemma or " " in lemma:
         return
-    if store.in_stoplist(lemma):
-        return                             # never family-group a function word
     try:
         root, members = llm.word_family(lemma)
         if members:
-            store.set_word_family(root or lemma, members)
+            store.set_word_family(root or lemma, members, keep=lemma)
             print(f"[family] {lemma} -> {root or lemma}: {len(members)} members")
     except Exception as e:  # noqa: BLE001
         print(f"[family] {lemma}: {e}")
@@ -206,17 +227,139 @@ def _learn_family_async(lemma):
     threading.Thread(target=_learn_family, args=(lemma,), daemon=True).start()
 
 
-def _backfill_families(delay=0):
-    if delay:
-        time.sleep(delay)                  # let the server settle on startup
-    todo = store.lemmas_without_family()
+_FAMILY_LOCK = threading.Lock()
+
+
+def _family_for(card):
+    """The `family` block for a recognition card's back, or None."""
+    if not card or card.get("is_phrase") or card.get("card_type") == "production":
+        return None
+    lemma = (card.get("dict_accented") or card.get("front_word")
+            or card.get("normalized_text") or "").strip()
+    return store.family_for_card(lemma) if lemma else None
+
+
+def _prewarm_family_async(cards):
+    """cards: study-view dicts. Learn the word-family for any recognition card
+    whose lemma isn't resolved yet, so a later session shows it."""
+    if _TESTING:
+        return
+    todo = []
+    for c in cards:
+        if c.get("family") is not None or c.get("is_phrase") or c.get("card_type") == "production":
+            continue
+        lemma = (c.get("dict_accented") or c.get("front_word")
+                or c.get("normalized_text") or "").replace("́", "").strip()
+        if lemma and " " not in lemma:
+            todo.append(lemma)
     if not todo:
         return
-    print(f"[family] backfilling {len(todo)} carded words…")
-    from concurrent.futures import ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        list(pool.map(_learn_family, todo))
-    print("[family] backfill done")
+
+    def _run():
+        # skip rather than queue behind a backfill (or another prewarm) already
+        # hammering the shared warm process — this is opportunistic, it'll get
+        # another chance on the next queue load.
+        if not _FAMILY_LOCK.acquire(blocking=False):
+            return
+        try:
+            for lemma in dict.fromkeys(todo):    # de-dup, keep order
+                if not store.has_family_entry(lemma):
+                    _learn_family(lemma)
+        finally:
+            _FAMILY_LOCK.release()
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _refine_new_card(card_id):
+    """Bring a freshly-made card onto the v2 back format (clean primary meaning +
+    concise alts + a one-clause context). Fire-and-forget after create."""
+    try:
+        card = srs.get_card(card_id)
+        if card and card.get("format_ver", 1) < 2:
+            _reformat_one_batch([card])
+            _sync_soon()
+    except Exception as e:  # noqa: BLE001
+        print(f"[reformat] new card {card_id}: {e}", flush=True)
+
+
+def _refine_new_card_async(card_id):
+    threading.Thread(target=_refine_new_card, args=(card_id,), daemon=True).start()
+
+
+_ASPECT_LOCK = threading.Lock()
+
+
+def _resolve_aspect(rows):
+    """Fill verb_aspect for the given card rows (dedup'd by lemma inside). Used
+    both for a freshly-made card and to prewarm a served queue."""
+    if _TESTING or not rows:
+        return
+    if not _ASPECT_LOCK.acquire(blocking=False):
+        return                              # a backfill is already running
+    try:
+        aspect.resolve(rows)
+    except Exception as e:  # noqa: BLE001
+        print(f"[aspect] resolve: {e}", flush=True)
+    finally:
+        _ASPECT_LOCK.release()
+
+
+def _resolve_aspect_one_async(card_row):
+    """One freshly-made card — resolve its lemma's aspect right away (1 LLM call
+    at most; skips if already cached)."""
+    if _TESTING:
+        return
+
+    def _run():
+        if aspect.get(aspect._lemma_of(card_row)) is not None:
+            return
+        try:
+            aspect.resolve([card_row])
+        except Exception as e:  # noqa: BLE001
+            print(f"[aspect] new card: {e}", flush=True)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _prewarm_aspect_async(cards):
+    """cards: study-view dicts. Resolve any whose lemma isn't in verb_aspect yet
+    (so a later session shows the tag). Cheap: nothing already cached is retouched."""
+    if _TESTING:
+        return
+    ids = [c["id"] for c in cards
+           if c.get("aspect") is None and not c.get("is_phrase") and c.get("id")]
+    if not ids:
+        return
+
+    def _run():
+        rows = [r for r in (srs.get_card(i) for i in ids)
+                if r and aspect.get(aspect._lemma_of(r)) is None]
+        _resolve_aspect(rows)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _backfill_families(delay=0, force=False):
+    if delay:
+        time.sleep(delay)                  # let the server settle on startup
+    if not _FAMILY_LOCK.acquire(blocking=False):
+        print("[family] backfill already running, skipping", flush=True)
+        return
+    try:
+        todo = store.lemmas_without_family(force=force)
+        if not todo:
+            return
+        print(f"[family] backfilling {len(todo)} carded words… (force={force})")
+        # sequential: every call shares one warm `claude -p` process anyway (its
+        # own lock serialises them), and running them 4-at-a-time turned out to
+        # make that channel occasionally hand back a stale/doubled reply.
+        done = 0
+        for lemma in todo:
+            _learn_family(lemma)
+            done += 1
+        print(f"[family] backfill done ({done}/{len(todo)})")
+    finally:
+        _FAMILY_LOCK.release()
 
 
 def _rank_new_on_boot(delay=30):
@@ -225,6 +368,10 @@ def _rank_new_on_boot(delay=30):
         _maybe_rank_new()
     except Exception as e:  # noqa: BLE001
         print(f"[learn] boot rank failed: {e}", flush=True)
+    try:
+        _maybe_reformat_imminent()
+    except Exception as e:  # noqa: BLE001
+        print(f"[reformat] boot pass failed: {e}", flush=True)
 
 
 if not _TESTING:
@@ -399,7 +546,27 @@ def _song_pipeline(video_id, url, need_whisper, model):
             _set_status(video_id, state="error", phase="error",
                         detail="couldn’t transcribe the lyrics")
             return
+    else:
+        # LRCLIB lyrics are matched to some other release — align them to our
+        # actual audio before any cards get made from the timestamps.
+        _fix_audio_sync(video_id)
     _run_extraction(video_id, model)
+
+
+def _fix_audio_sync(video_id):
+    try:
+        import lrcfix
+        est = lrcfix.autofix(video_id)
+        if est.get("applied"):
+            print(f"[lrcfix] video {video_id}: shifted {est['applied']:+.2f}s "
+                  f"(score {est.get('score')}, total {est.get('total_offset')})", flush=True)
+        else:
+            print(f"[lrcfix] video {video_id}: no shift ({est.get('reason') or 'within tolerance'})",
+                  flush=True)
+        return est
+    except Exception as e:  # noqa: BLE001
+        print(f"[lrcfix] video {video_id}: {e}", flush=True)
+        return {"ok": False, "reason": str(e)}
 
 
 def _resolve_song_source(url):
@@ -479,6 +646,7 @@ def refetch_song_lyrics(video_id: int):
     store.replace_subtitle_lines(
         video_id, [(store.secs_to_hms(s), t) for s, _, t in cues])
     store.drop_lyric_notes(video_id)
+    store.reset_lrc_offset(video_id)          # fresh lyrics carry no correction
     cand_moved = store.resnap_candidates(video_id)
     _, card_moved = srs.resnap_timestamps(video_id)
     return {"ok": True, "lines": len(cues), "subs_kind": subs_kind, "note": note,
@@ -516,6 +684,8 @@ def _run_song_swap(video_id, new_url):
         store.replace_subtitle_lines(
             video_id, [(store.secs_to_hms(s), t) for s, _, t in cues])
         store.drop_lyric_notes(video_id)
+        store.reset_lrc_offset(video_id)
+        _fix_audio_sync(video_id)
         store.resnap_candidates(video_id)
         srs.resnap_timestamps(video_id)
     TRANSCRIBE_STATUS[video_id] = {"state": "done", "detail": "new source ready"}
@@ -534,6 +704,40 @@ def swap_song_source(video_id: int, body: SwapIn, background: BackgroundTasks):
         raise HTTPException(422, "give a full http(s) link")
     TRANSCRIBE_STATUS[video_id] = {"state": "running", "pct": 0.0, "detail": "swapping source"}
     background.add_task(_run_song_swap, video_id, url)
+    return {"ok": True, "queued": True}
+
+
+class SyncFixIn(BaseModel):
+    offset: float | None = None   # seconds to add to lyric times; omit to auto-detect
+
+
+@app.post("/songs/{video_id}/fix-audio-sync")
+def fix_audio_sync(video_id: int, body: SyncFixIn, background: BackgroundTasks):
+    """Line the lyrics/timestamps up with the audio. With `offset` it just
+    applies that shift; without it, Whisper-transcribes the audio and detects
+    the constant offset automatically."""
+    v = store.get_video(video_id)
+    if not v or v.get("kind") != "song":
+        raise HTTPException(404, "no such song")
+    if body.offset is not None:
+        total = store.shift_song_timing(video_id, body.offset)
+        srs.resnap_timestamps(video_id)
+        backup.snapshot_async("lrcfix-manual")
+        return {"ok": True, "applied": body.offset, "total_offset": total}
+    TRANSCRIBE_STATUS[video_id] = {"state": "running", "pct": 0.0,
+                                   "detail": "checking audio sync"}
+
+    def _run():
+        est = _fix_audio_sync(video_id)
+        if est.get("applied"):
+            srs.resnap_timestamps(video_id)
+            backup.snapshot_async("lrcfix-auto")
+        TRANSCRIBE_STATUS[video_id] = {
+            "state": "done",
+            "detail": (f"shifted {est['applied']:+.2f}s" if est.get("applied")
+                       else f"no change ({est.get('reason') or 'already aligned'})")}
+
+    background.add_task(_run)
     return {"ok": True, "queued": True}
 
 
@@ -611,6 +815,24 @@ def video_study(video_id: int):
         cv["context"] = ctxs.get(c["id"])
         out.append(cv)
     return {"cards": out, "title": v["title"], "kind": v["kind"]}
+
+
+@app.get("/srs/refresher")
+def srs_refresher(days: int = 3):
+    """The last few days' worth of cards you didn't nail — everything you rated
+    "Again" in the window, plus reviews you skipped — shuffled for a no-stakes
+    run-through. Ratings here never hit /review, so working through them doesn't
+    clear the backlog or move anything on the timeline."""
+    cards = srs.missed_review_cards(days)
+    _random.shuffle(cards)
+    titles = store.video_titles()
+    ctxs = store.card_contexts(cards)
+    out = []
+    for c in cards:
+        cv = _study_card_view(c, with_preview=False, titles=titles)
+        cv["context"] = ctxs.get(c["id"])
+        out.append(cv)
+    return {"cards": out, "days": max(1, min(30, days)), "count": len(out)}
 
 
 @app.delete("/videos/{video_id}")
@@ -1235,13 +1457,17 @@ def word_states():
 
 
 @app.get("/words/{lemma}")
-def word_detail(lemma: str):
-    """Everything about one word: card status, family, and every place it's
-    spoken across all your videos. `lemma` may be an inflected form."""
+def word_detail(lemma: str, family: bool = True):
+    """Everything about one word: card status, family, and every place it — or,
+    by default, anything in its word family — is spoken across ALL indexed
+    content. `lemma` may be an inflected form. `family=0` limits it to the exact
+    lemma."""
     lem = store.lemma_key(lemma)
     have = store.card_lemmas()
     fam_lemmas = store.known_family_lemmas()
     cand, members = store.word_status(lem)
+    if family and not members and not _TESTING:
+        _learn_family_async(lem)          # so a later open is richer
     _c = store.connect()
     _vr = _c.execute("SELECT reason FROM resolved_words WHERE normalized_text=?",
                      (lem,)).fetchone()
@@ -1253,13 +1479,14 @@ def word_detail(lemma: str):
               else "pending" if (cand and cand["status"] == "pending")
               else "new")
     translation = (cand or {}).get("translation")
-    occ = store.word_occurrences(lem)
+    fam = [m for m in members if m != lem]
+    occ = store.word_occurrences(lem, also=fam if family else ())
     gloss = translation or store.word_gloss_get(lem) or store.gloss_for(lem)
     # orphaned carded word (pre-SRS Anki era) with no meaning anywhere → fill it
     if not gloss and status in ("carded", "family"):
         ctx = ""
-        if occ and occ[0].get("hits"):
-            ctx = occ[0]["hits"][0].get("text", "")
+        if occ["videos"] and occ["videos"][0].get("hits"):
+            ctx = occ["videos"][0]["hits"][0].get("text", "")
         try:
             g = llm.translate_span(ctx or lem, lem)
             gloss = (g.get("translation") or "").strip()
@@ -1275,9 +1502,11 @@ def word_detail(lemma: str):
         "verdict": verdict if wordstate.is_assignable(verdict or "") else None,
         "translation": translation,
         "gloss": gloss,
-        "family": [m for m in members if m != lem],
+        "family": fam,
+        "freq": store.freq_hint(lem),
         "candidate_id": (cand or {}).get("id") if (cand and cand["status"] == "pending") else None,
-        "videos": occ,
+        "videos": occ["videos"],
+        "by_lemma": occ["by_lemma"],
     }
 
 
@@ -1288,10 +1517,10 @@ def word_accent(lemma: str):
     lem = store.lemma_key(lemma)
     acc = store.accent_for(lem)
     if not acc:
-        occ = store.word_occurrences(lem)
+        vids = store.word_occurrences(lem)["videos"]
         ctx = ""
-        if occ and occ[0].get("hits"):
-            ctx = occ[0]["hits"][0].get("text", "")
+        if vids and vids[0].get("hits"):
+            ctx = vids[0]["hits"][0].get("text", "")
         try:
             acc = llm.accent_word(store.yo_form(lem), ctx)
             store.set_accent(lem, acc)
@@ -1347,10 +1576,10 @@ def word_discard(lemma: str):
 
 
 @app.post("/families/backfill")
-def families_backfill(background: BackgroundTasks):
-    todo = store.lemmas_without_family()
-    background.add_task(_backfill_families)
-    return {"pending": len(todo)}
+def families_backfill(background: BackgroundTasks, force: bool = False):
+    todo = store.lemmas_without_family(force=force)
+    background.add_task(_backfill_families, force=force)
+    return {"pending": len(todo), "force": force}
 
 
 @app.post("/candidates/{cand_id}/undo")
@@ -1459,6 +1688,24 @@ def _hms_secs(hms):
                  + float(m.group(3)), 2)
 
 
+_TR_SPLIT = _re.compile(r"\s*[;/]\s+")   # ';' / '/' only — commas live inside "(of coat, arms)"
+
+
+def _tr_alts(card):
+    """Short alternative glosses already on the card — split out of alt_meanings
+    so the study screen can offer them as one-tap swaps for the primary."""
+    cur = (card.get("translation") or "").strip().lower()
+    out, seen = [], {cur}
+    for piece in _TR_SPLIT.split(card.get("alt_meanings") or ""):
+        p = piece.strip().strip('".')
+        low = p.lower()
+        if (p and low not in seen and len(p) <= 40
+                and "—" not in p and not _re.search(r"[а-яё]", low)):
+            seen.add(low)
+            out.append(p)
+    return out[:6]
+
+
 def _study_card_view(card, with_preview=True, titles=None):
     """Trim an srs card dict to what the review screen needs. Pass `titles`
     (store.video_titles()) when rendering many cards to avoid a query each."""
@@ -1487,12 +1734,51 @@ def _study_card_view(card, with_preview=True, titles=None):
         front_html = f'<div class="hw">{_html.escape(hw)}</div>'
     else:
         front_html = sentence_html
+    if card.get("card_type") == "production":
+        # front = the English situation, back = the Russian to say aloud
+        sit, tgt = card["translation"] or "", card["sentence"] or ""
+        meta = {}
+        if card.get("card_meta"):
+            try:
+                meta = json.loads(card["card_meta"]) or {}
+            except (ValueError, TypeError):
+                meta = {}
+        # legacy drill cards packed the given chips into the situation as "cue\n[ a · b ]"
+        if not meta.get("given") and "\n[" in sit:
+            sit, _, chip = sit.partition("\n[")
+            sit = sit.strip()
+            meta["given"] = [x.strip() for x in chip.strip(" []").split("·") if x.strip()]
+        _cc = grammar.concept(meta.get("skill") or "")
+        return {
+            "id": card["id"], "card_type": "production",
+            "situation": sit, "target": tgt,
+            "given": meta.get("given") or [], "hit": meta.get("target") or [],
+            "contrast": meta.get("contrast") or None, "skill": meta.get("skill") or None,
+            "kind": meta.get("kind") or None,
+            "concept_title": _cc.title if _cc else None,
+            "front_html": f'<div class="prod-q">{_html.escape(sit)}</div>',
+            "sentence_html": _html.escape(tgt),
+            "translation": sit, "span_text": tgt, "normalized_text": card["normalized_text"],
+            "front_word": card.get("front_word"), "front_mode": "word",
+            "accented": None, "dict_accented": None,
+            "alt_meanings": card.get("alt_meanings"),
+            "aspect": aspect.for_card(card),
+            "clip": f"/srs/cards/{card['id']}/tts", "tts": True,
+            "seconds": None, "video_id": None, "video_title": None, "timestamp": None,
+            "is_new": card["is_new"], "reps": card["reps"], "lapses": card["lapses"],
+            "preview": srs.preview(card) if with_preview else None,
+        }
     return {
-        "id": card["id"], "front_html": front_html,
+        "id": card["id"], "front_html": front_html, "card_type": "recognition",
         "sentence_html": sentence_html, "front_mode": mode,
+        "sentence": card.get("sentence"), "is_phrase": bool(card.get("is_phrase")),
         "front_word": card.get("front_word"),
         "translation": card["translation"], "span_text": card["span_text"],
         "alt_meanings": card.get("alt_meanings"),
+        "tr_alts": _tr_alts(card),
+        "aspect": aspect.for_card(card),
+        "family": _family_for(card),
+        "meaning_contextual": bool(card.get("meaning_contextual")),
         "reformatted": bool(card.get("alt_meanings") or card.get("sentence_full")),
         "normalized_text": card["normalized_text"], "accented": card["accented"],
         "dict_accented": card["dict_accented"],
@@ -1510,9 +1796,12 @@ def _study_card_view(card, with_preview=True, titles=None):
 @app.get("/srs/stats")
 def srs_stats():
     _maybe_rank_new()
+    _maybe_reformat_imminent()
+    _maybe_prof_snapshot()
     s = srs.stats()
     s["anki_dual_write"] = srs.anki_dual_write()
     s["new_per_day"] = srs.new_per_day()
+    s["prod_per_day"] = srs.prod_per_day()
     s["card_front"] = srs.card_front()
     return s
 
@@ -1520,6 +1809,806 @@ def srs_stats():
 @app.get("/srs/analytics")
 def srs_analytics(days: int = 30):
     return srs.analytics(days=max(7, min(120, days)))
+
+
+# ------------------------------------------------- reformulation speaking drill
+
+@app.post("/speak/prompt")
+def speak_prompt(level: str = "a2plus", model: str = llm.DEFAULT_MODEL):
+    """One concrete thought to express in Russian (LLM-generated). `level` is the
+    target speaking difficulty: a2 (shortest / simplest) | b1 | b2 | c1."""
+    lvl = level.lower() if level.lower() in llm.SPEAK_LEVELS else "a2plus"
+    try:
+        return speak.new_prompt(level=lvl, model=model)
+    except llm.LLMError as e:
+        raise HTTPException(502, f"couldn’t generate a prompt: {e}")
+
+
+@app.post("/speak/transcribe")
+async def speak_transcribe(file: UploadFile = File(...)):
+    """Whisper-transcribe a recorded spoken attempt (local, on the Mac)."""
+    data = await file.read()
+    if len(data) < 800:
+        raise HTTPException(422, "recording too short")
+    ext = os.path.splitext(file.filename or "")[1] or ".webm"
+    tmp = os.path.join(ytdlp.MEDIA_DIR, f"speak-{int(time.time()*1000)}{ext}")
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+        segs = await asyncio.to_thread(whisper_rt.transcribe, tmp, 0)
+        text = " ".join(s[2].strip() for s in segs if s[2].strip()).strip()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"transcription failed: {str(e)[:200]}")
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    return {"text": text}
+
+
+class SpeakAttemptIn(BaseModel):
+    prompt_id: int
+    user_text: str
+    input_method: str = "typed"
+
+
+@app.post("/speak/attempt")
+def speak_attempt(body: SpeakAttemptIn, background: BackgroundTasks):
+    if not speak.get_prompt(body.prompt_id):
+        raise HTTPException(404, "no such prompt")
+    if len((body.user_text or "").strip()) < 2:
+        raise HTTPException(422, "attempt is empty")
+    aid = speak.start_attempt(body.prompt_id, body.user_text, body.input_method)
+    background.add_task(speak.grade_attempt, aid)
+    return {"attempt_id": aid, "status": "grading"}
+
+
+@app.get("/speak/attempt/{attempt_id}")
+def speak_attempt_view(attempt_id: int):
+    v = speak.attempt_view(attempt_id)
+    if not v:
+        raise HTTPException(404, "no such attempt")
+    return v
+
+
+@app.post("/speak/attempt/{attempt_id}/regrade")
+def speak_regrade(attempt_id: int, background: BackgroundTasks):
+    if not speak.attempt_view(attempt_id):
+        raise HTTPException(404, "no such attempt")
+    speak.reset_grading(attempt_id)
+    background.add_task(speak.grade_attempt, attempt_id)
+    return {"status": "grading"}
+
+
+class SpeakSessionIn(BaseModel):
+    attempt_ids: list[int] = []
+
+
+@app.post("/speak/session/suggest")
+def speak_session_suggest(body: SpeakSessionIn):
+    """Look across the whole session and propose the 3-5 highest-leverage cards
+    (not created yet)."""
+    return {"suggestions": speak.session_suggestions(body.attempt_ids)}
+
+
+class SpeakSessionCardsIn(BaseModel):
+    cards: list[dict] = []      # [{front, back}]
+
+
+@app.post("/speak/session/cards")
+def speak_session_cards(body: SpeakSessionCardsIn):
+    made = speak.create_session_cards(body.cards)
+    _sync_soon()
+    backup.snapshot_async("speak-session-cards")
+    return {"created": len(made),
+            "cards": [{"id": c["id"], "front": c["translation"], "back": c["sentence"]}
+                      for c in made]}
+
+
+@app.get("/speak/stats")
+def speak_stats(days: int = 90):
+    return speak.stats(days=max(7, min(365, days)))
+
+
+@app.get("/speak/history")
+def speak_history(limit: int = 40):
+    return {"attempts": speak.history(limit=max(1, min(200, limit)))}
+
+
+# --------------------------------------------------- grammar drill (forms gym)
+
+@app.get("/drill/state")
+def drill_state():
+    st = drill.state()
+    if st["buffer"] < drill._MIN_BUFFER:
+        drill.topup_async()
+    return st
+
+
+@app.get("/drill/stats")
+def drill_stats_ep():
+    """Compact view for the in-drill overlay — the full map is GET /grammar."""
+    cs = grammar.concept_stats()
+    weak = sorted((cid for cid, v in cs.items() if v["mastery"] == "practising"),
+                  key=lambda cid: cs[cid]["pct"])[:6]
+    return {"levels": grammar.level_progress(),
+            "weak": [{"id": cid, "title": grammar.concept(cid).title,
+                      "right": cs[cid]["right"], "seen": cs[cid]["seen"]} for cid in weak],
+            "grammar_level": drill._grammar_level(), **drill.state()}
+
+
+# ------------------------------------------------------------- grammar map
+
+@app.get("/grammar")
+def grammar_map():
+    cs = grammar.concept_stats(with_bands=True)
+    return {
+        "levels": grammar.level_progress(),
+        "bands": grammar.band_progress(),
+        "band_ranges": [{"lo": lo, "hi": hi} for lo, hi in drill.BANDS],
+        "grammar_level": drill._grammar_level(),
+        "totals": grammar.totals(),
+        "concepts": [{**c.public(), "stats": cs[c.id]} for c in grammar.CONCEPTS],
+    }
+
+
+@app.get("/grammar/concepts/{cid}")
+def grammar_concept(cid: str):
+    d = grammar.concept_detail(cid)
+    if not d:
+        raise HTTPException(404, "no such concept")
+    return d
+
+
+@app.post("/grammar/concepts/{cid}/learn")
+def grammar_learn(cid: str, background: BackgroundTasks):
+    if not grammar.concept(cid):
+        raise HTTPException(404, "no such concept")
+    background.add_task(drill.learn_concept, cid)
+    return {"status": "generating"}
+
+
+class MuteIn(BaseModel):
+    muted: bool = True
+
+
+@app.post("/grammar/concepts/{cid}/mute")
+def grammar_mute(cid: str, body: MuteIn):
+    if not grammar.set_muted(cid, body.muted):
+        raise HTTPException(404, "no such concept")
+    return {"id": cid, "muted": body.muted}
+
+
+class DrillSessionIn(BaseModel):
+    item_ids: list[int] = []
+
+
+@app.post("/drill/session/suggest")
+def drill_session_suggest(body: DrillSessionIn):
+    return {"cards": drill.session_suggest(body.item_ids)}
+
+
+@app.get("/drill/next")
+def drill_next(n: int = 3):
+    items = drill.next_items(max(1, min(10, n)))
+    if not items:                                   # cold start — generate now
+        drill.topup_async(force=True)
+    return {"items": items, **drill.state()}
+
+
+class DrillGradeIn(BaseModel):
+    item_id: int
+    verdict: str                                    # 'right' | 'wrong' | 'easy'
+
+
+@app.post("/drill/grade")
+def drill_grade(body: DrillGradeIn):
+    r = drill.grade(body.item_id, body.verdict)
+    if r is None:
+        raise HTTPException(404, "no such drill item")
+    return r
+
+
+@app.post("/drill/items/{item_id}/save")
+def drill_save(item_id: int):
+    card = drill.save_as_card(item_id)
+    if not card:
+        raise HTTPException(404, "no such drill item")
+    _sync_soon()
+    backup.snapshot_async("drill-card")
+    return {"card_id": card["id"], "front": card["translation"], "back": card["sentence"]}
+
+
+# ------------------------------------------------------- speaking journal
+
+@app.post("/journal/sessions")
+async def journal_create(file: UploadFile = File(...), level: str = "b1"):
+    data = await file.read()
+    if len(data) < 2000:
+        raise HTTPException(422, "recording too short")
+    ext = os.path.splitext(file.filename or "")[1] or ".webm"
+    sid = journal.create(data, ext=ext, level=level)
+    return {"id": sid, "status": "new"}
+
+
+@app.get("/journal/sessions")
+def journal_list():
+    return {"sessions": journal.recent()}
+
+
+@app.get("/journal/sessions/{sid}")
+def journal_get(sid: int):
+    v = journal.get(sid)
+    if not v:
+        raise HTTPException(404, "no such session")
+    return v
+
+
+class JournalCardsIn(BaseModel):
+    cards: list[dict] = []
+
+
+@app.post("/journal/sessions/{sid}/cards")
+def journal_cards(sid: int, body: JournalCardsIn):
+    if not journal.get(sid):
+        raise HTTPException(404, "no such session")
+    made = journal.make_cards(sid, body.cards)
+    _sync_soon()
+    backup.snapshot_async("journal-cards")
+    return {"created": len(made),
+            "cards": [{"id": c["id"], "front": c["translation"], "back": c["sentence"]}
+                      for c in made]}
+
+
+# ------------------------------------------------------- verbs of motion
+
+@app.get("/motion/state")
+def motion_state():
+    st = motion.state()
+    if st["buffer"] < motion._MIN_BUFFER:
+        motion.topup_async()
+    return st
+
+
+@app.get("/motion/next")
+def motion_next(n: int = 3):
+    items = motion.next_items(max(1, min(10, n)))
+    if not items:
+        motion.topup_async(force=True)
+    return {"items": items, **motion.state()}
+
+
+class MotionGradeIn(BaseModel):
+    item_id: int
+    verdict: str
+
+
+@app.post("/motion/grade")
+def motion_grade(body: MotionGradeIn):
+    r = motion.grade(body.item_id, body.verdict)
+    if r is None:
+        raise HTTPException(404, "no such motion item")
+    return r
+
+
+@app.post("/motion/items/{item_id}/save")
+def motion_save(item_id: int):
+    card = motion.save_as_card(item_id)
+    if not card:
+        raise HTTPException(404, "no such motion item")
+    _sync_soon()
+    backup.snapshot_async("motion-card")
+    return {"card_id": card["id"], "front": card["translation"], "back": card["sentence"]}
+
+
+class MotionSessionIn(BaseModel):
+    item_ids: list[int] = []
+
+
+@app.post("/motion/session/suggest")
+def motion_session_suggest(body: MotionSessionIn):
+    return {"cards": motion.session_suggest(body.item_ids)}
+
+
+@app.get("/motion/stats")
+def motion_stats():
+    return motion.full_stats()
+
+
+@app.get("/motion/taxonomy")
+def motion_taxonomy():
+    return {"dims": list(motion.DIMS),
+            "values": {d: [{"value": v, "label": l, "help": h}
+                           for v, l, h in motion.dim_values(d)] for d in motion.DIMS},
+            "max_level": motion._MAX_LEVEL,
+            "levels": [{"n": n, "note": motion.LEVEL_NOTES.get(n, "")}
+                       for n in sorted(motion.LEVELS)]}
+
+
+class MotionLearnIn(BaseModel):
+    dim: str
+    value: str
+
+
+@app.post("/motion/learn")
+def motion_learn(body: MotionLearnIn, background: BackgroundTasks):
+    if body.dim not in motion.DIMS:
+        raise HTTPException(422, "bad dimension")
+    background.add_task(motion.learn, body.dim, body.value)
+    return {"status": "generating"}
+
+
+@app.get("/motion/verbs/{verb_id}")
+def motion_verb_ref(verb_id: str):
+    """Reference page for a verb-of-motion pair — both aspects, conjugations,
+    prefixes, mistakes, examples. Generated + cached on first request."""
+    if verb_id not in motion._VERB:
+        raise HTTPException(404, "no such verb")
+    data = motion.verb_reference(verb_id)
+    if not data:
+        raise HTTPException(503, "reference not ready — try again in a moment")
+    return data
+
+
+@app.get("/motion/prefixes/{prefix_id}")
+def motion_prefix_ref(prefix_id: str):
+    """Reference page for a motion prefix — what it changes, how to use it,
+    per-verb exceptions, common mistakes."""
+    if prefix_id not in motion._PREFIX or prefix_id == "none":
+        raise HTTPException(404, "no such prefix")
+    data = motion.prefix_reference(prefix_id)
+    if not data:
+        raise HTTPException(503, "reference not ready — try again in a moment")
+    return data
+
+
+# ------------------------------------------------------- chunk deck
+
+@app.get("/chunks/state")
+def chunks_state():
+    st = chunks.state()
+    if st["buffer"] < chunks._MIN_BUFFER:
+        chunks.topup_async()
+    return st
+
+
+@app.get("/chunks/next")
+def chunks_next(n: int = 3):
+    items = chunks.next_items(max(1, min(10, n)))
+    if not items:
+        chunks.topup_async(force=True)
+    return {"items": items, **chunks.state()}
+
+
+class ChunkGradeIn(BaseModel):
+    item_id: int
+    verdict: str
+
+
+@app.post("/chunks/grade")
+def chunks_grade(body: ChunkGradeIn):
+    r = chunks.grade(body.item_id, body.verdict)
+    if r is None:
+        raise HTTPException(404, "no such chunk item")
+    return r
+
+
+@app.post("/chunks/items/{item_id}/save")
+def chunks_save(item_id: int):
+    card = chunks.save_as_card(item_id)
+    if not card:
+        raise HTTPException(404, "no such chunk item")
+    _sync_soon()
+    backup.snapshot_async("chunk-card")
+    return {"card_id": card["id"], "front": card["translation"], "back": card["sentence"]}
+
+
+class ChunkSessionIn(BaseModel):
+    item_ids: list[int] = []
+
+
+@app.post("/chunks/session/suggest")
+def chunks_session_suggest(body: ChunkSessionIn):
+    return {"cards": chunks.session_suggest(body.item_ids)}
+
+
+@app.get("/chunks/stats")
+def chunks_stats():
+    return chunks.full_stats()
+
+
+@app.get("/chunks/taxonomy")
+def chunks_taxonomy():
+    return {"functions": [{"value": f, "label": l, "help": h} for f, l, h in chunks.FUNCTIONS],
+            "stages": [{"name": n, "help": h} for n, h in chunks.STAGES]}
+
+
+class ChunkLearnIn(BaseModel):
+    function: str
+
+
+@app.post("/chunks/learn")
+def chunks_learn(body: ChunkLearnIn, background: BackgroundTasks):
+    if body.function not in chunks._FN:
+        raise HTTPException(422, "bad function")
+    background.add_task(chunks.learn, body.function)
+    return {"status": "generating"}
+
+
+class ChunkStartStageIn(BaseModel):
+    start_stage: int
+
+
+@app.post("/chunks/start-stage")
+def chunks_start_stage(body: ChunkStartStageIn):
+    srs.set_setting("chunk_start_stage", max(0, min(chunks._MAX_STAGE, int(body.start_stage))))
+    return chunks.state()
+
+
+# ------------------------------------------------------- speech lab
+
+@app.get("/speeches")
+def speeches_list():
+    import tts_hq
+    return {"speeches": speech.recent(),
+            "tts_backend": speech.default_backend(),
+            "tts_has_elevenlabs": tts_hq.has_elevenlabs(),
+            "tts_has_local": tts_hq._silero_ok()}
+
+
+class SpeechBackendIn(BaseModel):
+    backend: str
+
+
+@app.post("/speeches/tts-backend")
+def speeches_tts_backend(body: SpeechBackendIn):
+    try:
+        return {"backend": speech.set_default_backend(body.backend)}
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+
+
+class SpeechGenIn(BaseModel):
+    topic: str
+    extra: str = ""
+
+
+@app.post("/speeches/generate")
+def speeches_generate(body: SpeechGenIn):
+    if not body.topic.strip():
+        raise HTTPException(422, "give it a topic")
+    return {"id": speech.create_generated(body.topic, body.extra)}
+
+
+@app.get("/speeches/suggestions")
+def speeches_suggestions():
+    return {"suggestions": speech.suggestions()}
+
+
+class SpeechSuggestIn(BaseModel):
+    id: str | None = None
+
+
+@app.post("/speeches/suggest")
+def speeches_suggest(body: SpeechSuggestIn | None = None):
+    sid = speech.create_suggested(body.id if body else None)
+    if sid is None:
+        raise HTTPException(422, "unknown topic")
+    return {"id": sid}
+
+
+class SpeechPasteIn(BaseModel):
+    title: str = ""
+    ru: str
+    en: str = ""
+
+
+@app.post("/speeches/paste")
+def speeches_paste(body: SpeechPasteIn):
+    try:
+        sid = speech.create_pasted(body.title, body.ru, body.en)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    backup.snapshot_async("speech-add")
+    return {"id": sid}
+
+
+@app.get("/speeches/{sid}")
+def speeches_get(sid: int):
+    d = speech.get(sid)
+    if not d:
+        raise HTTPException(404, "no such speech")
+    return d
+
+
+@app.get("/speeches/{sid}/audio")
+def speeches_audio(sid: int):
+    p = speech.audio_path(sid)
+    if not p:
+        raise HTTPException(404, "audio not ready")
+    return FileResponse(p, media_type="audio/mp4",
+                        headers={"Cache-Control": "public, max-age=31536000"})
+
+
+@app.post("/speeches/{sid}/practiced")
+def speeches_practiced(sid: int):
+    r = speech.mark_practiced(sid)
+    if r is None:
+        raise HTTPException(404, "no such speech")
+    return r
+
+
+class SpeechRegenIn(BaseModel):
+    backend: str | None = None      # 'elevenlabs' | 'silero' | None (= the default)
+
+
+@app.post("/speeches/{sid}/regen-audio")
+def speeches_regen(sid: int, body: SpeechRegenIn | None = None):
+    if not speech.get(sid):
+        raise HTTPException(404, "no such speech")
+    prefer = (body.backend if body else None) or None
+    if prefer and prefer not in ("elevenlabs", "silero"):
+        raise HTTPException(422, "bad backend")
+    speech.regen_audio(sid, prefer)
+    return {"status": "generating"}
+
+
+@app.delete("/speeches/{sid}")
+def speeches_delete(sid: int):
+    speech.delete(sid)
+    _sync_soon()
+    return {"deleted": True}
+
+
+# ------------------------------------------------------- flow reading
+
+@app.get("/reading/topics")
+def reading_topics():
+    return {"domains": proficiency.domains_public(),
+            "topics": reading_flow.suggested_topics()}
+
+
+class ReadingNewIn(BaseModel):
+    topic: str = ""
+    prompt: str = ""
+    domain: str = ""
+
+
+@app.post("/reading/sessions")
+def reading_new(body: ReadingNewIn):
+    if not (body.topic.strip() or body.prompt.strip()):
+        raise HTTPException(422, "give it a topic or a prompt")
+    sid = reading_flow.create(body.topic, body.prompt, body.domain)
+    return {"id": sid, "chunk": reading_flow._chunk(sid, "last")}
+
+
+@app.get("/reading/sessions")
+def reading_list():
+    return {"sessions": reading_flow.recent()}
+
+
+@app.get("/reading/sessions/{sid}")
+def reading_get(sid: int):
+    s = reading_flow.session(sid)
+    if not s:
+        raise HTTPException(404, "no such session")
+    return s
+
+
+class ReadingNextIn(BaseModel):
+    read_seq: int | None = None
+    read_words: int = 0
+
+
+@app.post("/reading/sessions/{sid}/next")
+def reading_next(sid: int, body: ReadingNextIn):
+    if not reading_flow.session(sid):
+        raise HTTPException(404, "no such session")
+    out = {"chunk": reading_flow.next_chunk(sid, body.read_seq, body.read_words)}
+    _maybe_prof_snapshot()
+    return out
+
+
+class ReadingTapIn(BaseModel):
+    surface: str
+    sentence: str = ""
+    chunk_seq: int | None = None
+
+
+@app.post("/reading/sessions/{sid}/tap")
+def reading_tap(sid: int, body: ReadingTapIn):
+    return reading_flow.tap(sid, body.surface, body.sentence, body.chunk_seq)
+
+
+@app.post("/reading/sessions/{sid}/untap")
+def reading_untap(sid: int, body: ReadingTapIn):
+    reading_flow.untap(sid, body.surface)
+    return {"ok": True}
+
+
+class ReadingCardsIn(BaseModel):
+    lemmas: list[str]
+
+
+@app.post("/reading/sessions/{sid}/cards")
+def reading_cards(sid: int, body: ReadingCardsIn):
+    s = reading_flow.session(sid)
+    if not s:
+        raise HTTPException(404, "no such session")
+    by_lemma = {u["lemma"]: u for u in s["unknown"]}
+    made = []
+    for lem in body.lemmas:
+        u = by_lemma.get(store.lemma_key(lem)) or by_lemma.get(lem)
+        if not u or u.get("carded"):
+            continue
+        span = (u.get("surface") or u["lemma"]).strip()
+        sent = (u.get("sentence") or "").strip() or f"Слово: {span}."
+        try:
+            acc, dacc = _accent_sync(span, sent, False)
+            card, _ = _commit_card(
+                sentence=sent, span_text=span, normalized_text=span, is_phrase=False,
+                translation="", source_html=anki.source_html_manual("flow reading"),
+                accented=acc, dict_accented=dacc, source="reading",
+                tags=["ru-anki", "reading"])
+            made.append(card["id"])
+        except Exception as e:  # noqa: BLE001
+            print(f"[reading] card {lem}: {e}", flush=True)
+    reading_flow.mark_carded(sid, body.lemmas)
+    if made:
+        threading.Thread(target=_rank_new_cards, daemon=True).start()
+        backup.snapshot_async("reading-cards")
+    return {"made": len(made)}
+
+
+@app.delete("/reading/sessions/{sid}")
+def reading_delete(sid: int):
+    reading_flow.delete(sid)
+    return {"deleted": True}
+
+
+# ------------------------------------------------------- proficiency
+
+@app.get("/proficiency")
+def proficiency_now(days: int = 180):
+    return proficiency.overview(days=max(14, min(730, days)))
+
+
+@app.get("/proficiency/history")
+def proficiency_hist(days: int = 180):
+    return {"history": proficiency.history(days=max(14, min(730, days)))}
+
+
+# ------------------------------------------------------- conversation partner
+
+@app.get("/convo/scenarios")
+def convo_scenarios():
+    return {"scenarios": [{"id": s["id"], "label": s["label"], "brief": s["brief"]}
+                          for s in convo.SCENARIOS],
+            "tts": tts_hq.backend(), "has_elevenlabs": tts_hq.has_elevenlabs()}
+
+
+class ConvoNewIn(BaseModel):
+    scenario_id: str | None = None
+    prompt: str = ""
+    level: str = "b1"
+
+
+@app.post("/convo/sessions")
+def convo_new(body: ConvoNewIn):
+    if not (body.scenario_id or body.prompt.strip()):
+        raise HTTPException(422, "pick a scenario or describe one")
+    sid = convo.create(body.scenario_id, body.prompt, body.level or "b1")
+    s = convo.session(sid)
+    if s and s["status"] == "error":
+        raise HTTPException(502, s.get("error") or "couldn't start the conversation")
+    return {"id": sid, "session": s}
+
+
+@app.get("/convo/sessions")
+def convo_list():
+    return {"sessions": convo.recent()}
+
+
+@app.get("/convo/sessions/{sid}")
+def convo_get(sid: int):
+    s = convo.session(sid)
+    if not s:
+        raise HTTPException(404, "no such session")
+    return s
+
+
+@app.post("/convo/sessions/{sid}/say")
+async def convo_say(sid: int, file: UploadFile = File(...)):
+    if not convo.session(sid):
+        raise HTTPException(404, "no such session")
+    data = await file.read()
+    if len(data) < 800:
+        raise HTTPException(422, "recording too short")
+    text, path = await asyncio.to_thread(convo.transcribe_upload, data, file.filename)
+    r = await asyncio.to_thread(convo.say, sid, text, path)
+    if r.get("error"):
+        raise HTTPException(502, r["error"])
+    return r
+
+
+class ConvoSayTextIn(BaseModel):
+    text: str
+
+
+@app.post("/convo/sessions/{sid}/say-text")
+def convo_say_text(sid: int, body: ConvoSayTextIn):
+    if not convo.session(sid):
+        raise HTTPException(404, "no such session")
+    r = convo.say(sid, body.text)
+    if r.get("error"):
+        raise HTTPException(502, r["error"])
+    return r
+
+
+@app.get("/convo/sessions/{sid}/turns/{seq}/audio")
+def convo_turn_audio(sid: int, seq: int):
+    p = convo.turn_audio_path(sid, seq)
+    if not p:
+        raise HTTPException(404, "no audio")
+    return FileResponse(p, media_type="audio/mp4",
+                        headers={"Cache-Control": "public, max-age=31536000"})
+
+
+@app.post("/convo/sessions/{sid}/debrief")
+def convo_do_debrief(sid: int):
+    d = convo.debrief(sid)
+    if d.get("error"):
+        raise HTTPException(502, d["error"])
+    return d
+
+
+class ConvoCardsIn(BaseModel):
+    cards: list[dict]
+
+
+@app.post("/convo/sessions/{sid}/cards")
+def convo_cards(sid: int, body: ConvoCardsIn):
+    """Turn the debrief's suggested sentences into recognition cards (Russian ->
+    English), so they land in the daily SRS."""
+    made = 0
+    for card in body.cards:
+        ru = (card.get("ru") or "").strip()
+        en = (card.get("en") or "").strip()
+        if not ru or not en:
+            continue
+        try:
+            c, _ = _commit_card(
+                sentence=ru, span_text=ru, normalized_text=ru, is_phrase=True,
+                translation=en, source_html=anki.source_html_manual("conversation practice"),
+                source="convo", tags=["ru-anki", "convo"])
+            made += 1
+        except Exception as e:  # noqa: BLE001
+            print(f"[convo] card: {e}", flush=True)
+    if made:
+        threading.Thread(target=_rank_new_cards, daemon=True).start()
+        backup.snapshot_async("convo-cards")
+    return {"made": made}
+
+
+@app.delete("/convo/sessions/{sid}")
+def convo_delete(sid: int):
+    convo.delete(sid)
+    return {"deleted": True}
+
+
+@app.get("/tts")
+def generic_tts(q: str):
+    """Speak an arbitrary short Russian string with the local macOS voice."""
+    text = (q or "").strip()
+    if not text:
+        raise HTTPException(422, "nothing to speak")
+    try:
+        path = tts.synthesize(text)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"tts failed: {e}")
+    return FileResponse(path, media_type="audio/mp4",
+                        headers={"Accept-Ranges": "bytes", "Cache-Control": "max-age=604800"})
 
 
 @app.get("/srs/cards")
@@ -1558,23 +2647,82 @@ class CardEditIn(BaseModel):
     sentence: str | None = None
     span_text: str | None = None
     translation: str | None = None
+    alt_meanings: str | None = None
+    meaning_contextual: bool | None = None
 
 
 @app.patch("/srs/cards/{card_id}")
 def srs_edit_card(card_id: int, body: CardEditIn):
-    if not srs.get_card(card_id):
+    before = srs.get_card(card_id)
+    if not before:
         raise HTTPException(404, "no such card")
     card = srs.update_card(card_id, sentence=body.sentence,
-                           span_text=body.span_text, translation=body.translation)
+                           span_text=body.span_text, translation=body.translation,
+                           alt_meanings=body.alt_meanings,
+                           meaning_contextual=body.meaning_contextual)
+    if not _TESTING and card["span_text"] != before["span_text"] and not card["is_phrase"]:
+        # span changed to a single word — re-derive its stress / dict form
+        # (update_card reset accented/dict_accented/front_word to placeholders)
+        _learn_accent_async(card["span_text"], card["sentence"])
+    if card.get("anki_note_id"):
+        _sync_soon()
     front, bolded = anki.front_html(card["sentence"], card["span_text"],
                                     bool(card["is_phrase"]))
     return {**_study_card_view(card, with_preview=False),
             "front_html": front, "bolded": bolded, "sentence": card["sentence"]}
 
 
+class RetranslateIn(BaseModel):
+    translation: str
+
+
+@app.post("/srs/cards/{card_id}/translation")
+def srs_set_translation(card_id: int, body: RetranslateIn):
+    """One-tap primary-gloss swap from the review screen. The chosen gloss
+    becomes the card's translation; the old primary is kept, folded into
+    alt_meanings so nothing is lost. Anki dual-write is re-synced if on."""
+    card = srs.get_card(card_id)
+    if not card:
+        raise HTTPException(404, "no such card")
+    new = (body.translation or "").strip()
+    if not new:
+        raise HTTPException(422, "empty translation")
+    old = (card.get("translation") or "").strip()
+    alts = [a for a in _TR_SPLIT.split(card.get("alt_meanings") or "")
+            if a.strip() and a.strip().lower() != new.lower()]
+    if old and old.lower() != new.lower() and old.lower() not in {a.strip().lower() for a in alts}:
+        alts.insert(0, old)
+    card = srs.update_card(card_id, translation=new,
+                           alt_meanings="; ".join(a.strip() for a in alts) or None)
+    if card.get("anki_note_id"):
+        _sync_soon()
+    backup.snapshot_async("card-retranslate")
+    front, bolded = anki.front_html(card["sentence"], card["span_text"],
+                                    bool(card["is_phrase"]))
+    return {**_study_card_view(card, with_preview=False),
+            "front_html": front, "bolded": bolded, "sentence": card["sentence"]}
+
+
+@app.get("/srs/cards/{card_id}/translation-options")
+def srs_translation_options(card_id: int):
+    """A few fresh alternative glosses (LLM) for the review-screen swap picker."""
+    card = srs.get_card(card_id)
+    if not card:
+        raise HTTPException(404, "no such card")
+    try:
+        opts = llm.gloss_options(
+            card.get("front_word") or card["span_text"],
+            (card.get("dict_accented") or "").replace("́", ""),
+            card.get("sentence") or "", card.get("translation") or "")
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(502, f"couldn’t get options: {e}")
+    return {"options": opts}
+
+
 @app.get("/srs/queue")
 def srs_queue(limit: int = 60):
     _maybe_rank_new()
+    _maybe_reformat_imminent()
     cards = srs.queue(limit=limit)
     titles = store.video_titles()
     ctxs = store.card_contexts(cards)
@@ -1583,6 +2731,8 @@ def srs_queue(limit: int = 60):
         v = _study_card_view(c, titles=titles)
         v["context"] = ctxs.get(c["id"])
         out.append(v)
+    _prewarm_aspect_async(out)
+    _prewarm_family_async(out)
     return {"cards": out, **srs.stats()}
 
 
@@ -1606,6 +2756,8 @@ def srs_offline(days: int = 2):
             v["frame"] = f"/videos/{v['video_id']}/frame?t={round(v['seconds'])}"
             media.append(v["frame"])
         cards.append(v)
+    _prewarm_aspect_async(cards)
+    _prewarm_family_async(cards)
     return {"generated_at": b["generated_at"], "days": b["days"],
             "cards": cards, "media": media, **srs.stats()}
 
@@ -1650,6 +2802,8 @@ def srs_card(card_id: int):
     return {**v, "preview": srs.preview(card_id),
             "issues": _card_issues(card),
             "sentence": card["sentence"], "is_phrase": bool(card["is_phrase"]),
+            "sentence_full": card.get("sentence_full"),
+            "format_ver": card.get("format_ver", 1),
             "source": card.get("source"), "candidate_id": card.get("candidate_id"),
             "created_at": card.get("created_at"), "last_review": card.get("last_review"),
             "reps": card["reps"], "lapses": card["lapses"],
@@ -1722,6 +2876,75 @@ def srs_fix_cards(background: BackgroundTasks):
     return {"span_stress_stripped": stressed, "unbolded_queued": unbolded}
 
 
+_REFORMAT_LOCK = threading.Lock()
+
+
+def _reformat_one_batch(rows):
+    """Refine a chunk of cards to the v2 back format. Returns count updated."""
+    items = []
+    for r in rows:
+        word = (r["span_text"] or r.get("front_word") or "").strip()
+        dict_form = (r.get("dict_accented") or r.get("front_word") or word or "").strip()
+        sent = (r.get("sentence_full") or r.get("sentence") or "").strip()
+        items.append((word, dict_form, sent, r.get("translation") or ""))
+    try:
+        out = llm.card_meanings(items)
+    except Exception as e:  # noqa: BLE001
+        print(f"[reformat] batch failed: {e}", flush=True)
+        return 0
+    done = 0
+    for r, o in zip(rows, out):
+        if not o or not (o.get("primary") or "").strip():
+            continue
+        raw_ctx = (o.get("context") or "").strip()
+        base = (r.get("sentence_full") or r.get("sentence") or "").strip()
+        # only accept a trimmed context if the target is still locatable in it
+        ctx = ""
+        if raw_ctx and raw_ctx != base:
+            _, ok = anki.front_html(raw_ctx, r["span_text"] or "", bool(r["is_phrase"]))
+            ctx = raw_ctx if ok else ""
+        if srs.apply_reformat(r["id"], o["primary"].strip(),
+                              (o.get("alt") or "").strip(), ctx,
+                              bool(o.get("primary_is_contextual"))):
+            done += 1
+    return done
+
+
+def _reformat_cards(limit=None, force=False):
+    """Backfill the v2 card back — one clean primary meaning, concise alt
+    meanings, a context trimmed to a single clause. The original long context is
+    kept in sentence_full, so the change is reversible."""
+    if not _REFORMAT_LOCK.acquire(blocking=False):
+        return
+    try:
+        rows = srs.cards_to_reformat(limit=limit, force=force)
+        if not force:
+            # also re-run v2 cards that slipped through not matching the spec
+            seen = {r["id"] for r in rows}
+            rows += [r for r in srs.cards_failing_v2(limit=limit or 60)
+                     if r["id"] not in seen]
+        if not rows:
+            return
+        print(f"[reformat] {len(rows)} cards -> v2 (force={force})…", flush=True)
+        BATCH, done = 10, 0
+        for i in range(0, len(rows), BATCH):
+            done += _reformat_one_batch(rows[i:i + BATCH])
+            print(f"[reformat] {done}/{len(rows)}", flush=True)
+        _sync_soon()
+        backup.snapshot_async("reformat-cards")
+        print(f"[reformat] done: {done} cards updated", flush=True)
+    finally:
+        _REFORMAT_LOCK.release()
+
+
+@app.post("/srs/reformat-cards")
+def srs_reformat_cards(background: BackgroundTasks, limit: int | None = None,
+                       force: bool = False):
+    pending = srs.count_to_reformat()
+    background.add_task(_reformat_cards, limit, force)
+    return {"pending": pending, "queued": True, "force": force, "limit": limit}
+
+
 @app.get("/srs/cards/{card_id}/preview")
 def srs_card_preview(card_id: int):
     return srs.preview(card_id)
@@ -1763,7 +2986,10 @@ def srs_review(card_id: int, body: ReviewIn):
     except KeyError:
         raise HTTPException(404, "no such card")
     backup.snapshot_async("srs-review")
-    return {"card": _study_card_view(card), **srs.stats()}
+    v = _study_card_view(card)
+    v["preview"] = srs.preview(card)
+    v["due"] = card.get("due")
+    return {"card": v, "leeched": bool(card.get("leeched")), **srs.stats()}
 
 
 @app.post("/srs/reviews/flush")
@@ -1896,7 +3122,8 @@ def _rank_new_cards(rescore_all=False):
             chunk = rows[i:i + BATCH]
             try:
                 scores = llm.learn_priority(
-                    [(r.get("front_word") or r["span_text"], r.get("translation") or "")
+                    [(r.get("front_word") or r.get("span_text") or r.get("sentence") or "",
+                      r.get("translation") or "")
                      for r in chunk])
             except Exception as e:  # noqa: BLE001
                 print(f"[learn] batch {i}: {e}", flush=True)
@@ -1928,6 +3155,51 @@ def _maybe_rank_new():
     _last_rank_kick = time.time()
     threading.Thread(target=_rank_new_cards, kwargs={"rescore_all": stale_day},
                      daemon=True).start()
+
+
+_last_reformat_kick = 0.0
+
+
+def _maybe_reformat_imminent():
+    """Once a day, refine the next couple days' worth of about-to-be-introduced
+    cards to the current card-format spec, so you never meet a stale card. Runs
+    in a thread; the reformat lock keeps it from stacking up."""
+    global _last_reformat_kick
+    if _TESTING or time.time() - _last_reformat_kick < 300:
+        return
+    today = srs._day_start_iso()[:10]
+    if srs.get_setting("reformat_day") == today:
+        return
+    if srs.count_to_reformat() == 0:
+        srs.set_setting("reformat_day", today)
+        return
+    _last_reformat_kick = time.time()
+
+    def _run():
+        _reformat_cards(limit=max(80, srs.new_per_day() * 2))
+        srs.set_setting("reformat_day", srs._day_start_iso()[:10])
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+_last_prof_snap = 0.0
+
+
+def _maybe_prof_snapshot():
+    """Refresh today's proficiency history row in the background — throttled, so
+    it's free to call on every stats / queue load."""
+    global _last_prof_snap
+    if _TESTING or time.time() - _last_prof_snap < 120:
+        return
+    _last_prof_snap = time.time()
+    threading.Thread(target=lambda: _swallow(proficiency.snapshot), daemon=True).start()
+
+
+def _swallow(fn, *a, **kw):
+    try:
+        fn(*a, **kw)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @app.post("/srs/rank-new")
@@ -1976,6 +3248,24 @@ def srs_backfill_front_words(background: BackgroundTasks, force: bool = False):
     return {"queued": len(srs.cards_for_front_word_backfill(force=force)), "force": force}
 
 
+def _backfill_aspects(force=False):
+    if not _ASPECT_LOCK.acquire(blocking=False):
+        print("[aspect] backfill already running", flush=True)
+        return
+    try:
+        aspect.backfill(force=force)
+    finally:
+        _ASPECT_LOCK.release()
+
+
+@app.post("/srs/backfill-aspects")
+def srs_backfill_aspects(background: BackgroundTasks, force: bool = False):
+    """Fill in verb-aspect tags (aspect + partner) for every vocab card whose
+    target word is a verb. Cached lemma-keyed; `force=1` re-checks them all."""
+    background.add_task(_backfill_aspects, force)
+    return {"queued": aspect.pending_count(force=force), "force": force}
+
+
 @app.get("/srs/export")
 def srs_export():
     path = os.path.join(ytdlp.MEDIA_DIR, "ru-anki-srs.apkg")
@@ -1988,6 +3278,7 @@ def srs_export():
 def get_settings():
     return {"anki_dual_write": srs.anki_dual_write(),
             "new_per_day": srs.new_per_day(),
+            "prod_per_day": srs.prod_per_day(),
             "card_front": srs.card_front()}
 
 
@@ -2043,6 +3334,13 @@ def post_settings(body: SettingIn, background: BackgroundTasks):
         srs.set_setting(body.key, bool(body.value))
     elif body.key == "new_per_day":
         srs.set_setting(body.key, max(0, min(999, int(body.value))))
+    elif body.key == "prod_per_day":
+        srs.set_setting(body.key, max(0, min(999, int(body.value))))
+    elif body.key == "drill_grammar_level":
+        v = str(body.value).lower()
+        if v not in grammar.LEVELS:
+            raise HTTPException(422, "bad level")
+        srs.set_setting(body.key, v)
     elif body.key == "card_front":
         v = str(body.value)
         if v not in ("sentence", "word"):

@@ -59,6 +59,25 @@ def _lemmas_all(tok: str) -> frozenset:
 
 
 @functools.lru_cache(maxsize=100_000)
+def pos_of(tok: str) -> str:
+    """Coarse part of speech of `tok`'s top parse: 'noun' | 'verb' | 'adj' |
+    'adv' | 'other'. For picking drillable words off the frequency list."""
+    p = _morph().parse(tok)
+    if not p:
+        return "other"
+    t = str(p[0].tag)
+    if "NOUN" in t:
+        return "noun"
+    if "INFN" in t or "VERB" in t or "PRTF" in t or "GRND" in t:
+        return "verb"
+    if "ADJF" in t or "ADJS" in t or "COMP" in t:
+        return "adj"
+    if "ADVB" in t:
+        return "adv"
+    return "other"
+
+
+@functools.lru_cache(maxsize=100_000)
 def yo_lemma(tok: str) -> str:
     """Citation form WITH ё preserved (pymorphy's dictionary is ё-aware:
     'полет' -> 'полёт', 'все' -> 'всё'). For the card/word-page spelling hint —

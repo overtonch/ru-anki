@@ -19,8 +19,16 @@ pymorphy3-dicts-ru==2.4.417150.4580142
 mlx-whisper==0.4.3
 faster-whisper==1.1.0
 
+# High-quality local Russian TTS for the Speech Lab (Silero v4 via torch.hub).
+omegaconf==2.3.1
+
 # In-app spaced repetition (FSRS scheduler)
 fsrs==6.3.2
+
+# Flow-reading stress marks: no runtime dep — the 3.2M-wordform stress
+# dictionary is bundled at app/data/stress/*.json.gz (from the ruaccent project,
+# Russian-Wiktionary-derived) and loaded into a local SQLite on first run.
+# app/accent.py adds the marks; an LLM pass resolves homographs + OOV.
 
 # Tests only (./check.sh). No runtime dependency.
 pytest==9.1.1

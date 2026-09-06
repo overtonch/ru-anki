@@ -8,7 +8,20 @@
 - [x] `ru-anki-data` private repo created; off-machine backup pushing
       (`/health` → `backup.git.last_ok: true`)
 - [ ] `sudo pmset -a autorestart 1 disksleep 0`  (any admin terminal, one time;
-      currently autorestart=0, disksleep=10)
+      currently autorestart=0, disksleep=10) — without this a power blip leaves
+      the Mac off until someone powers it on
+- [ ] **FileVault + no auto-login = every reboot needs physical presence.** The
+      launchd *user* agent can't start until someone logs in, and FileVault
+      blocks auto-login. Pick one: (a) FileVault OFF + `sysadminctl` auto-login +
+      autorestart so the box fully self-heals, or (b) accept manual recovery, or
+      (c) a small UPS for blips. Today = option (b) by default.
+- [ ] Heartbeat: `RU_HEARTBEAT_URL` in the plist is still empty → no alert if the
+      server/Tailscale goes down. Make a healthchecks.io check (~5 min), paste
+      the URL, `launchctl kickstart -k`.
+- [ ] Second physical copy of the local snapshots: they live only on the internal
+      SSD next to the working DB. `rsync` `~/Library/Application Support/ru-anki/
+      backups` to an external drive or rclone target on a cron. (The GitHub
+      data-git repo is the off-machine copy but rebuild_db.py is a cold restore.)
 - [ ] Re-add the home-screen app from `https://angelicas-imac.tail0916c1.ts.net/`
       (old icon points at `http://100.x` — offline video / SW / PWA need https)
 - [ ] Heartbeat alerts: make a healthchecks.io check, put its URL in the plist's
@@ -19,7 +32,82 @@
 - [ ] Leave the Mac plugged in, lid open
 - [ ] Know the recovery path: `python rebuild_db.py ~/ru-anki-data`
 
+## Backup hardening (full analysis: `deploy/BACKUP.md`)
+
+Today the ONLY thing that survives the Mac dying is the `ru-anki-data` GitHub
+repo (cold restore via `rebuild_db.py`). No Time Machine, no iCloud (abandoned),
+no second remote, no alert if backups stop. Cards + review history + the reading
+library + proficiency graphs all ride on this.
+
+- [ ] **COMMIT + PUSH THE CODE.** `github.com/overtonch/ru-anki` last commit is
+      2026-09-01; ~37 untracked + ~20 modified files (all the SRS / speaking /
+      reading / convo / proficiency work) exist only on the internal SSD. Cheap
+      to fix (`git add -A && git commit && git push`); scariest gap if the Mac
+      dies. Consider a launchd timer that auto-commits WIP.
+
+- [x] Restore is verified in CI — `tests/test_backup_restore.py` runs the full
+      export→rebuild round-trip in `check.sh` (catches schema drift in
+      `backup.GIT_TABLES` / `rebuild_db.TABLES`). Keep green.
+- [x] Reading stories/chunks + proficiency snapshots added to the git export
+      (were previously not backed up at all).
+- [ ] **Heartbeat** — healthchecks.io check, URL in the plist's
+      `RU_HEARTBEAT_URL`, ping from `_git_backup` on a successful push. (Also
+      listed under reliability above — same check can cover both.)
+- [ ] **Second git remote** — GitLab/Codeberg mirror; `_git_backup` pushes to
+      both. One line against losing the GitHub account.
+- [ ] **Turn on Time Machine** (external or network disk). `~/Library/Application
+      Support/ru-anki` is already TM-included → instant versioned 2nd physical
+      copy of snapshots + git working copy.
+- [ ] **Off-site object copy** — `restic`/`rclone` of `vocab-latest.db` + the
+      NDJSON dir to B2 / S3 / rsync.net on a launchd hourly timer. Encrypted,
+      dedup'd. The real "house burned down" copy.
+- [ ] **Backup health in the UI** — `/backup/status` has last-push + ok flag;
+      show it on stats/settings, red when last off-site success >24h old.
+- [ ] **Disk-space guard** in `backup.maybe_snapshot` — skip + flag if free
+      space < ~1 GB (currently a full disk just logs a caught exception).
+- [ ] Occasional `git -C data-git gc` — ~4k loose objects, ~110 MB, never gc'd.
+
 ## Decided but not built
+
+- (done 2026-09-01) **Card format v2** — `CARDS.md` is the spec. Back = one clean
+  bold `translation` + concise `alt_meanings` + a one-clause `sentence` (full
+  context kept in `sentence_full`). `meaning_contextual` flags the rare
+  in-context primary. `POST /srs/reformat-cards` backfills; `_maybe_reformat_imminent`
+  (daily, on queue/stats load) brings the next ~2 days of new cards up to spec
+  and re-runs v2 cards that fail `srs.cards_failing_v2`; `_refine_new_card_async`
+  refines new cards at creation. `llm.card_meanings` does the batched LLM work.
+- (done 2026-09-02) **Reformulation speaking practice** — `app/speak.py` +
+  `speak_*` tables + `srs_cards.card_type` ('recognition'|'production'). LLM
+  hands you a concrete everyday thought in English (domain-rotated via
+  `llm.SPEAK_DOMAINS` — family, restaurants, work, opinions…); you say it in
+  Russian (typed or hold-to-record → local Whisper `/speak/transcribe`); the LLM
+  returns 3 native reformulations of the ORIGINAL thought (register-labelled) +
+  a tiered inline diff (`llm.speaking_feedback`, one big call, ~30s, background
+  task). Gaps → production cards (`srs.create_production_card`, learn_score 92,
+  bypass the daily recognition budget in `srs.queue`, never orphans). Reviewed
+  self-graded front-to-back (English cue → recall + speak Russian, TTS on
+  reveal). `#speakView` batch flow (3/5/10), `/speak/stats` mistake-category
+  view. Tests: `test_speak.py`. SW v110.
+- (done 2026-09-02) **Coloured-word tap/drag fixes** — a tap on a yellow/green
+  word with any finger drift was eaten by `attachPlayerSwipe` / the transcript
+  drag-select and either did nothing or looked de-highlighted; phrase drag-select
+  didn't exist on the fullscreen caption. Fixes: `attachPlayerSwipe` ignores
+  pointers that start on `.capw`; taps resolve from the word the finger went DOWN
+  on (`attachWordSelect` `end()`), not the drifting click target; `attachWordSelect`
+  generalised and wired to `#capOverlay` too (immediate drag, no long-press since
+  the caption can't scroll). All screens now paint via `wordClasses()` and route
+  via `wordActionKind()` — pinned by `tests/word_render.test.mjs` (in check.sh)
+  + `test_api.py::test_{watch,read}_word_flag_states` + `tests/tap_interaction.mjs`
+  (browser, run by hand). SW v109.
+- (done 2026-09-02) **Catch-up refresher** — `GET /srs/refresher?days=N`. See
+  the server-architecture memory.
+- (done 2026-09-01) **Song audio sync** — `app/lrcfix.py`: Whisper-transcribe the
+  audio, match transcript lines to lyric lines, robust-median the time gaps to
+  recover the constant LRC offset, apply via `store.shift_song_timing`
+  (subtitle_lines + VTT + card timestamps, `videos.lrc_offset` running total).
+  Auto-runs on song ingest; `POST /songs/{id}/fix-audio-sync`; ◀ ▶ nudge +
+  "check audio sync" on the song page. Rejects tempo-drift songs (flags for
+  swap-source). Backfill: Husky −0.8s, 4 already fine, Triagrutrika flagged.
 
 - (done 2026-08-28) **In-app SRS** — `app/srs.py`, FSRS via `py-fsrs`,
   `srs_cards` + `srs_reviews` + `app_settings`. Study view in the PWA. Audio

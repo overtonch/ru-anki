@@ -15,9 +15,10 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DB = os.environ.get("VOCAB_DB", os.path.join(HERE, "vocab.db"))
+# must match backup.DEFAULT_DIR
 BACKUP_DIR = os.environ.get(
     "RU_BACKUP_DIR",
-    os.path.expanduser("~/Library/Mobile Documents/com~apple~CloudDocs/ru-anki-backup"),
+    os.path.expanduser("~/Library/Application Support/ru-anki/backups"),
 )
 
 

@@ -14,6 +14,10 @@ vocab.db.bak-*
 *.apkg
 out/
 
+# stress dictionary — built from the committed app/data/stress/*.json.gz on first run
+app/data/stress.db
+app/data/stress.db-*
+
 # early-development scratch (superseded by app/)
 transcript.txt
 cand_v1.json

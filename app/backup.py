@@ -62,6 +62,13 @@ def snapshot(reason="manual"):
     global _last_snapshot_at, _last_db_mtime
     with _lock:
         os.makedirs(BACKUP_DIR, exist_ok=True)
+        # sweep up .tmp files a previously-killed snapshot left behind
+        for f in os.listdir(BACKUP_DIR):
+            if f.endswith(".tmp"):
+                try:
+                    os.remove(os.path.join(BACKUP_DIR, f))
+                except OSError:
+                    pass
         ts = time.strftime("%Y%m%d-%H%M%S")
         snap = os.path.join(BACKUP_DIR, f"vocab-{ts}.db")
         tmp = snap + ".tmp"
@@ -130,6 +137,59 @@ def snapshot(reason="manual"):
     return manifest
 
 
+# Every table that holds data you can't cheaply regenerate. Left out on purpose:
+# freq / stoplist / dict_ru (rebuilt by the build_*.py scripts), subtitle_lines
+# (re-derived from videos.raw_subs), candidate_sentences_cache (memoised LLM
+# output), known_lexicon (legacy, folded into resolved_words). Order matters for
+# FK-clean reload: parents before children.
+GIT_TABLES = (
+    ("videos", "SELECT * FROM videos ORDER BY id"),
+    ("candidates", "SELECT * FROM candidates ORDER BY id"),
+    ("resolved_words", "SELECT * FROM resolved_words ORDER BY resolved_at"),
+    ("texts", "SELECT * FROM texts ORDER BY id"),
+    ("text_chapters", "SELECT * FROM text_chapters ORDER BY id"),
+    ("srs_cards", "SELECT * FROM srs_cards ORDER BY id"),
+    ("srs_reviews", "SELECT * FROM srs_reviews ORDER BY id"),
+    ("app_settings", "SELECT * FROM app_settings ORDER BY key"),
+    ("word_accent", "SELECT * FROM word_accent ORDER BY lemma"),
+    ("word_family", "SELECT * FROM word_family ORDER BY lemma"),
+    ("word_gloss", "SELECT * FROM word_gloss ORDER BY lemma"),
+    ("lyric_notes", "SELECT * FROM lyric_notes ORDER BY video_id, line_index"),
+    # grammar-drill history (the graded cards only — the unseen buffer regenerates)
+    ("drill_items", "SELECT * FROM drill_items WHERE verdict IS NOT NULL ORDER BY id"),
+    ("drill_lapse", "SELECT * FROM drill_lapse ORDER BY id"),
+    # verbs-of-motion history (graded cards only — the unseen buffer regenerates)
+    ("motion_items", "SELECT * FROM motion_items WHERE verdict IS NOT NULL ORDER BY id"),
+    ("motion_lapse", "SELECT * FROM motion_lapse ORDER BY id"),
+    # chunk-deck history (graded cards + the per-chunk scaffold state)
+    ("chunk_items", "SELECT * FROM chunk_items WHERE verdict IS NOT NULL ORDER BY id"),
+    ("chunk_lapse", "SELECT * FROM chunk_lapse ORDER BY id"),
+    ("chunk_stage", "SELECT * FROM chunk_stage ORDER BY chunk_id"),
+    ("journal_sessions", "SELECT id, duration, level, transcript, status, error, analysis, "
+     "created_at FROM journal_sessions ORDER BY id"),
+    # speech lab — the text is real content; audio_path/status/voice regenerate
+    ("speeches", "SELECT id, title, topic, topic_id, source, ru, en, notes, practice_count, "
+     "last_practiced, created_at FROM speeches ORDER BY id"),
+    # flow reading — the generated stories ARE content (each is a unique LLM
+    # generation the reader may return to), plus the words they didn't know
+    ("reading_flow_sessions", "SELECT id, topic, prompt, domain, rank_est, chunks, words_read, "
+     "unknown_seen, summary, status, created_at, last_read_at FROM reading_flow_sessions ORDER BY id"),
+    ("reading_flow_chunks", "SELECT session_id, seq, text, text_accented, n_words, read, created_at "
+     "FROM reading_flow_chunks ORDER BY session_id, seq"),
+    ("reading_flow_unknown", "SELECT session_id, lemma, surface, sentence, rank, carded, at "
+     "FROM reading_flow_unknown ORDER BY session_id, at"),
+    # conversation practice — transcripts + debriefs are real content; audio regenerates
+    ("convo_sessions", "SELECT id, scenario_id, prompt, persona, situation, goal, level, "
+     "status, debrief, created_at FROM convo_sessions ORDER BY id"),
+    ("convo_turns", "SELECT id, session_id, seq, role, text, translation, meta, created_at "
+     "FROM convo_turns ORDER BY id"),
+    # proficiency history — the level graphs; small and worth keeping
+    ("proficiency_snapshots", "SELECT day, known_words, known_rank, cefr, cards_total, "
+     "cards_word, cards_mature, words_read, comprehension, retention, domains, created_at "
+     "FROM proficiency_snapshots ORDER BY day"),
+)
+
+
 def _git_backup(reason):
     """Export the full DB as text into the git repo and push it. Best-effort."""
     global _last_git_push, _last_git_ok
@@ -138,12 +198,11 @@ def _git_backup(reason):
             conn = sqlite3.connect(store.DB)
             conn.row_factory = sqlite3.Row
             try:
-                _export_ndjson(conn, os.path.join(GIT_DIR, "videos.ndjson"),
-                               "SELECT * FROM videos ORDER BY id")
-                _export_ndjson(conn, os.path.join(GIT_DIR, "candidates.ndjson"),
-                               "SELECT * FROM candidates ORDER BY id")
-                _export_ndjson(conn, os.path.join(GIT_DIR, "resolved_words.ndjson"),
-                               "SELECT * FROM resolved_words ORDER BY resolved_at")
+                for name, query in GIT_TABLES:
+                    try:
+                        _export_ndjson(conn, os.path.join(GIT_DIR, f"{name}.ndjson"), query)
+                    except sqlite3.OperationalError as e:  # table not in an older DB
+                        print(f"[backup] skip {name}: {e}")
             finally:
                 conn.close()
 

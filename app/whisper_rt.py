@@ -119,19 +119,19 @@ def _speech_seconds(wav):
 
 # ---------------------------------------------------------------- transcription
 
-def _mlx_segment(wav):
+def _mlx_segment(wav, language="ru"):
     from mlx_whisper import transcribe as _t
     with _mlx_lock:
-        r = _t(wav, path_or_hf_repo=MODEL, language="ru",
+        r = _t(wav, path_or_hf_repo=MODEL, language=language,
                word_timestamps=False, condition_on_previous_text=True)
     return [(s["start"], s["end"], (s.get("text") or "").strip())
             for s in r.get("segments", [])]
 
 
-def _fw_segment(wav):
+def _fw_segment(wav, language="ru"):
     m = _load_fw()
     with _fw_lock:
-        segs, _ = m.transcribe(wav, language="ru", condition_on_previous_text=True,
+        segs, _ = m.transcribe(wav, language=language, condition_on_previous_text=True,
                                vad_filter=_VAD)
         return [(s.start, s.end, (s.text or "").strip()) for s in segs]
 
@@ -180,10 +180,11 @@ def _transcribe_whispercpp(src, progress=None):
     return cues
 
 
-def transcribe(src, duration=0, progress=None):
+def transcribe(src, duration=0, progress=None, language="ru"):
     """`src` = a local audio/video file. -> [(start_sec, end_sec, text)].
-    `progress(frac)` fires as passes complete."""
-    if _whispercpp_ok():
+    `progress(frac)` fires as passes complete. `language=None` lets Whisper
+    auto-detect per window (for code-switched speech)."""
+    if language == "ru" and _whispercpp_ok():
         try:
             return _transcribe_whispercpp(src, progress)
         except Exception as e:  # noqa: BLE001
@@ -254,11 +255,14 @@ def transcribe(src, duration=0, progress=None):
                     os.remove(wav)
             bump()
 
+    import functools
+    mlx_fn = functools.partial(_mlx_segment, language=language)
+    fw_fn = functools.partial(_fw_segment, language=language)
     ex = threading.Thread(target=extractor, daemon=True)
     ex.start()
-    threads = [threading.Thread(target=worker, args=(_mlx_segment, "gpu"), daemon=True)]
+    threads = [threading.Thread(target=worker, args=(mlx_fn, "gpu"), daemon=True)]
     if want_cpu:
-        threads.append(threading.Thread(target=worker, args=(_fw_segment, "cpu"),
+        threads.append(threading.Thread(target=worker, args=(fw_fn, "cpu"),
                                         daemon=True))
     for t in threads:
         t.start()

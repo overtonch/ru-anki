@@ -8,6 +8,7 @@ import datetime as _dt
 import hashlib as _hashlib
 import json as _json
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -17,7 +18,8 @@ if HERE not in sys.path:
 import anki           # noqa: E402
 import store          # noqa: E402
 
-NEW_PER_DAY = int(os.environ.get("RU_SRS_NEW_PER_DAY", "20"))   # default; overridable in app_settings
+NEW_PER_DAY = int(os.environ.get("RU_SRS_NEW_PER_DAY", "50"))   # default; overridable in app_settings
+PROD_PER_DAY = int(os.environ.get("RU_SRS_PROD_PER_DAY", "20"))  # of NEW_PER_DAY, aim for this many production
 DAY_CUTOFF_HOUR = int(os.environ.get("RU_SRS_DAY_CUTOFF_HOUR", "4"))
 
 
@@ -28,7 +30,21 @@ def new_per_day():
     except (TypeError, ValueError):
         return NEW_PER_DAY
 
+
+def prod_per_day():
+    """How many of the daily new-card budget should be production cards, when
+    that many are available. Recognition backfills the rest, and vice versa."""
+    try:
+        v = int(get_setting("prod_per_day", PROD_PER_DAY))
+        return max(0, min(new_per_day(), v))
+    except (TypeError, ValueError):
+        return min(new_per_day(), PROD_PER_DAY)
+
 RATINGS = {1: "Again", 2: "Hard", 3: "Good", 4: "Easy"}
+
+# A card failed this many times is a "leech" — it's not sticking and it clutters
+# every day's review. Park it (suspend) so the user can rework or drop it.
+LEECH_LAPSES = int(os.environ.get("RU_SRS_LEECH_LAPSES", "8"))
 
 _SCHED = None
 
@@ -120,18 +136,21 @@ _FSRS_COLS = ("fsrs_state", "fsrs_step", "stability", "difficulty",
 
 
 def _aware(s):
-    """FSRS does aware-datetime arithmetic; a naive timestamp in the DB (old
-    data, a restored backup, a hand-edit) would 500 the whole queue. Coerce to
-    UTC-aware ISO."""
+    """FSRS does aware-datetime arithmetic; a naive timestamp anywhere (old data,
+    a restored backup, a hand-edit, or a dict whose date was already parsed)
+    would 500 the whole queue. Coerce str OR datetime to UTC-aware ISO."""
     if not s:
         return s
-    try:
-        dt = _dt.datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=_dt.timezone.utc)
-        return dt.isoformat()
-    except (ValueError, TypeError):
-        return s
+    if isinstance(s, _dt.datetime):
+        dt = s
+    else:
+        try:
+            dt = _dt.datetime.fromisoformat(s)
+        except (ValueError, TypeError):
+            return s
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_dt.timezone.utc)
+    return dt.isoformat()
 
 
 def _row_to_fsrs(row):
@@ -213,6 +232,40 @@ def set_front_word(card_id, front_word):
     return 1
 
 
+def missed_review_cards(days=3):
+    """The last few days' worth of cards you didn't nail — a no-stakes re-run.
+    Two sources, unioned and de-duped:
+      • backlog: cards that came due on a past day (before today's cutoff) within
+        the window and are still unreviewed — reviews you skipped;
+      • fumbled: EVERY card you rated "Again" at least once in the window.
+    The only thing held back is a card that's due right now — you'll meet that as
+    a real review in the live queue, so no need to drill it here too. (This used
+    to also hide anything due within ~2 days, which quietly dropped more than
+    half of a heavy week's fumbles.)
+    Flip-through only; the caller never posts /review for these, so working
+    through them here doesn't clear the backlog or move anything on the
+    timeline."""
+    days = max(1, min(30, int(days)))
+    day_start = _day_start_iso()
+    floor = (_dt.datetime.fromisoformat(day_start)
+             - _dt.timedelta(days=days)).isoformat()
+    since = (_utc() - _dt.timedelta(days=days)).isoformat()
+    now_i = _iso(_utc())
+    c = store.connect()
+    rows = c.execute(
+        """SELECT * FROM srs_cards
+           WHERE suspended = 0 AND last_review IS NOT NULL
+             AND ( (due < :day_start AND due >= :floor)
+                   OR ( due > :now
+                        AND id IN (SELECT card_id FROM srs_reviews
+                                   WHERE rating = 1 AND reviewed_at >= :since) ) )
+           ORDER BY due ASC, id ASC""",
+        {"day_start": day_start, "floor": floor, "since": since, "now": now_i}
+    ).fetchall()
+    c.close()
+    return [_card_dict(r) for r in rows]
+
+
 def cards_for_video(video_id):
     """Every study card sourced from this video (directly or via its candidates),
     oldest first — for the per-content 'practice these cards' refresher."""
@@ -272,6 +325,32 @@ def create_card(sentence, span_text, normalized_text, is_phrase, translation,
     return _card_dict(row)
 
 
+def create_production_card(front, back, *, speak_ref=None, note=None, meta=None):
+    """A say-it-in-Russian card. `front` is the English cue, `back` is the Russian
+    to produce; `note` (optional) is a short explanation shown under the answer;
+    `meta` (optional dict) carries render extras — `given` chips, `target`
+    highlight span(s), `contrast`, `skill`. Flows through the normal FSRS queue;
+    the study screen renders it front-to-back (English → recall Russian aloud)."""
+    front, back = (front or "").strip(), _strip_stress((back or "").strip())
+    f = _fresh_card_fields()
+    meta_json = _json.dumps({k: v for k, v in (meta or {}).items() if v}, ensure_ascii=False) \
+        if meta else None
+    c = store.connect()
+    cur = c.execute(
+        """INSERT INTO srs_cards
+             (sentence, translation, span_text, normalized_text, is_phrase,
+              front_word, alt_meanings, card_type, speak_ref, card_meta, source, learn_score,
+              fsrs_state, fsrs_step, stability, difficulty, due, last_review, format_ver)
+           VALUES (?,?,?,?,1, ?,?,'production',?,?, 'speak', NULL, ?,?,?,?,?,?, 2)""",
+        (back, front, back, store.norm(back), front, (note or "").strip() or None,
+         speak_ref, meta_json, f["fsrs_state"], f["fsrs_step"], f["stability"], f["difficulty"],
+         f["due"], f["last_review"]))
+    c.commit()
+    row = c.execute("SELECT * FROM srs_cards WHERE id=?", (cur.lastrowid,)).fetchone()
+    c.close()
+    return _card_dict(row)
+
+
 def _snap_ts(video_id, sentence, normalized_text, timestamp):
     """Correct a card's stored HH:MM:SS to where the word is actually spoken."""
     if not (video_id and timestamp):
@@ -321,19 +400,31 @@ def set_anki_note(card_id, note_id):
 
 
 def update_card(card_id, *, sentence=None, span_text=None, translation=None,
-                accented=None):
+                accented=None, alt_meanings=None, meaning_contextual=None):
     """Edit a card's content (not its schedule). Returns the updated card dict."""
     sets, args = [], []
     if sentence is not None:
         sets += ["sentence=?"]; args += [_strip_stress(sentence.strip())]
     if span_text is not None:
         sp = _strip_stress(span_text.strip())      # the target is read without marks
-        sets += ["span_text=?", "normalized_text=?", "is_phrase=?"]
-        args += [sp, store.lemma_key(sp), 1 if " " in sp else 0]
+        ph = " " in sp
+        nt = store.lemma_key(sp)
+        # front_word (shown as the front in 'word' mode) and the stress hints are
+        # derived from the target — they go stale on a span change. Reset them to
+        # a sane instant value; the async re-derive (see main._learn_accent_async
+        # from the edit endpoint) fills the accented forms back in.
+        fw = sp if ph else (store.yo_form(nt) or nt)
+        sets += ["span_text=?", "normalized_text=?", "is_phrase=?",
+                 "front_word=?", "accented=NULL", "dict_accented=NULL"]
+        args += [sp, nt, 1 if ph else 0, fw]
     if translation is not None:
         sets += ["translation=?"]; args += [translation.strip()]
     if accented is not None:
         sets += ["accented=?"]; args += [accented.strip() or None]
+    if alt_meanings is not None:
+        sets += ["alt_meanings=?"]; args += [alt_meanings.strip() or None]
+    if meaning_contextual is not None:
+        sets += ["meaning_contextual=?"]; args += [1 if meaning_contextual else 0]
     if not sets:
         return get_card(card_id)
     c = store.connect()
@@ -342,6 +433,78 @@ def update_card(card_id, *, sentence=None, span_text=None, translation=None,
     c.commit()
     c.close()
     return get_card(card_id)
+
+
+def cards_to_reformat(limit=None, force=False):
+    """Cards still on the v1 back format, most-imminent first (the ones about to
+    be introduced get cleaned up before you see them). force=True re-does cards
+    already on v2 as well (e.g. the criteria changed)."""
+    c = store.connect()
+    where = "" if force else "WHERE format_ver < 2"
+    q = ("SELECT id, span_text, normalized_text, is_phrase, sentence, sentence_full, "
+         "translation, front_word, dict_accented FROM srs_cards " + where +
+         " ORDER BY (last_review IS NOT NULL) DESC, learn_score DESC, id")
+    if limit:
+        q += f" LIMIT {int(limit)}"
+    rows = c.execute(q).fetchall()
+    c.close()
+    return [dict(r) for r in rows]
+
+
+def count_to_reformat():
+    c = store.connect()
+    n = c.execute("SELECT COUNT(*) n FROM srs_cards WHERE format_ver < 2").fetchone()["n"]
+    c.close()
+    return n
+
+
+_V2_BAD_PRIMARY = re.compile(r"[/;]| or ")
+
+
+def cards_failing_v2(limit=60):
+    """v2 cards that don't actually meet the format spec — the big-bold
+    translation is still a list / multiple senses, or the context never got
+    trimmed and is a long paragraph. The daily pass re-runs these."""
+    c = store.connect()
+    rows = c.execute(
+        "SELECT id, span_text, normalized_text, is_phrase, sentence, sentence_full, "
+        "translation, front_word, dict_accented FROM srs_cards "
+        "WHERE format_ver = 2 ORDER BY (last_review IS NOT NULL) DESC, learn_score DESC").fetchall()
+    c.close()
+    out = []
+    for r in rows:
+        tr = (r["translation"] or "").strip()
+        bad = (not tr
+               or _V2_BAD_PRIMARY.search(tr)
+               or len(tr) > 40
+               or len((r["sentence"] or "")) > 160)
+        if bad:
+            out.append(dict(r))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def apply_reformat(card_id, primary, alt, context, contextual):
+    """Write the v2 back onto a card. Keeps the original long context in
+    sentence_full; only trims `sentence` when `context` is a usable clause."""
+    c = store.connect()
+    row = c.execute("SELECT sentence, sentence_full, translation FROM srs_cards WHERE id=?",
+                    (card_id,)).fetchone()
+    if not row:
+        c.close()
+        return False
+    full = row["sentence_full"] or row["sentence"]
+    ctx = (context or "").strip()
+    new_sentence = ctx if ctx else row["sentence"]
+    c.execute(
+        """UPDATE srs_cards SET translation=?, alt_meanings=?, sentence=?,
+             sentence_full=?, meaning_contextual=?, format_ver=2 WHERE id=?""",
+        ((primary or row["translation"] or "").strip(), (alt or "").strip(),
+         new_sentence, full, 1 if contextual else 0, card_id))
+    c.commit()
+    c.close()
+    return True
 
 
 def strip_span_stress():
@@ -401,6 +564,12 @@ def set_accents_for_lemma(normalized_text, surface, dict_form, force=False):
         q += " AND (" + " OR ".join(f"{k} IS NULL OR {k}=''" for k in cond) + ")"
     c = store.connect()
     n = c.execute(q, tuple(v for _, v in sets) + (normalized_text,)).rowcount
+    # a front_word left as the bare form (e.g. right after a span edit) → the
+    # freshly-computed accented dict form
+    if df:
+        c.execute("UPDATE srs_cards SET front_word=? WHERE normalized_text=? "
+                  "AND is_phrase=0 AND (front_word IS NULL OR front_word=? OR front_word='')",
+                  (df, normalized_text, normalized_text))
     c.commit()
     c.close()
     return n
@@ -497,6 +666,12 @@ def review(card_id, rating, elapsed_ms=None, at=None):
         review_duration=_td(elapsed_ms))
     d = card.to_dict()
     lapsed = int(bool(row["last_review"])) if rating == 1 else 0
+    # park a card that just crossed the leech threshold (never for production cards —
+    # those are deliberate and few)
+    new_lapses = (row["lapses"] or 0) + lapsed
+    leeched = int(lapsed and not row["suspended"]
+                  and (row["card_type"] or "recognition") == "recognition"
+                  and new_lapses >= LEECH_LAPSES)
     c = store.connect()
     c.execute(
         """INSERT INTO srs_reviews
@@ -507,14 +682,17 @@ def review(card_id, rating, elapsed_ms=None, at=None):
          row["difficulty"], row["due"], row["last_review"], _iso(now), elapsed_ms))
     c.execute(
         """UPDATE srs_cards SET fsrs_state=?, fsrs_step=?, stability=?,
-             difficulty=?, due=?, last_review=?, reps=reps+1, lapses=lapses+?
+             difficulty=?, due=?, last_review=?, reps=reps+1, lapses=lapses+?,
+             suspended = MAX(suspended, ?)
            WHERE id=?""",
         (d["state"], d["step"], d["stability"], d["difficulty"], d["due"],
-         d["last_review"], lapsed, card_id))
+         d["last_review"], lapsed, leeched, card_id))
     c.commit()
     out = c.execute("SELECT * FROM srs_cards WHERE id=?", (card_id,)).fetchone()
     c.close()
-    return _card_dict(out)
+    res = _card_dict(out)
+    res["leeched"] = bool(leeched)
+    return res
 
 
 def _td(ms):
@@ -618,8 +796,10 @@ def delete_cards_for_video(video_id):
 
 
 # an orphan = a pipeline card whose video was hard-deleted. A hand-added
-# ('manual') card also has no video_id but is deliberate — never an orphan.
-_ORPHAN_WHERE = "video_id IS NULL AND (source IS NULL OR source <> 'manual')"
+# ('manual') card or a speaking-drill production card also has no video_id but is
+# deliberate — never an orphan.
+_ORPHAN_WHERE = ("video_id IS NULL AND card_type = 'recognition' "
+                 "AND (source IS NULL OR source NOT IN ('manual', 'speak'))")
 
 
 def orphan_anki_note_ids():
@@ -671,11 +851,12 @@ _NEW_ORDER = ("learn_score IS NULL, learn_score DESC, created_at ASC, id ASC")
 
 
 def cards_for_learn_ranking():
-    """Every not-yet-introduced card — the pool the daily LLM pass scores for
-    learn-first order."""
+    """Every not-yet-introduced card (recognition AND production) — the pool the
+    daily LLM pass scores for learn-first order."""
     c = store.connect()
     rows = c.execute(
-        """SELECT id, span_text, normalized_text, translation, front_word, is_phrase
+        """SELECT id, span_text, normalized_text, translation, front_word, is_phrase,
+                  sentence, card_type
            FROM srs_cards
            WHERE suspended=0 AND last_review IS NULL
            ORDER BY id""").fetchall()
@@ -704,12 +885,49 @@ def set_learn_scores(scores):
     return len(scores)
 
 
-def _new_introduced_today(c):
+def _new_introduced_today(c, card_type="recognition"):
+    """How many cards of `card_type` (None = any) were first reviewed today."""
+    filt = "AND c.card_type = ?" if card_type else ""
+    args = ([card_type] if card_type else []) + [_day_start_iso()]
     row = c.execute(
-        """SELECT COUNT(*) n FROM (
-             SELECT card_id, MIN(reviewed_at) m FROM srs_reviews GROUP BY card_id
-           ) WHERE m >= ?""", (_day_start_iso(),)).fetchone()
+        f"""SELECT COUNT(*) n FROM (
+             SELECT r.card_id, MIN(r.reviewed_at) m FROM srs_reviews r
+             JOIN srs_cards c ON c.id = r.card_id {filt}
+             GROUP BY r.card_id
+           ) WHERE m >= ?""", args).fetchone()
     return row["n"]
+
+
+def _new_plan(c):
+    """(total_left, prod_budget) for right now — enforces the daily mix: aim for
+    prod_per_day() production of new_per_day() total, each type backfilling the
+    other when short."""
+    total = new_per_day()
+    prod_today = _new_introduced_today(c, "production")
+    rec_today = _new_introduced_today(c, "recognition")
+    total_left = max(0, total - prod_today - rec_today)
+    prod_left = max(0, prod_per_day() - prod_today)
+    return total_left, min(prod_left, total_left)
+
+
+def _pick_new(c, total_left, prod_budget):
+    """(production_new, recognition_new) card rows for the day, both in learn-first
+    order, honouring the mix and letting each type fill the other's shortfall."""
+    if total_left <= 0:
+        return [], []
+    def pool(ct):
+        return [dict(r) for r in c.execute(
+            f"""SELECT * FROM srs_cards
+                WHERE suspended=0 AND last_review IS NULL AND card_type=?
+                ORDER BY {_NEW_ORDER} LIMIT ?""", (ct, total_left))]
+    prod_pool, rec_pool = pool("production"), pool("recognition")
+    take_prod = min(len(prod_pool), prod_budget)
+    rem = total_left - take_prod
+    take_rec = min(len(rec_pool), rem)
+    rem -= take_rec
+    if rem > 0:                                  # recognition ran short — give it to production
+        take_prod = min(len(prod_pool), take_prod + rem)
+    return prod_pool[:take_prod], rec_pool[:take_rec]
 
 
 def stats():
@@ -729,12 +947,22 @@ def stats():
     reviewed_today = c.execute(
         "SELECT COUNT(*) n FROM srs_reviews WHERE reviewed_at >= ?",
         (_day_start_iso(),)).fetchone()["n"]
-    new_left = max(0, new_per_day() - _new_introduced_today(c))
+    new_left, _ = _new_plan(c)
+    # the next batch that would be introduced (learn-first order) — its median
+    # frequency rank tells you whether you're about to hit rarer words
+    per_day = new_per_day() or 1
+    batch = c.execute(
+        f"""SELECT normalized_text, front_word, dict_accented FROM srs_cards
+            WHERE suspended=0 AND last_review IS NULL
+            ORDER BY {_NEW_ORDER} LIMIT ?""", (per_day,)).fetchall()
     nd = c.execute(
         "SELECT MIN(due) d FROM srs_cards WHERE suspended=0 AND last_review IS NOT NULL "
         "AND due > ?", (now,)).fetchone()["d"]
     orphans = c.execute(
         f"SELECT COUNT(*) n FROM srs_cards WHERE {_ORPHAN_WHERE}").fetchone()["n"]
+    leeches = c.execute(
+        "SELECT COUNT(*) n FROM srs_cards WHERE suspended=1 AND lapses >= ?",
+        (LEECH_LAPSES,)).fetchone()["n"]
     # typical seconds per review, from the last 200 graded — median, so one card
     # left open for 3 minutes doesn't blow up the estimate. Clamped to a sane
     # band and defaulted to 6s before there's history.
@@ -748,9 +976,17 @@ def stats():
         pace = max(1.5, min(30.0, med))
     else:
         pace = 6.0
+    lems = [store.norm((b["dict_accented"] or b["front_word"]
+                        or b["normalized_text"] or "").replace("́", "")) for b in batch]
+    ranked = sorted(store.family_ranks(lems).values())
+    batch_rank = ranked[len(ranked) // 2] if ranked else None
     return {"due": due, "new": min(new_total, new_left),
             "new_total": new_total, "total": total,
-            "reviewed_today": reviewed_today, "orphans": orphans,
+            "new_backlog": new_total,          # un-introduced cards still in reserve
+            "new_per_day": new_per_day(),
+            "new_runway_days": -(-new_total // per_day) if new_total else 0,   # ceil
+            "next_batch_median_rank": batch_rank,
+            "reviewed_today": reviewed_today, "orphans": orphans, "leeches": leeches,
             "review_pace_s": round(pace, 1),
             "next_due": _human_delta(nd) if nd else None}
 
@@ -767,6 +1003,7 @@ _LIST_FILTERS = {
     "suspended": ("suspended=1", []),
     "orphan":    (_ORPHAN_WHERE, []),
     "manual":    ("source = 'manual'", []),
+    "production": ("card_type = 'production'", []),
 }
 _LIST_SORTS = {
     "added": "created_at DESC, id DESC", "oldest": "created_at ASC, id ASC",
@@ -812,6 +1049,7 @@ def list_cards(filt="all", sort="added", q="", limit=1000, video=None):
         out.append({
             "id": d["id"], "span_text": d["span_text"], "front_html": front,
             "bolded": bolded, "front_word": d["front_word"],
+            "card_type": d.get("card_type") or "recognition",
             "learn_score": d["learn_score"],
             "normalized_text": d["normalized_text"], "translation": d["translation"],
             "accented": d["accented"], "dict_accented": d["dict_accented"],
@@ -843,16 +1081,13 @@ def queue(limit=80):
                    OR (fsrs_state IN (1,3) AND due <= :soon) )
            ORDER BY due ASC LIMIT :lim""",
         {"now": now_i, "soon": soon, "lim": limit})]
-    budget = max(0, new_per_day() - _new_introduced_today(c))
-    fresh = []
-    if budget:
-        fresh = [dict(r) for r in c.execute(
-            f"""SELECT * FROM srs_cards
-                WHERE suspended=0 AND last_review IS NULL
-                ORDER BY {_NEW_ORDER} LIMIT ?""", (budget,))]
-        fresh = _shuffle_new_for_day(fresh)   # selected learn-first, shown shuffled
+    # fresh cards up to the daily budget: aim for prod_per_day() production of
+    # new_per_day() total, each type backfilling the other when it runs short.
+    total_left, prod_budget = _new_plan(c)
+    prod, fresh = _pick_new(c, total_left, prod_budget)
+    fresh = _shuffle_new_for_day(fresh)        # selected learn-first, shown shuffled
     c.close()
-    return [_card_dict_from_plain(r) for r in (due + fresh)]
+    return [_card_dict_from_plain(r) for r in (due + prod + fresh)]
 
 
 def _card_dict_from_plain(d):
@@ -876,12 +1111,9 @@ def offline_bundle(days=3):
         """SELECT * FROM srs_cards
            WHERE suspended=0 AND last_review IS NOT NULL AND due <= :h
            ORDER BY due ASC""", {"h": horizon})]
-    budget = max(0, new_per_day() - _new_introduced_today(c))
-    if budget:
-        rows += _shuffle_new_for_day([dict(r) for r in c.execute(
-            f"""SELECT * FROM srs_cards
-                WHERE suspended=0 AND last_review IS NULL
-                ORDER BY {_NEW_ORDER} LIMIT ?""", (budget,))])
+    total_left, prod_budget = _new_plan(c)
+    prod_new, rec_new = _pick_new(c, total_left, prod_budget)
+    rows += prod_new + _shuffle_new_for_day(rec_new)
     c.close()
     out = []
     for r in rows:

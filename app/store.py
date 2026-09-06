@@ -71,8 +71,12 @@ def init_db():
     # card-format v2: `translation` holds ONE clean primary meaning; the other
     # senses / idioms go in `alt_meanings` (small text on the back). `sentence`
     # is trimmed to the clause with the word; the original long context (mostly
-    # for reading cards) is kept in `sentence_full`.
-    for col in ("alt_meanings TEXT", "sentence_full TEXT"):
+    # for reading cards) is kept in `sentence_full`. `format_ver` = 2 once done.
+    for col in ("alt_meanings TEXT", "sentence_full TEXT",
+                "format_ver INTEGER NOT NULL DEFAULT 1",
+                "meaning_contextual INTEGER NOT NULL DEFAULT 0",
+                "card_type TEXT NOT NULL DEFAULT 'recognition'",
+                "speak_ref TEXT", "card_meta TEXT"):
         if not _has_column(c, "srs_cards", col.split()[0]):
             c.execute(f"ALTER TABLE srs_cards ADD COLUMN {col}")
     # channel / thumbnail metadata for the video picker (nullable, backfilled).
@@ -85,12 +89,37 @@ def init_db():
                 # pipeline (extraction / cards / word pages) but opens in a
                 # reader instead of a player
                 "kind TEXT NOT NULL DEFAULT 'video'",
+                # seconds added to every stored lyric/subtitle time to line the
+                # transcript up with the actual audio (LRCLIB synced lyrics are
+                # often matched to a slightly different release). Detected +
+                # applied by app/lrcfix.py; stored here as the running total so a
+                # re-run only shifts by the correction delta.
+                "lrc_offset REAL NOT NULL DEFAULT 0",
                 # 1 = archived: gone from the home list, media files freed, but
                 # the row + transcript stay so cards made from it keep their
                 # jump-to-the-moment / audio-clip / "all places said" links
                 "hidden INTEGER NOT NULL DEFAULT 0"):
         if not _has_column(c, "videos", col.split()[0]):
             c.execute(f"ALTER TABLE videos ADD COLUMN {col}")
+    if _has_column(c, "speak_prompts", "id") and not _has_column(c, "speak_prompts", "level"):
+        c.execute("ALTER TABLE speak_prompts ADD COLUMN level TEXT NOT NULL DEFAULT 'a2'")
+    for col in ("native TEXT", "native_gloss TEXT"):
+        if _has_column(c, "speak_attempts", "id") and not _has_column(c, "speak_attempts", col.split()[0]):
+            c.execute(f"ALTER TABLE speak_attempts ADD COLUMN {col}")
+    for col in ("given TEXT", "skill TEXT", "contrast TEXT", "retest_for INTEGER",
+                "target TEXT", "focus INTEGER NOT NULL DEFAULT 0"):
+        if _has_column(c, "drill_items", "id") and not _has_column(c, "drill_items", col.split()[0]):
+            c.execute(f"ALTER TABLE drill_items ADD COLUMN {col}")
+    if _has_column(c, "motion_items", "id") and not _has_column(c, "motion_items", "alts"):
+        c.execute("ALTER TABLE motion_items ADD COLUMN alts TEXT")
+    if _has_column(c, "chunk_items", "id") and not _has_column(c, "chunk_items", "gist"):
+        c.execute("ALTER TABLE chunk_items ADD COLUMN gist TEXT")
+    if _has_column(c, "speeches", "id") and not _has_column(c, "speeches", "topic_id"):
+        c.execute("ALTER TABLE speeches ADD COLUMN topic_id TEXT")
+    if _has_column(c, "reading_flow_sessions", "id") and not _has_column(c, "reading_flow_sessions", "domain"):
+        c.execute("ALTER TABLE reading_flow_sessions ADD COLUMN domain TEXT")
+    if _has_column(c, "reading_flow_chunks", "id") and not _has_column(c, "reading_flow_chunks", "text_accented"):
+        c.execute("ALTER TABLE reading_flow_chunks ADD COLUMN text_accented TEXT")
     # Fold any legacy known_lexicon rows into resolved_words.
     c.execute(
         """INSERT OR IGNORE INTO resolved_words(normalized_text, reason, video_id, resolved_at)
@@ -161,7 +190,7 @@ def _enrich(d):
 # feature-length transcript is ~100 KB — never pulled just to read the title.
 _VIDEO_COLS = ("id, url, title, subs_kind, subs_lang, fetched_at, channel, "
                "channel_url, thumbnail_url, duration, media_path, media_bytes, "
-               "media_quality, media_status, kind, hidden")
+               "media_quality, media_status, kind, hidden, lrc_offset")
 
 
 def get_video(video_id):
@@ -206,7 +235,7 @@ def list_videos(include_hidden=False):
     rows = c.execute(
         f"""SELECT v.id, v.url, v.title, v.channel, v.channel_url, v.thumbnail_url,
                   v.duration, v.subs_kind, v.subs_lang, v.fetched_at, v.kind, v.hidden,
-                  v.media_status, v.media_bytes, v.media_quality,
+                  v.media_status, v.media_bytes, v.media_quality, v.lrc_offset,
                   (SELECT count(*) FROM subtitle_lines s WHERE s.video_id=v.id) AS lines,
                   (SELECT count(*) FROM candidates k WHERE k.video_id=v.id) AS candidates,
                   (SELECT count(*) FROM candidates k WHERE k.video_id=v.id
@@ -395,6 +424,59 @@ def get_subtitle_line(line_id):
     r = c.execute("SELECT * FROM subtitle_lines WHERE id=?", (line_id,)).fetchone()
     c.close()
     return dict(r) if r else None
+
+
+def reset_lrc_offset(video_id):
+    """Forget the recorded sync offset — call after replacing a song's lyrics
+    with a fresh pull (the new lines carry no correction yet)."""
+    c = connect()
+    c.execute("UPDATE videos SET lrc_offset=0 WHERE id=?", (video_id,))
+    c.commit()
+    c.close()
+
+
+_VTT_TS_RE = _re.compile(r"(\d{2}):(\d{2}):(\d{2}\.\d{3})")
+
+
+def shift_song_timing(video_id, delta):
+    """Move every stored time for a song by `delta` seconds (can be negative) so
+    the transcript lines up with the audio: subtitle_lines, the raw_subs VTT
+    cue times, and any srs_cards.timestamp made from it. Bumps videos.lrc_offset
+    by `delta`. Returns the new total offset."""
+    delta = float(delta)
+    c = connect()
+    if abs(delta) >= 0.05:
+        for r in c.execute(
+                "SELECT id, start_time FROM subtitle_lines WHERE video_id=?",
+                (video_id,)).fetchall():
+            s = _to_secs(r["start_time"])
+            if s is not None:
+                c.execute("UPDATE subtitle_lines SET start_time=? WHERE id=?",
+                          (secs_to_hms(s + delta), r["id"]))
+        row = c.execute("SELECT raw_subs FROM videos WHERE id=?", (video_id,)).fetchone()
+        if row and row["raw_subs"]:
+            def _bump(m):
+                s = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+                s = max(0.0, s + delta)
+                return f"{int(s // 3600):02d}:{int(s % 3600 // 60):02d}:{s % 60:06.3f}"
+            c.execute("UPDATE videos SET raw_subs=? WHERE id=?",
+                      (_VTT_TS_RE.sub(_bump, row["raw_subs"]), video_id))
+        for r in c.execute(
+                "SELECT id, timestamp FROM srs_cards WHERE video_id=? AND timestamp IS NOT NULL",
+                (video_id,)).fetchall():
+            s = _to_secs(r["timestamp"])
+            if s is not None:
+                c.execute("UPDATE srs_cards SET timestamp=? WHERE id=?",
+                          (secs_to_hms(s + delta), r["id"]))
+    tot = c.execute("SELECT lrc_offset FROM videos WHERE id=?", (video_id,)).fetchone()
+    new_total = round(((tot["lrc_offset"] if tot else 0.0) or 0.0) + delta, 3)
+    c.execute("UPDATE videos SET lrc_offset=? WHERE id=?", (new_total, video_id))
+    c.commit()
+    c.close()
+    _LEMMA_IDX.pop(video_id, None)
+    drop_sentence_cache(video_id=video_id)
+    # clip cache is keyed by start time, so old clips just fall out of use
+    return new_total
 
 
 _SENT_SPLIT = _re.compile(r"(?<=[.!?…])\s+")
@@ -588,32 +670,67 @@ def _score_sentence(text, span, stems, rank_of):
     return s
 
 
-def word_occurrences(lemma, per_video=10):
-    """Every place `lemma` (any inflection) is spoken, grouped by video. Reads
-    the cached per-video inverted index — no transcript scan.
-    -> [{video_id, title, youtube_id, thumbnail_url, count, hits:[{t,text}]}]."""
-    lemma = lemma_key(lemma)
+def _hit_window(line, lemma, pad=90):
+    """A readable snippet of `line` around where `lemma` occurs, the match
+    wrapped in **…**. Book paragraphs come through as one long `subtitle_line`,
+    so a raw line would be an unreadable blob."""
+    marked = bold(line, lemma, False, tag="\x00")
+    a = marked.find("\x00")
+    if a < 0:                                  # bold() couldn't place it — send the head
+        return (line[:2 * pad].rstrip() + " …") if len(line) > 2 * pad + 2 else line
+    b = marked.find("\x00", a + 1)
+    core, left, right = marked[a + 1:b], marked[:a], marked[b + 1:]
+    if len(left) > pad:
+        left = "… " + left[-pad:].split(" ", 1)[-1]
+    if len(right) > pad:
+        right = right[:pad].rsplit(" ", 1)[0] + " …"
+    return f"{left}**{core}**{right}".strip()
+
+
+def word_occurrences(lemma, per_video=10, also=()):
+    """Every place `lemma` (any inflection) is spoken, across ALL indexed content
+    — every video, song, book — grouped by video. Reads the cached per-video
+    inverted index (no transcript scan).
+
+    `also`: extra lemmas to fold in — pass a word's family so looking up
+    презирать also surfaces презрение / презрительный / презренный. Every hit
+    carries `w`, the lemma that actually matched that line, so the UI can label
+    a related-word hit; `bold` marks the matched token(s) with «»…«».
+
+    -> {"videos": [{video_id, title, youtube_id, thumbnail_url, count,
+                    hits:[{t, text, bold, w}]}],
+        "by_lemma": {lemma: total_line_hits}}"""
+    want = {lemma_key(lemma)} | {lemma_key(x) for x in also if x}
+    want.discard("")
     c = connect()
     vids = c.execute(
-        "SELECT id, title, url, thumbnail_url FROM videos ORDER BY id DESC").fetchall()
+        "SELECT id, title, url, thumbnail_url, kind FROM videos ORDER BY id DESC").fetchall()
     c.close()
-    out = []
+    out, by_lemma = [], {w: 0 for w in want}
     for v in vids:
         texts, times, idx = _lemma_index(v["id"])
-        lines = sorted(set(idx.get(lemma, ())))
-        if not lines:
+        mark = {}                       # line idx -> the lemma that hit it
+        for w in want:
+            for i in idx.get(w, ()):
+                by_lemma[w] += 1
+                mark.setdefault(i, w)
+        if not mark:
             continue
-        hits, last = [], -9
-        for i in lines:
-            if i - last >= 2:
-                hits.append({"t": times[i][:8], "text": texts[i].strip()})
-            last = i
+        hits, last = [], {}
+        for i in sorted(mark):
+            w = mark[i]
+            if i - last.get(w, -9) >= 2:        # collapse repeats of the SAME word only
+                hits.append({
+                    "t": times[i][:8],
+                    "text": _hit_window(texts[i].strip(), w),
+                    "w": w})
+            last[w] = i
         out.append({
-            "video_id": v["id"], "title": v["title"],
+            "video_id": v["id"], "title": v["title"], "kind": v["kind"] or "video",
             "youtube_id": youtube_id(v["url"]),
             "thumbnail_url": _thumb(v["url"], v["thumbnail_url"]),
             "count": len(hits), "hits": hits[:per_video]})
-    return out
+    return {"videos": out, "by_lemma": {k: n for k, n in by_lemma.items() if n}}
 
 
 def word_status(lemma):
@@ -884,24 +1001,108 @@ def exclusion_reason(c, normalized):
     return r["reason"] if r else None
 
 
+def family_rank(lemma):
+    """The frequency rank of the MOST COMMON form in `lemma`'s word family — the
+    verb/noun/adjective of one idea share a meaning, and the learner meets the
+    idea as often as its commonest form appears, not as often as this particular
+    part of speech does. -> (rank, which_form) or (None, None).
+
+    Falls back to the lemma's own rank when its family isn't known yet."""
+    lemma = norm(lemma)
+    if not lemma or " " in lemma:
+        return None, None
+    c = connect()
+    fam = c.execute("SELECT root FROM word_family WHERE lemma=?", (lemma,)).fetchone()
+    forms = {lemma}
+    if fam:
+        forms |= {r["lemma"] for r in c.execute(
+            "SELECT lemma FROM word_family WHERE root=?", (fam["root"],))}
+    q = ",".join("?" * len(forms))
+    rows = c.execute(f"SELECT normalized_text, rank FROM freq WHERE normalized_text IN ({q})",
+                     tuple(forms)).fetchall()
+    c.close()
+    if not rows:
+        return None, None
+    best = min(rows, key=lambda r: r["rank"])
+    return best["rank"], best["normalized_text"]
+
+
+def family_ranks(lemmas):
+    """{lemma: rank of the commonest form in its family} for many lemmas at
+    once — a few queries total, for `srs.stats()` etc. Lemmas with no freq
+    entry anywhere in the family are omitted."""
+    lemmas = {norm(l) for l in lemmas if l and " " not in (l or "")}
+    if not lemmas:
+        return {}
+    c = connect()
+    ph = ",".join("?" * len(lemmas))
+    root_of = {r["lemma"]: r["root"] for r in c.execute(
+        f"SELECT lemma, root FROM word_family WHERE lemma IN ({ph})", tuple(lemmas))}
+    members = {}
+    roots = set(root_of.values())
+    if roots:
+        rp = ",".join("?" * len(roots))
+        for r in c.execute(f"SELECT lemma, root FROM word_family WHERE root IN ({rp})",
+                           tuple(roots)):
+            members.setdefault(r["root"], set()).add(r["lemma"])
+    need = set(lemmas)
+    for ms in members.values():
+        need |= ms
+    frank = {}
+    if need:
+        np_ = ",".join("?" * len(need))
+        for r in c.execute(f"SELECT normalized_text, rank FROM freq WHERE normalized_text IN ({np_})",
+                           tuple(need)):
+            frank[r["normalized_text"]] = r["rank"]
+    c.close()
+    out = {}
+    for lem in lemmas:
+        forms = {lem} | members.get(root_of.get(lem, ""), set())
+        rs = [frank[f] for f in forms if f in frank]
+        if rs:
+            out[lem] = min(rs)
+    return out
+
+
 def freq_hint(normalized_text, is_phrase=False):
-    """How rare is this word — a judgment aid during review. Review candidates
-    are all past the 13k stoplist, so the bands start there."""
+    """How rare is this word — a judgment aid during review. Judged by the
+    commonest form in its family (see `family_rank`). Review candidates are all
+    past the 13k stoplist, so the bands start there."""
     if is_phrase or " " in (normalized_text or ""):
         return {"rank": None, "label": "phrase", "band": "rare"}
-    c = connect()
-    r = c.execute("SELECT rank FROM freq WHERE normalized_text=?", (normalized_text,)).fetchone()
-    c.close()
-    if not r:
+    rank, form = family_rank(normalized_text)
+    if rank is None:
         return {"rank": None, "label": "very rare", "band": "rare"}
-    rank = r["rank"]
     if rank <= 16000:
         band, label = "mid", "borderline"      # near what you already know
     elif rank <= 32000:
         band, label = "uncommon", "uncommon"
     else:
         band, label = "rare", "rare"
-    return {"rank": rank, "label": f"{label} · ~#{rank // 1000}k", "band": band}
+    via = f" (as {form})" if form and norm(form) != norm(normalized_text) else ""
+    return {"rank": rank, "label": f"{label} · ~#{rank // 1000}k{via}", "band": band}
+
+
+def freq_sample(lo, hi, n=20, want_pos=("noun", "verb", "adj"), avoid=()):
+    """Random drillable lemmas ranked in [lo, hi] — nouns/verbs/adjectives only,
+    each with its local-dictionary gloss. For the grammar-drill generator."""
+    avoid = {(x or "").lower().replace("ё", "е") for x in avoid}
+    c = connect()
+    rows = c.execute(
+        "SELECT normalized_text FROM freq WHERE rank BETWEEN ? AND ? "
+        "ORDER BY RANDOM() LIMIT ?", (lo, hi, n * 6)).fetchall()
+    c.close()
+    out = []
+    for r in rows:
+        w = r["normalized_text"]
+        if w in avoid or "-" in w or len(w) < 3:
+            continue
+        if _legacy.pos_of(w) not in want_pos:
+            continue
+        out.append({"lemma": w, "pos": _legacy.pos_of(w), "gloss": gloss_for(w) or ""})
+        if len(out) >= n:
+            break
+    return out
 
 
 def glosses_for(lemmas):
@@ -1050,18 +1251,37 @@ def known_family_lemmas():
     return {r["lemma"] for r in rows}
 
 
-def set_word_family(root, lemmas):
+_FAMILY_FN_WORD_RANK = 150  # see docstring below — only this narrow a band is
+                            # genuinely closed-class, not "common vocabulary"
+
+
+def set_word_family(root, lemmas, keep=None):
+    """`keep`: the word this family was actually resolved FOR (if any) — it
+    survives the guard below no matter its rank.
+
+    The guard itself only excludes the handful of TRUE function / grammatical
+    words — pronouns, conjunctions, prepositions, particles, light verbs — by
+    frequency RANK (top ~150), not the full 13k-word stoplist. That stoplist is
+    a raw frequency cutoff for the extraction pipeline, not a "definitely a
+    function word" list: по rank, и=1, в=2, что=6, это=11, как=12 are genuinely
+    closed-class, but so is much of the rest of the 13k — расстаться (3799),
+    презрение (6451), покойник (7310), бездонный (12404) are all in it too, and
+    those are exactly the ordinary content words this feature exists to
+    connect. Using the whole stoplist here was silently dropping real siblings
+    (презирать's own noun, презрение) and blocking a big share of otherwise
+    perfectly good vocabulary from ever getting a family. The narrow rank band
+    still protects known_family_lemmas() (green-highlighting) from a genuine
+    function word sneaking into a family and lighting up everywhere."""
     lemmas = {lemmas} if isinstance(lemmas, str) else set(lemmas)
     lemmas = {norm(m) for m in lemmas if m}
     if not lemmas:
         return
+    keep = {norm(keep)} if isinstance(keep, str) else {norm(k) for k in (keep or ())}
     c = connect()
-    # never pull a stoplist word (что, это, как, сказать, …) into a family — an
-    # over-eager LLM grouping would otherwise light up a function word as "known"
-    # everywhere.
     stop = {r["normalized_text"] for r in c.execute(
-        "SELECT normalized_text FROM stoplist WHERE normalized_text IN (%s)"
-        % ",".join("?" * len(lemmas)), tuple(lemmas))}
+        f"SELECT normalized_text FROM stoplist WHERE normalized_text IN "
+        f"({','.join('?' * len(lemmas))}) AND rank <= {_FAMILY_FN_WORD_RANK}",
+        tuple(lemmas))} - keep
     lemmas -= stop
     if not lemmas:
         c.close()
@@ -1203,21 +1423,86 @@ def word_gloss_set(lemma, gloss):
     c.close()
 
 
-def lemmas_without_family():
-    """Carded lemmas that don't yet have a word_family entry — for a one-time
-    backfill."""
+def lemmas_without_family(force=False):
+    """Every single-word vocab-card lemma that doesn't yet have a word_family
+    entry — for a one-time backfill. Reads srs_cards directly (not just the
+    resolved_words 'has_card' cache, which only the old Anki-review path
+    populates) so a manually-added / text / live-search card gets covered too.
+    `force=True` -> every single-word carded lemma, resolved or not (re-checks
+    ones that already have an entry — e.g. after loosening how members are
+    filtered, so an old, incompletely-resolved family gets a fresh pass)."""
     c = connect()
+    where = "" if force else "AND normalized_text NOT IN (SELECT lemma FROM word_family)"
     try:
         rows = c.execute(
-            """SELECT normalized_text FROM resolved_words
-               WHERE reason='has_card'
-                 AND normalized_text NOT IN (SELECT lemma FROM word_family)
-                 AND normalized_text NOT LIKE '% %'"""
+            f"""SELECT DISTINCT normalized_text FROM srs_cards
+                WHERE is_phrase=0 AND normalized_text NOT LIKE '% %' {where}"""
         ).fetchall()
     except sqlite3.OperationalError:
         rows = []
     c.close()
     return [r["normalized_text"] for r in rows]
+
+
+def has_family_entry(lemma):
+    """Whether `lemma` has been resolved into word_family already (even if its
+    family turned out to be just itself) — for backfill/prewarm bookkeeping,
+    so a solitary word isn't re-sent to the LLM every time."""
+    key = norm((lemma or "").replace("́", ""))
+    if not key:
+        return True
+    c = connect()
+    r = c.execute("SELECT 1 FROM word_family WHERE lemma=?", (key,)).fetchone()
+    c.close()
+    return bool(r)
+
+
+def family_for_card(lemma):
+    """Sibling words sharing `lemma`'s word-formation family — the ones a
+    learner would already half-recognise (работа/рабочий/работник for
+    работать). -> {"root", "members": [{"lemma","accented","known","gloss"}]},
+    or None if the family isn't resolved yet, or it's just the word alone.
+
+    `known` = you already have a card for that sibling — checked directly
+    against srs_cards (not the resolved_words cache) so it's accurate no
+    matter how the card was created. `gloss` prefers your own card's
+    translation, else the instant local-dictionary gloss."""
+    key = norm((lemma or "").replace("́", ""))
+    if not key:
+        return None
+    c = connect()
+    fam = c.execute("SELECT root FROM word_family WHERE lemma=?", (key,)).fetchone()
+    if not fam:
+        c.close()
+        return None
+    sibs = [r["lemma"] for r in c.execute(
+        "SELECT lemma FROM word_family WHERE root=? AND lemma!=? ORDER BY lemma",
+        (fam["root"], key))]
+    if not sibs:
+        c.close()
+        return None
+    ph = ",".join("?" * len(sibs))
+    known = {r["normalized_text"] for r in c.execute(
+        f"SELECT DISTINCT normalized_text FROM srs_cards WHERE normalized_text IN ({ph})", sibs)}
+    glosses = {}
+    for r in c.execute(
+        f"SELECT normalized_text, translation FROM srs_cards WHERE normalized_text IN ({ph}) "
+        "AND translation IS NOT NULL AND translation != '' ORDER BY id", sibs):
+        glosses.setdefault(r["normalized_text"], r["translation"])
+    accents = {r["lemma"]: r["accented"] for r in c.execute(
+        f"SELECT lemma, accented FROM word_accent WHERE lemma IN ({ph})", sibs)}
+    dict_g = {}
+    try:                                    # batched local-dict gloss (was 1 conn/sib via gloss_for)
+        for r in c.execute(
+                f"SELECT headword, gloss FROM dict_ru WHERE headword IN ({ph})", sibs):
+            dict_g.setdefault(r["headword"], r["gloss"])
+    except sqlite3.OperationalError:
+        pass
+    c.close()
+    members = [{"lemma": s, "accented": accents.get(s), "known": s in known,
+               "gloss": glosses.get(s) or dict_g.get(s)} for s in sibs]
+    members.sort(key=lambda m: (not m["known"], m["lemma"]))
+    return {"root": fam["root"], "members": members}
 
 
 def recent_discards(limit=50):

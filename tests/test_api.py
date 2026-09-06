@@ -29,6 +29,60 @@ def test_watch_and_word_flags(client, seeded_video):
     assert "raw_subs" not in body["video"]
 
 
+def _words(body):
+    """{lemma-ish token (lowercased, no punct) -> word dict} across all cues."""
+    out = {}
+    for cue in body["cues"]:
+        for w in cue.get("words", []):
+            out[w["t"].strip(".,!?;:—–()«»\"'…").lower()] = w
+    return out
+
+
+def test_watch_word_flag_states(client, seeded_video, db):
+    """The per-word colour contract the frontend paints from: a carded word gets
+    c=True, a pending-candidate word gets p=<cand id> (present in `cands`), a
+    plain word gets neither. Guards regressions in _word_flagger."""
+    db.mark_carded("блефовать")                       # "блефовал" -> lemma
+    cid = db.create_candidate(seeded_video, "ветер", 0,
+                              "Ветер трепал полы его пальто.", "00:00:06", "wind")
+    body = client.get(f"/videos/{seeded_video}/watch").json()
+    w = _words(body)
+
+    assert w["блефовал"].get("c") is True
+    assert "p" not in w["блефовал"]
+
+    assert w["ветер"].get("p") == cid
+    assert str(cid) in body["cands"]
+    assert body["cands"][str(cid)]["span"] == "ветер"
+    assert not w["ветер"].get("c")
+
+    assert not w["затем"].get("c") and not w["затем"].get("p")   # a plain word
+
+
+def test_read_word_flag_states(client, db):
+    """Same contract on the reader (/videos/{id}/read for a kind='text')."""
+    vid = db.upsert_video("http://example.test/t1", "A Text", "manual", "ru",
+                          "WEBVTT\n\n00:00:00.000 --> 00:00:04.000\nОн блефовал, затем ушёл.\n")
+    db.replace_subtitle_lines(vid, [("00:00:00", "Он блефовал, затем ушёл.")])
+    c = db.connect()
+    c.execute("UPDATE videos SET kind='text' WHERE id=?", (vid,))
+    c.commit()
+    c.close()
+
+    db.mark_carded("блефовать")
+    cid = db.create_candidate(vid, "уйти", 0, "Он блефовал, затем ушёл.", "00:00:00", "to leave")
+
+    body = client.get(f"/videos/{vid}/read").json()
+    words = {}
+    for blk in body.get("blocks", []):
+        for w in blk.get("w", []):
+            words[w["t"].strip(".,!?;:").lower().replace("ё", "е")] = w
+    assert words["блефовал"].get("c") is True
+    assert words["ушел"].get("p") == cid              # transcript is ё-folded
+    assert str(cid) in body["cands"]
+    assert not words["затем"].get("c") and not words["затем"].get("p")
+
+
 def test_translate_preview_uses_stub(client, seeded_video):
     r = client.post("/translate", json={"video_id": seeded_video, "span": "блефовать",
                                         "sentence": "Он блефовал за столом."})
@@ -56,6 +110,27 @@ def test_make_card_then_queue_and_review(client, seeded_video):
 
     rv = client.post(f"/srs/cards/{card_id}/review", json={"rating": 3, "elapsed_ms": 4000})
     assert rv.status_code == 200
+
+
+def test_edit_word_card_into_phrase_via_patch(client, seeded_video):
+    mk = client.post(f"/videos/{seeded_video}/make-card",
+                     json={"span": "блефовал", "timestamp": "00:00:00",
+                           "sentence": "Он блефовал за карточным столом.",
+                           "span_text": "блефовать", "translation": "to bluff",
+                           "is_phrase": False})
+    cid = mk.json()["srs_card"]["id"]
+
+    r = client.patch(f"/srs/cards/{cid}", json={"span_text": "за карточным столом",
+                                                "translation": "at the card table"})
+    assert r.status_code == 200
+    d = r.json()
+    assert d["is_phrase"] is True
+    assert d["span_text"] == "за карточным столом"
+    assert d["front_word"] == "за карточным столом"          # front reflects the change
+    assert d["bolded"] is True                               # phrase found in the sentence
+    # and the detail view agrees
+    dd = client.get(f"/srs/cards/{cid}").json()
+    assert dd["is_phrase"] is True and dd["front_word"] == "за карточным столом"
 
 
 def test_manual_card_and_detail(client):
