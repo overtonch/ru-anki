@@ -132,6 +132,9 @@ def init_db():
     if _has_column(c, "proficiency_snapshots", "day") and not _has_column(
             c, "proficiency_snapshots", "active_words"):
         c.execute("ALTER TABLE proficiency_snapshots ADD COLUMN active_words INTEGER")
+    if _has_column(c, "activate_verbs", "verb") and not _has_column(
+            c, "activate_verbs", "hardness"):
+        c.execute("ALTER TABLE activate_verbs ADD COLUMN hardness INTEGER NOT NULL DEFAULT 1")
     # Fold any legacy known_lexicon rows into resolved_words.
     c.execute(
         """INSERT OR IGNORE INTO resolved_words(normalized_text, reason, video_id, resolved_at)

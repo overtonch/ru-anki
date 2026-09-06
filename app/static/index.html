@@ -829,8 +829,11 @@
                -webkit-appearance:none; text-align:left; }
   .act-go { margin-top:1rem; padding:.8rem 1.6rem; border-radius:2rem; border:0; background:var(--ok);
             color:#0b1016; font:inherit; font-weight:700; cursor:pointer; }
-  .act-modeswap { margin-top:1.3rem; background:none; border:0; color:var(--accent); font:inherit;
+  .act-modeswap { background:none; border:0; color:var(--accent); font:inherit;
                   font-size:.8rem; cursor:pointer; }
+  .act-frontrow { display:flex; gap:1.4rem; margin-top:1.3rem; }
+  .act-known { display:block; margin:1rem auto 0; background:none; border:0; color:var(--muted);
+               font:inherit; font-size:.8rem; cursor:pointer; text-decoration:underline; text-decoration-style:dotted; }
   .act-model { font-size:1.25rem; font-weight:650; line-height:1.4; margin:.6rem 0; color:var(--fg); }
   .act-note { font-size:.85rem; color:#e6b93c; margin:.3rem 0 .6rem; }
   .act-yours { font-size:.95rem; color:var(--muted); margin-bottom:.5rem; }
@@ -6573,8 +6576,11 @@ function actRenderFront() {
       <div class="act-task">${escapeHtml(it.task || '')}</div>
       <div class="act-hint">${ACT.mode === 'type' ? 'type it, or think it and reveal' : 'form it in your head, then reveal'}</div>
       ${typeRow}
-      <button class="act-modeswap" onclick="setActMode('${ACT.mode === 'type' ? 'think' : 'type'}')">
-        ${ACT.mode === 'type' ? 'just think it instead' : 'type it instead'}</button>
+      <div class="act-frontrow">
+        <button class="act-modeswap" onclick="setActMode('${ACT.mode === 'type' ? 'think' : 'type'}')">
+          ${ACT.mode === 'type' ? 'just think it' : 'type it instead'}</button>
+        <button class="act-modeswap" onclick="actGrade(5)">I know this one — skip</button>
+      </div>
     </div>`;
 }
 function actReveal() {
@@ -6589,6 +6595,7 @@ function actReveal() {
       ${actGovHtml(it)}
       <div class="act-selfgrade">how did that go?</div>
     </div>
+    <button class="act-known" onclick="actGrade(5)">I already know this one — skip →</button>
     <div class="study-foot"><div class="study-rate act-rate">
       <button class="again" onclick="actGrade(1)"><span class="rl">Missed it</span></button>
       <button onclick="actGrade(2)"><span class="rl">Shaky</span></button>
@@ -6628,7 +6635,7 @@ async function actCheck() {
 }
 async function actGrade(rating) {
   const it = ACT.item;
-  ACT.done++;
+  if (rating < 5) ACT.done++;
   if (!ACT._graded) {
     try {
       const r = await api(`/activate/items/${it.id}/grade`, { method: 'POST', headers: { 'content-type': 'application/json' },

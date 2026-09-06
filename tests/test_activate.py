@@ -53,6 +53,27 @@ def test_active_count_and_stats(client, db):
     assert client.get("/proficiency").json()["active_words"] == 1
 
 
+def test_hard_government_verbs_come_first_and_can_be_skipped(client, db):
+    import activate, store
+    c = db.connect()
+    c.execute("DELETE FROM activate_verbs")
+    # easy (plain acc, no trap) is more frequent; hard (bare instr + a trap) rarer
+    c.execute("INSERT INTO activate_verbs(verb, rank, gloss, government, trap, hardness) VALUES(?,?,?,?,?,?)",
+              ("делать", 10, "to do", '[{"gov":"acc","role":"x","ex":"y"}]', None, 0))
+    c.execute("INSERT INTO activate_verbs(verb, rank, gloss, government, trap, hardness) VALUES(?,?,?,?,?,?)",
+              ("пользоваться", 200, "to use", '[{"gov":"instr (no prep)","role":"x","ex":"y"}]',
+               "instrumental, no preposition", 3))
+    c.commit(); c.close()
+    activate.set_settings(mix=1.0, per_day=20)
+    first = client.get("/activate/next").json()["item"]
+    assert first["target"] == "пользоваться"          # trickier government first
+    # skip it — "I already know this"
+    r = client.post(f"/activate/items/{first['id']}/grade", json={"rating": 5}).json()
+    got = store.connect().execute(
+        "SELECT reps, interval_d FROM activate_items WHERE id=?", (first["id"],)).fetchone()
+    assert got["reps"] >= 5 and got["interval_d"] >= 100    # retired far into the future
+
+
 def test_mix_can_favour_words(client, db):
     _seed(db, mix=0.0)
     kinds = set()

@@ -557,7 +557,8 @@ CREATE TABLE IF NOT EXISTS activate_verbs (
     gloss       TEXT,
     aspect_pair TEXT,
     government   TEXT,                           -- JSON [{gov, role, ex}]
-    trap        TEXT
+    trap        TEXT,
+    hardness    INTEGER NOT NULL DEFAULT 1       -- 0 plain acc … 3 real trap; drives intro order
 );
 
 CREATE TABLE IF NOT EXISTS activate_items (

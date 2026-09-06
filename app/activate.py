@@ -67,11 +67,42 @@ def set_settings(level=None, mix=None, per_day=None):
 
 # ---------------------------------------------------------------- curriculum
 
+_BARE_OBLIQUE = ("gen", "dat", "instr", "ablt", "loct")
+
+
+def _hardness(patterns, trap):
+    """0 = plain accusative / obvious · 3 = the government an English speaker
+    reliably gets wrong. Drives the order verbs are introduced in."""
+    h = 0
+    if (trap or "").strip():
+        h += 2
+    preps, bare = 0, 0
+    for p in patterns or []:
+        g = (p.get("gov") or "").lower()
+        if "+" in g and "acc" not in g.split("+")[1]:
+            preps += 1
+        elif "no prep" in g and any(b in g for b in _BARE_OBLIQUE):
+            bare += 1
+    if preps >= 2:
+        h += 2
+    elif preps == 1 or bare:
+        h += 1
+    return max(0, min(3, h))
+
+
 def ensure_verbs():
-    """Load the bundled verb-government list into activate_verbs once."""
+    """Load the bundled verb-government list into activate_verbs once, scoring
+    each verb's government difficulty."""
     c = _c()
     have = c.execute("SELECT COUNT(*) n FROM activate_verbs").fetchone()["n"]
     if have:
+        # backfill hardness if the column was just added (all still the default)
+        spread = c.execute("SELECT MIN(hardness) lo, MAX(hardness) hi FROM activate_verbs").fetchone()
+        if spread["lo"] == spread["hi"]:
+            for r in c.execute("SELECT verb, government, trap FROM activate_verbs"):
+                c.execute("UPDATE activate_verbs SET hardness=? WHERE verb=?",
+                          (_hardness(json.loads(r["government"] or "[]"), r["trap"]), r["verb"]))
+            c.commit()
         c.close()
         return have
     path = os.path.join(_DATA, "verbs.json.gz")
@@ -81,11 +112,13 @@ def ensure_verbs():
     with gzip.open(path, "rt", encoding="utf-8") as f:
         rows = json.load(f)
     for r in rows:
+        pats = r.get("patterns") or []
         c.execute(
-            "INSERT OR IGNORE INTO activate_verbs(verb, rank, gloss, aspect_pair, government, trap) "
-            "VALUES(?,?,?,?,?,?)",
+            "INSERT OR IGNORE INTO activate_verbs(verb, rank, gloss, aspect_pair, government, trap, hardness) "
+            "VALUES(?,?,?,?,?,?,?)",
             (r["verb"], r.get("rank"), r.get("gloss"), r.get("aspect_pair"),
-             json.dumps(r.get("patterns") or [], ensure_ascii=False), r.get("trap")))
+             json.dumps(pats, ensure_ascii=False), r.get("trap"),
+             _hardness(pats, r.get("trap"))))
     c.commit()
     n = c.execute("SELECT COUNT(*) n FROM activate_verbs").fetchone()["n"]
     c.close()
@@ -118,10 +151,12 @@ def _introduce(c, n):
     out = []
 
     ensure_verbs()
+    # the government an English speaker gets wrong comes first; within a
+    # difficulty tier, commonest first
     vrows = c.execute(
         """SELECT v.verb, v.gloss, v.government FROM activate_verbs v
            WHERE v.verb NOT IN (SELECT target FROM activate_items WHERE kind='verb')
-           ORDER BY v.rank LIMIT ?""", (want_verbs,)).fetchall()
+           ORDER BY v.hardness DESC, v.rank ASC LIMIT ?""", (want_verbs,)).fetchall()
     for r in vrows:
         cur = c.execute(
             "INSERT INTO activate_items(kind, target, gloss) VALUES('verb',?,?)",
@@ -162,6 +197,12 @@ def _reschedule(c, item, rating):
     itv = item["interval_d"]
     streak = item["streak"]
     lapses = item["lapses"]
+    if rating >= 5:                       # "I've got this" — retire the item
+        c.execute(
+            "UPDATE activate_items SET reps=MAX(reps,5), streak=MAX(streak,3), "
+            "interval_d=180, due=?, last_seen=datetime('now') WHERE id=?",
+            (srs._iso(srs._utc() + srs._dt.timedelta(days=180)), item["id"]))
+        return
     if rating <= 1:
         ease = max(1.5, ease - 0.2)
         itv = 0.0

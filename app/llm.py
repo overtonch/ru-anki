@@ -2161,8 +2161,11 @@ RULES
   girlfriend's Russian family, works in tech, lives in a city).
 - Vary the sentence each time this target recurs: statement about you / about
   someone else / past / negative / a yes-no question / a hypothetical ("if …").
-- LEVEL: "gentle" = 4–7 words, present tense. "standard" = a normal sentence.
-  "stretch" = a condition, a subordinate clause, or two verbs.
+- LEVEL: "gentle" = 4–7 words, present tense. "standard" = one normal sentence.
+  "stretch" = a genuinely complex thought: two clauses joined by that / because /
+  although / if…then / the more…the more, OR reported speech, OR a sequence of
+  two or three linked actions. The kind of sentence he stumbles on when speaking,
+  not a textbook drill line.
 - Do NOT put the target's dictionary form in the English if it would give away
   the Russian word choice; a natural English wording is fine.
 - `model` = the Russian he should produce — a faithful, natural translation of
