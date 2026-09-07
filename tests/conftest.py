@@ -310,6 +310,14 @@ def stub_llm(monkeypatch):
                 "summary": (summary or "") + f" [{part}]"}
     monkeypatch.setattr(llm, "reading_flow_chunk", _reading_flow_chunk)
 
+    _topic_n = {"i": 0}
+
+    def _reading_topics(label, blurb="", form="", grounded=False, avoid=(), n=5, model=None):
+        base = _topic_n["i"]
+        _topic_n["i"] += n
+        return [f"fresh {label} idea {base + k}" for k in range(n)]
+    monkeypatch.setattr(llm, "reading_topics", _reading_topics)
+
     # --- conversation partner ---
     monkeypatch.setattr(llm, "convo_open", lambda scenario, prompt="", level="b1", model=None: {
         "persona": "Sergey Petrovich, her uncle, a blunt engineer in his 50s.",

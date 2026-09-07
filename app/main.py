@@ -2408,8 +2408,14 @@ def speeches_delete(sid: int):
 
 @app.get("/reading/topics")
 def reading_topics():
-    return {"domains": proficiency.domains_public(),
+    return {"domains": reading_flow.picker_domains(),
             "topics": reading_flow.suggested_topics()}
+
+
+@app.post("/reading/topics/{did}/refresh")
+async def reading_topics_refresh(did: str):
+    topics = await asyncio.to_thread(reading_flow.refresh_topics, did)
+    return {"id": did, "topics": topics}
 
 
 class ReadingNewIn(BaseModel):
@@ -2427,8 +2433,20 @@ def reading_new(body: ReadingNewIn):
 
 
 @app.get("/reading/sessions")
-def reading_list():
-    return {"sessions": reading_flow.recent()}
+def reading_list(archived: int = 0):
+    return {"sessions": reading_flow.recent(archived=bool(archived))}
+
+
+class ReadingArchiveIn(BaseModel):
+    on: bool = True
+
+
+@app.post("/reading/sessions/{sid}/archive")
+def reading_archive(sid: int, body: ReadingArchiveIn):
+    if not reading_flow.session(sid):
+        raise HTTPException(404, "no such session")
+    reading_flow.set_archived(sid, body.on)
+    return {"id": sid, "archived": body.on}
 
 
 @app.get("/reading/sessions/{sid}")

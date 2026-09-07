@@ -223,6 +223,16 @@ library + proficiency graphs all ride on this.
   generates the next part on an explicit "continue reading" tap; a 0-tap session
   no longer moves `known_rank` or the session's `rank_est` (skimming ≠
   comprehension). Fiction eases the period vocab in over the parts.
+- (done 2026-09-06) **archive + evolving topic pool** — `POST /reading/sessions/
+  {sid}/archive`, `recent(archived=)`, `set_archived()` (status 'archived',
+  restored to done/active; `next_chunk` won't clobber it). Library has an
+  "archived (N)" section; archive buttons in the studybar, end-card, and each
+  library row. The subject picker's per-category topics evolve: starting a piece
+  from a suggestion retires it (`note_topic_started`) and a bg thread tops the
+  category up (`_rotate_one`); `POST /reading/topics/{did}/refresh` +
+  `refresh_topics()` swap the whole set ("↻ more ideas" button). Pool in
+  `app_settings` `reading_topic_pool` / `reading_topic_used`;
+  `llm.reading_topics()` generates. SW v171.
 - **Offline card queue** — reading cards are online-only right now (toast if
   offline). Wire them through the same idb `queue` + `/cards/flush` path as
   video cards (needs a `text_id` variant in FlushItem / _make_one_card).

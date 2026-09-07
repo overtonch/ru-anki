@@ -1859,6 +1859,45 @@ def _reading_level_line(rank_est):
     return _READING_LEVELS[-1][1], _READING_LEVELS[-1][2]
 
 
+_READING_TOPICS_SYSTEM = """You suggest reading topics for a Russian learner
+browsing a "what do you want to read about?" list, inside one subject category.
+
+Given the category (label + blurb) and, if present, the FORM (article / story /
+essay …) and whether it must be GROUNDED in real fact, produce {n} fresh topic
+ideas for that category.
+
+Each is ONE short line the learner taps to start a piece — concrete and
+enticing, 4–12 words, in English, phrased as a title or a premise ("A landlord
+who won't fix the heating", "Why the Baikal seal is found nowhere else").
+- Fit the category and its FORM. Grounded categories → real, nameable subjects.
+- VARIED — different angles, moods, sub-topics; no two near-duplicates.
+- Do NOT repeat or lightly reword anything in AVOID.
+
+Output ONE raw JSON object: {{"topics": ["…", "…", … exactly {n}]}}"""
+
+
+def reading_topics(label, blurb="", form="", grounded=False, avoid=(), n=5, model=None):
+    """-> [topic strings]. Best-effort: returns [] on failure."""
+    body = [f"CATEGORY: {label}"]
+    if blurb:
+        body.append(f"BLURB: {blurb}")
+    if form:
+        body.append(f"FORM: {form}")
+    if grounded:
+        body.append("GROUNDED: yes — real people, places, events only")
+    if avoid:
+        body.append("AVOID (already suggested — do not repeat or reword):\n"
+                    + "\n".join(f"- {a}" for a in list(avoid)[:40]))
+    try:
+        obj = _parse_obj(run_claude(
+            "\n\n".join(body), _READING_TOPICS_SYSTEM.format(n=int(n)),
+            model=model or TRANSLATE_MODEL, timeout=60)[0])
+    except Exception:  # noqa: BLE001
+        return []
+    out = (obj or {}).get("topics") if isinstance(obj, dict) else None
+    return [str(t).strip() for t in out if str(t).strip()][:n] if isinstance(out, list) else []
+
+
 _READING_PLAN_SYSTEM = """You plan a SHORT, self-contained Russian reading piece
 for a language learner — {parts} parts of ~130 words each, read one part at a
 time. Your job is the SHAPE: give the whole thing a real arc so that something

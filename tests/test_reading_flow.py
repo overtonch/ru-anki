@@ -135,6 +135,42 @@ def test_chunk_audio_is_synthesised_and_cached(client, db, stub_tts):
     assert any(ch.get("has_audio") for ch in client.get(f"/reading/sessions/{sid}").json()["chunks"])
 
 
+def test_archive_hides_a_piece_but_keeps_it_as_a_reference(client, db):
+    sid = client.post("/reading/sessions", json={"topic": "x"}).json()["id"]
+    client.post(f"/reading/sessions/{sid}/next", json={"read_seq": 5, "read_words": 120})
+    assert any(s["id"] == sid for s in client.get("/reading/sessions").json()["sessions"])
+
+    client.post(f"/reading/sessions/{sid}/archive", json={"on": True})
+    main = client.get("/reading/sessions").json()["sessions"]
+    arch = client.get("/reading/sessions?archived=1").json()["sessions"]
+    assert not any(s["id"] == sid for s in main)          # gone from the main list
+    assert any(s["id"] == sid and s["archived"] for s in arch)
+    # still fully readable
+    assert client.get(f"/reading/sessions/{sid}").json()["chunks"]
+
+    client.post(f"/reading/sessions/{sid}/archive", json={"on": False})
+    assert any(s["id"] == sid for s in client.get("/reading/sessions").json()["sessions"])
+
+
+def test_starting_a_piece_from_a_suggestion_retires_that_topic(client, db):
+    import reading_flow
+    doms = client.get("/reading/topics").json()["domains"]
+    fam = next(d for d in doms if d["id"] == "family")
+    picked = fam["topics"][0]
+    client.post("/reading/sessions", json={"topic": picked, "domain": "family"})
+    assert picked not in reading_flow.domain_topics("family")
+    assert picked in reading_flow._topic_state("reading_topic_used").get("family", [])
+
+
+def test_refresh_category_returns_a_fresh_set(client, db):
+    import reading_flow
+    before = reading_flow.domain_topics("food")
+    r = client.post("/reading/topics/food/refresh").json()
+    assert len(r["topics"]) == reading_flow._TOPICS_PER_DOMAIN
+    assert not (set(r["topics"]) & set(before))           # all new
+    assert client.get("/reading/topics").json()["domains"]  # picker still loads
+
+
 def test_delete(client, db):
     sid = client.post("/reading/sessions", json={"topic": "x"}).json()["id"]
     assert client.delete(f"/reading/sessions/{sid}").json()["deleted"] is True

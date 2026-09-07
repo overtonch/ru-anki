@@ -806,6 +806,15 @@
                        padding:.35rem .55rem; font:inherit; font-size:.76rem; cursor:pointer; white-space:nowrap; }
   .flib-row .flib-rev { background:none; border:1px solid var(--line); color:var(--muted); border-radius:.4rem;
                         padding:.35rem .5rem; font:inherit; font-size:.76rem; cursor:pointer; white-space:nowrap; }
+  .flib-row .flib-arch { background:none; border:0; color:var(--muted); font-size:1rem; line-height:1;
+                         padding:.3rem .35rem; cursor:pointer; flex:none; opacity:.6; }
+  .flib-row .flib-arch:hover { opacity:1; }
+  .fd-topics .fd-more { align-self:flex-start; background:none !important; border:0 !important; color:var(--accent) !important;
+                        font-size:.78rem !important; padding:.3rem .2rem !important; cursor:pointer; }
+  .flib-arch-h { display:flex; align-items:center; gap:.5rem; margin:1.2rem 0 .4rem; font-size:.8rem;
+                 color:var(--muted); cursor:pointer; user-select:none; }
+  .flib-arch-h::before { content:'▸'; font-size:.7rem; }
+  .flib-arch-h.open::before { content:'▾'; }
   .flow-review-tag { position:absolute; top:.5rem; left:50%; transform:translateX(-50%); z-index:7;
                      background:var(--accent-soft); color:var(--accent); font-family:var(--sans,system-ui);
                      font-size:.72rem; padding:.2rem .7rem; border-radius:1rem; }
@@ -2409,6 +2418,7 @@
       <button class="backlink" onclick="history.back()">← end</button>
       <div class="prog" id="flowProg" onclick="flowOpenWords()"></div>
       <button class="sbtn" id="flowListenBtn" onclick="flowListenToggle()" title="listen">🔊</button>
+      <button class="sbtn" onclick="if(FLOW&&FLOW.id)flowArchive(FLOW.id, true)" title="archive — keep as a reference">🗄</button>
       <button class="sbtn" id="flowNewBtn" onclick="flowNew()">＋</button>
     </div>
     <div class="flow-body" id="flowBody"></div>
@@ -6998,8 +7008,8 @@ async function flowNew() {
           <span class="fd-b">${escapeHtml(d.blurb || '')}</span>
           ${d.form ? `<span class="fd-c">${escapeHtml(d.form)}</span>`
             : d.grounded ? '<span class="fd-c">real facts</span>' : ''}</summary>
-        <div class="fd-topics">${(d.topics || []).map(t =>
-          `<button onclick="flowStart(${JSON.stringify(t).replace(/"/g, '&quot;')}, ${JSON.stringify(d.id).replace(/"/g, '&quot;')})">${escapeHtml(t)}</button>`).join('')}</div>
+        <div class="fd-topics" id="fd-topics-${escapeHtml(d.id)}">${fdTopicsHtml(d.id, d.topics)}
+          <button class="fd-more" onclick="flowRefreshCat(${JSON.stringify(d.id).replace(/"/g, '&quot;')}, this)">↻ more ideas</button></div>
       </details>`).join('')}</div>
     ${list.length ? `<button class="flow-cancel" onclick="flowLibrary()">📚 full reading library (${list.length})</button>` : ''}
     <button class="flow-cancel" onclick="$('#flowSheet').hidden=true; if(!FLOW||!FLOW.id) history.back();">cancel</button>`;
@@ -7009,14 +7019,29 @@ function flibRow(s) {
   const dom = s.domain_label ? escapeHtml(s.domain_label) + ' · ' : '';
   const prog = s.total ? (s.done ? '✓ finished' : `part ${s.chunks || 0}/${s.total}`) : '';
   const seq = s.parent_id ? '<span class="flib-seq">↳ sequel</span> ' : '';
+  const arch = s.archived
+    ? `<button class="flib-arch" title="restore" onclick="flowArchive(${s.id}, false)">⤴</button>`
+    : `<button class="flib-arch" title="archive" onclick="flowArchive(${s.id}, true)">🗄</button>`;
   return `<div class="flib-row">
-    <div class="flib-main" onclick="flowResume(${s.id})">
+    <div class="flib-main" onclick="flowResume(${s.id}${s.archived ? ', true' : ''})">
       <div class="flib-t">${seq}${escapeHtml(s.topic || 'session')}</div>
       <div class="flib-sub">${dom}${prog ? prog + ' · ' : ''}${s.unknown_seen ? s.unknown_seen + ' tapped · ' : ''}${s.level ? '~' + s.level.toUpperCase() + ' · ' : ''}${when ? relTime(when) : ''}</div>
     </div>
-    <button class="flib-rev" onclick="flowResume(${s.id}, true)">review</button>
-    <button class="flib-go" onclick="flowResume(${s.id})">${s.done ? 'reread' : 'continue ▸'}</button>
+    <button class="flib-rev" onclick="flowResume(${s.id}, true)">${s.archived ? 'open' : 'review'}</button>
+    ${s.archived ? '' : `<button class="flib-go" onclick="flowResume(${s.id})">${s.done ? 'reread' : 'continue ▸'}</button>`}
+    ${arch}
   </div>`;
+}
+async function flowArchive(id, on) {
+  if (!id) return;
+  try {
+    await api(`/reading/sessions/${id}/archive`, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ on }) });
+  } catch (e) { toast('couldn’t — ' + e.message, 2000); return; }
+  toast(on ? 'archived — find it under “archived” in the library' : 'restored', 2200);
+  const inLib = $('#flowSheet') && !$('#flowSheet').hidden;
+  if (FLOW && FLOW.id === id && on && !inLib) { closeFlow(); history.back(); }
+  else if (inLib) flowLibrary();
 }
 function relTime(iso) {
   const t = Date.parse((iso || '').replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(iso || '') ? '' : 'Z'));
@@ -7029,15 +7054,31 @@ function relTime(iso) {
 }
 async function flowLibrary() {
   $('#flowSheet').hidden = false;
-  let list = FLOW_LIB;
+  let list = FLOW_LIB, arch = [];
   try { list = (await api('/reading/sessions')).sessions || FLOW_LIB || []; } catch {}
+  try { arch = (await api('/reading/sessions?archived=1')).sessions || []; } catch {}
   FLOW_LIB = list;
   $('#flowSheet').innerHTML = `
     <h3>Reading library</h3>
-    <p class="dsk-hint">Every text you've generated. Continue any of them, or review what you've already seen.</p>
+    <p class="dsk-hint">Continue any piece, or review what you've already seen. Archive the ones you're done with — they stay here as references.</p>
     ${list.length ? `<div class="flow-lib">${list.map(s => flibRow(s)).join('')}</div>`
       : '<div class="empty">nothing yet</div>'}
+    ${arch.length ? `<div class="flib-arch-h" onclick="this.classList.toggle('open');this.nextElementSibling.hidden=!this.nextElementSibling.hidden">archived (${arch.length})</div>
+      <div class="flow-lib" hidden>${arch.map(s => flibRow(s)).join('')}</div>` : ''}
     <button class="flow-cancel" onclick="flowNew()">← back</button>`;
+}
+function fdTopicsHtml(did, topics) {
+  return (topics || []).map(t =>
+    `<button onclick="flowStart(${JSON.stringify(t).replace(/"/g, '&quot;')}, ${JSON.stringify(did).replace(/"/g, '&quot;')})">${escapeHtml(t)}</button>`).join('');
+}
+async function flowRefreshCat(did, btn) {
+  btn.disabled = true; btn.textContent = '↻ thinking…';
+  let topics;
+  try { topics = (await api(`/reading/topics/${did}/refresh`, { method: 'POST' })).topics; }
+  catch (e) { toast('couldn’t — ' + e.message, 2000); btn.disabled = false; btn.textContent = '↻ more ideas'; return; }
+  const box = $('#fd-topics-' + did);
+  if (box) box.innerHTML = fdTopicsHtml(did, topics) +
+    `<button class="fd-more" onclick="flowRefreshCat(${JSON.stringify(did).replace(/"/g, '&quot;')}, this)">↻ more ideas</button>`;
 }
 async function flowStart(topic, domain) {
   flowListenStop();
@@ -7135,6 +7176,7 @@ function flowEndCard() {
     <div class="fe-row">
       <button onclick="flowNew()">＋ something new</button>
       <button onclick="flowLibrary()">📚 library</button>
+      <button onclick="flowArchive(${FLOW.id}, true)">🗄 archive</button>
     </div>`;
   $('#flowBody').appendChild(el);
 }

@@ -14,6 +14,7 @@ import json  # noqa: F401
 import os
 import re
 import sys
+import threading
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
@@ -124,6 +125,122 @@ def suggested_topics():
     ]
 
 
+# ---------------------------------------------------------------- topic pool
+
+# The subject picker's per-category topic lists evolve: a topic you start a piece
+# from is retired and quietly replaced, and "refresh" swaps the whole set.
+_TOPICS_PER_DOMAIN = 5
+_SEEN_CAP = 60
+
+
+def _topic_state(key):
+    try:
+        raw = srs.get_setting(key, "") or ""
+        return json.loads(raw) if raw else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _save_topic_state(key, st):
+    srs.set_setting(key, json.dumps(st, ensure_ascii=False))
+
+
+def _seed_topics(did):
+    for d in proficiency.DOMAINS:
+        if d["id"] == did:
+            return list(d.get("topics") or [])
+    return []
+
+
+def domain_topics(did):
+    """The current suggestions for a category — the stored pool if we have one,
+    else the static seed minus anything already used."""
+    pool = _topic_state("reading_topic_pool")
+    cur = pool.get(did)
+    if cur:
+        return cur[:_TOPICS_PER_DOMAIN]
+    seen = set(_topic_state("reading_topic_used").get(did, []))
+    fresh = [t for t in _seed_topics(did) if t not in seen]
+    return fresh[:_TOPICS_PER_DOMAIN] or _seed_topics(did)[:_TOPICS_PER_DOMAIN]
+
+
+def picker_domains():
+    """proficiency.domains_public() with the live, evolving topic lists."""
+    out = proficiency.domains_public()
+    for d in out:
+        d["topics"] = domain_topics(d["id"])
+    return out
+
+
+def _domain_meta(did):
+    for d in proficiency.domains_public():
+        if d["id"] == did:
+            return d
+    return {"label": did, "blurb": "", "form": "", "grounded": False}
+
+
+def _gen_topics(did, n, avoid):
+    m = _domain_meta(did)
+    try:
+        return llm.reading_topics(m.get("label", did), m.get("blurb", ""),
+                                  m.get("form", ""), m.get("grounded", False),
+                                  avoid=avoid, n=n)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def note_topic_started(did, topic):
+    """A piece was started from this listed suggestion — retire it, mark it seen,
+    and top the category back up with a fresh idea (in the background)."""
+    topic = (topic or "").strip()
+    if not topic or not did:
+        return
+    pool = _topic_state("reading_topic_pool")
+    cur = pool.get(did) or domain_topics(did)
+    if topic not in cur and topic not in _seed_topics(did):
+        return                                  # a free-typed prompt, not a suggestion
+    used = _topic_state("reading_topic_used")
+    seen = used.get(did, [])
+    if topic not in seen:
+        seen.append(topic)
+    used[did] = seen[-_SEEN_CAP:]
+    _save_topic_state("reading_topic_used", used)
+    pool[did] = [t for t in cur if t != topic]
+    _save_topic_state("reading_topic_pool", pool)
+    threading.Thread(target=_rotate_one, args=(did,), daemon=True).start()
+
+
+def _rotate_one(did):
+    used = _topic_state("reading_topic_used").get(did, [])
+    pool = _topic_state("reading_topic_pool")
+    cur = pool.get(did) or []
+    if len(cur) >= _TOPICS_PER_DOMAIN:
+        return
+    new = _gen_topics(did, _TOPICS_PER_DOMAIN - len(cur), avoid=cur + used)
+    if not new:
+        return
+    pool = _topic_state("reading_topic_pool")          # re-read (thread)
+    cur = pool.get(did) or []
+    have = set(cur)
+    cur += [t for t in new if t not in have]
+    pool[did] = cur[:_TOPICS_PER_DOMAIN]
+    _save_topic_state("reading_topic_pool", pool)
+
+
+def refresh_topics(did):
+    """Replace a category's whole suggestion list with fresh ideas (the user hit
+    'more ideas'). Synchronous — the caller shows a spinner."""
+    used = _topic_state("reading_topic_used").get(did, [])
+    pool = _topic_state("reading_topic_pool")
+    cur = pool.get(did) or domain_topics(did)
+    new = _gen_topics(did, _TOPICS_PER_DOMAIN, avoid=cur + used + _seed_topics(did))
+    if not new:
+        return cur
+    pool[did] = new[:_TOPICS_PER_DOMAIN]
+    _save_topic_state("reading_topic_pool", pool)
+    return pool[did]
+
+
 PARTS = 5                       # a piece is this many parts, then it ends
 
 
@@ -138,6 +255,11 @@ def create(topic="", prompt="", domain=""):
     topic = (topic or "").strip()
     prompt = (prompt or "").strip()
     domain = (domain or "").strip() or proficiency.classify(topic, prompt)
+    if topic:
+        try:
+            note_topic_started(domain, topic)
+        except Exception:  # noqa: BLE001
+            pass
     start = proficiency.starting_rank(domain)
     cefr = _level_label(start)
     try:
@@ -329,7 +451,8 @@ def next_chunk(sid, read_seq=None, read_words=0):
         c.execute(
             "UPDATE reading_flow_sessions SET words_read = ("
             "  SELECT COALESCE(SUM(n_words),0) FROM reading_flow_chunks WHERE session_id=? AND read=1), "
-            "  last_read_at=datetime('now'), status=? WHERE id=?",
+            "  last_read_at=datetime('now'), "
+            "  status=CASE WHEN status='archived' THEN 'archived' ELSE ? END WHERE id=?",
             (sid, "done" if done else "active", sid))
         c.commit()
     c.close()
@@ -507,19 +630,38 @@ def chunk_audio(sid, seq):
     return out
 
 
-def recent(limit=40):
+def set_archived(sid, on=True):
+    """Move a finished piece to the archive (kept as a reference, out of the way)
+    or bring it back."""
     c = _c()
+    if on:
+        c.execute("UPDATE reading_flow_sessions SET status='archived' WHERE id=?", (sid,))
+    else:
+        c.execute(
+            "UPDATE reading_flow_sessions SET status="
+            "CASE WHEN chunks >= COALESCE(total_parts,?) THEN 'done' ELSE 'active' END "
+            "WHERE id=?", (PARTS, sid))
+    c.commit()
+    c.close()
+    return True
+
+
+def recent(limit=60, archived=False):
+    c = _c()
+    where = "status = 'archived'" if archived else "status IS NOT 'archived'"
     rows = c.execute(
         "SELECT id, topic, prompt, domain, status, chunks, total_parts, parent_id, "
         "words_read, unknown_seen, rank_est, created_at, last_read_at "
-        "FROM reading_flow_sessions ORDER BY COALESCE(last_read_at, created_at) DESC LIMIT ?",
+        f"FROM reading_flow_sessions WHERE {where} "
+        "ORDER BY COALESCE(last_read_at, created_at) DESC LIMIT ?",
         (limit,)).fetchall()
     c.close()
     return [{"id": r["id"], "topic": r["topic"], "status": r["status"],
+             "archived": r["status"] == "archived",
              "domain": r["domain"], "domain_label": proficiency.domain_label(r["domain"]),
              "level": _level_label(r["rank_est"]), "chunks": r["chunks"],
              "total": r["total_parts"] or PARTS, "parent_id": r["parent_id"],
-             "done": r["status"] == "done" or (r["chunks"] or 0) >= (r["total_parts"] or PARTS),
+             "done": r["status"] in ("done", "archived") or (r["chunks"] or 0) >= (r["total_parts"] or PARTS),
              "words_read": r["words_read"], "unknown_seen": r["unknown_seen"],
              "created_at": r["created_at"], "last_read_at": r["last_read_at"]}
             for r in rows]
