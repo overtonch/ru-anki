@@ -76,6 +76,40 @@ def _content_lemmas(text):
     return out
 
 
+def _mark_words(c, sid, texts):
+    """Per-word marks for a reader's chunks: every Cyrillic surface form → its
+    lemma, and which lemmas the reader has TAPPED this session (→ highlighted,
+    all forms) vs. has an SRS card for but not tapped (→ underlined, all forms).
+    Surface→lemma is done here (pymorphy) so the client isn't stuck on exact
+    string matches."""
+    surf2lem, present = {}, set()
+    for t in texts:
+        bare = accent.strip(t or "")
+        for m in _WORD.finditer(bare):
+            w = m.group(0)
+            if len(w) < 2:
+                continue
+            key = w.lower().replace("ё", "е")
+            if key in surf2lem:
+                continue
+            lem = db.lemma_key(w) or ""
+            surf2lem[key] = lem
+            if lem:
+                present.add(lem)
+    tapped = {r["lemma"] for r in c.execute(
+        "SELECT lemma FROM reading_flow_unknown WHERE session_id=?", (sid,))}
+    tap = sorted(present & tapped)
+    card = sorted((present & _known_set(c)) - tapped)
+    gloss = {}
+    if card:
+        ph = ",".join("?" * len(card))
+        for r in c.execute(
+            f"SELECT normalized_text, translation FROM srs_cards "
+            f"WHERE is_phrase=0 AND normalized_text IN ({ph}) AND translation IS NOT NULL", card):
+            gloss.setdefault(r["normalized_text"], (r["translation"] or "").strip())
+    return {"lemmas": surf2lem, "tap": tap, "card": card, "card_gloss": gloss}
+
+
 def _predict_unknown(text, rank_est, known, ranks=None):
     lemmas = set(_content_lemmas(text))
     if not lemmas:
@@ -550,17 +584,21 @@ def _chunk(sid, which="last"):
                       (sid, int(which))).fetchone()
     s = c.execute("SELECT status, error, rank_est, total_parts, chunks, plan "
                   "FROM reading_flow_sessions WHERE id=?", (sid,)).fetchone()
-    c.close()
     if not s:
+        c.close()
         return None
     if s["status"] == "error":
+        c.close()
         return {"error": s["error"] or "generation failed"}
     if not r:
+        c.close()
         return {"error": "no chunk"}
+    marks = _mark_words(c, sid, [r["text_accented"] or r["text"] or ""])
+    c.close()
     total = s["total_parts"] or PARTS
     plan = _plan_dict(s)
     return {"seq": r["seq"], "text": r["text_accented"] or r["text"],
-            "plain": r["text"], "n_words": r["n_words"],
+            "plain": r["text"], "n_words": r["n_words"], "marks": marks,
             "level": _level_label(s["rank_est"]), "rank_est": s["rank_est"],
             "part": r["seq"], "total": total, "title": (plan or {}).get("title"),
             "done": s["status"] == "done" or (s["chunks"] or 0) >= total}
@@ -583,6 +621,7 @@ def session(sid):
                          or store.gloss_for(r["lemma"])}
                for r in c.execute(
                    "SELECT * FROM reading_flow_unknown WHERE session_id=? ORDER BY at", (sid,))]
+    marks = _mark_words(c, sid, [ch["text"] for ch in chunks])
     c.close()
     plan = _plan_dict(s)
     total = s["total_parts"] or PARTS
@@ -597,7 +636,7 @@ def session(sid):
             "level": _level_label(s["rank_est"]), "rank_est": s["rank_est"],
             "words_read": s["words_read"], "unknown_seen": s["unknown_seen"],
             "created_at": s["created_at"], "last_read_at": s["last_read_at"],
-            "chunks": chunks, "unknown": unknown}
+            "chunks": chunks, "unknown": unknown, "marks": marks}
 
 
 def chunk_audio(sid, seq):

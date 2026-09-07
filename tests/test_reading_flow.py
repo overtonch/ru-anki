@@ -41,6 +41,26 @@ def test_tapping_words_lowers_the_level_estimate(client, db):
     assert client.get(f"/reading/sessions/{sid}").json()["unknown_seen"] == 8
 
 
+def test_word_marks_cover_all_forms_tapped_vs_carded(client, db):
+    """Every inflected form of a word you've tapped (highlight) or already have a
+    card for (underline) is marked, not just the exact string."""
+    import srs
+    # a card the reader had before the session — appears in the stub text as «городе»
+    srs.create_card("Большой город тут.", "город", "город", False, "город")
+    sid = client.post("/reading/sessions", json={"topic": "x"}).json()["id"]
+    # tap one word — the stub text has «думал», lemma думать
+    client.post(f"/reading/sessions/{sid}/tap", json={"surface": "думал", "sentence": "он думал"})
+
+    m = client.get(f"/reading/sessions/{sid}").json()["marks"]
+    assert "думать" in m["tap"] and "город" in m["card"]
+    assert "город" not in m["tap"] and "думать" not in m["card"]
+    # the surface→lemma map resolves the actual inflected forms in the text
+    assert m["lemmas"].get("думал") == "думать"
+    assert m["lemmas"].get("городе") == "город"
+    # carded words carry their card translation for the in-context peek
+    assert isinstance(m.get("card_gloss"), dict)
+
+
 def test_reading_without_tapping_does_not_move_the_global_level(client, db):
     """Continuing past a part with zero taps is ambiguous (comprehension vs.
     skimming) — it must not feed the global estimate."""

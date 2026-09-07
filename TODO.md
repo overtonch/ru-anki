@@ -234,6 +234,14 @@ library + proficiency graphs all ride on this.
   (worst-priority first, with the breakdown) + `POST /srs/cards/bulk`
   {ids, suspend|delete}; `#triageView` screen, opened from the `#newReserve`
   home strip.
+- (done 2026-09-07) **reading word marks — all forms** — `reading_flow._mark_words`
+  lemmatises every surface in the chunks server-side and returns `marks`
+  ({lemmas: surf→lemma, tap: [...], card: [...], card_gloss}). Frontend
+  `flowMarkClass`/`flowPaintWords`: words tapped this session are HIGHLIGHTED in
+  every inflected form; words you already had a card for (untapped) are
+  UNDERLINED (green, `.fw.known-card`). Tapping an underlined word peeks at the
+  card's meaning without counting it (`flowPeekCard`); "still don't know it"
+  converts it to a real tap. Fixes the old strict surface-string matching.
 - (done 2026-09-07) **min-interval floor on a pass** — FSRS hands a
   repeatedly-failed card a sub-day stability and then schedules Good AND Easy for
   tomorrow (identical, feels broken, buries you in reviews). `srs._floor_pass`:

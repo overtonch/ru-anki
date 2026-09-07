@@ -734,6 +734,9 @@
   #flowListenBtn.on { color:var(--accent); }
   .flow-body .fw:active { background:var(--accent-soft); }
   .flow-body .fw.unknown { background:rgba(230,185,60,.24); box-shadow:inset 0 -2px 0 #e6b93c; }
+  /* a word you already had a card for, in every form — a chance to recall it in context */
+  .flow-body .fw.known-card { box-shadow:inset 0 -2px 0 rgba(67,176,114,.6); }
+  .flow-body .fw.known-card.unknown { box-shadow:inset 0 -2px 0 #e6b93c; }   /* tapped wins */
   .flow-body .fw.seed { border-bottom:1px dotted var(--accent); }
   .flow-body .f-sentinel { height:1px; }
   .flow-body .f-load { text-align:center; color:var(--muted); font-size:.85rem; font-family:var(--sans, system-ui);
@@ -7239,9 +7242,11 @@ async function flowResume(id, review) {
            lastLevel: s.level, total: s.total || 5, part: (s.chunks || []).length || 1,
            title: s.title || s.topic || '' };
   (s.unknown || []).forEach(u => { FLOW.unknown[u.lemma] = u; });
+  flowMergeMarks(s.marks);
   $('#flowBody').innerHTML = '';
   $('#flowReviewTag') && $('#flowReviewTag').remove();
   (s.chunks || []).forEach(c => flowAppendChunk(c, true));
+  flowPaintWords();
   flowWireScroll();
   refreshFlowProg();
   $('#flowBody').scrollTop = review ? 0 : $('#flowBody').scrollHeight;
@@ -7330,6 +7335,7 @@ function flowAppendChunk(chunk, silent) {
   if (chunk.part) FLOW.part = chunk.part;
   if (chunk.title && !FLOW.title) FLOW.title = chunk.title;
   if (chunk.done) FLOW.done = true;
+  if (chunk.marks) flowMergeMarks(chunk.marks);
   const wrap = document.createElement('div');
   wrap.dataset.seq = chunk.seq;
   chunk.text.split(/\n\n+/).forEach(para => {
@@ -7344,8 +7350,12 @@ function flowAppendChunk(chunk, silent) {
       sp.textContent = tok;
       sp.dataset.s = bare;
       sp.dataset.para = para;
-      const u = flowUnkEntry(bare);
-      if (u) { sp.classList.add('unknown'); sp.dataset.lem = u.lemma; }
+      const cls = flowMarkClass(bare);
+      if (cls) {
+        sp.classList.add(cls);
+        const lem = flowLemOf(bare);
+        if (lem) sp.dataset.lem = lem;
+      }
       sp.onclick = ev => flowTapWord(sp, ev);
       p.appendChild(sp);
     });
@@ -7354,7 +7364,38 @@ function flowAppendChunk(chunk, silent) {
   const sent = document.createElement('div'); sent.className = 'f-sentinel';
   wrap.appendChild(sent);
   $('#flowBody').appendChild(wrap);
+  flowPaintWords();                      // marks that landed after an earlier part
   if (FLOW._io && !FLOW.review) FLOW._io.observe(sent);
+}
+function flowMergeMarks(m) {
+  if (!m) return;
+  FLOW.mk = FLOW.mk || { surf: {}, tap: new Set(), card: new Set(), gloss: {} };
+  Object.assign(FLOW.mk.surf, m.lemmas || {});
+  Object.assign(FLOW.mk.gloss, m.card_gloss || {});
+  (m.tap || []).forEach(l => FLOW.mk.tap.add(l));
+  (m.card || []).forEach(l => FLOW.mk.card.add(l));
+}
+function flowLemOf(bare) {
+  const key = rlemmaGuess(bare);
+  return (FLOW.mk && FLOW.mk.surf[key]) || (flowUnkEntry(bare) || {}).lemma || null;
+}
+// 'unknown' = tapped this session — highlight, all forms · 'known-card' = you
+// already had a card for it and haven't tapped it — underline, all forms.
+function flowMarkClass(bare) {
+  const lem = flowLemOf(bare);
+  if (flowUnkEntry(bare) || (lem && FLOW.mk && FLOW.mk.tap.has(lem))) return 'unknown';
+  if (lem && FLOW.mk && FLOW.mk.card.has(lem)) return 'known-card';
+  return '';
+}
+function flowPaintWords() {
+  if (!FLOW) return;
+  $('#flowBody').querySelectorAll('.fw').forEach(sp => {
+    const cls = flowMarkClass(sp.dataset.s);
+    sp.classList.toggle('unknown', cls === 'unknown');
+    sp.classList.toggle('known-card', cls === 'known-card');
+    const lem = flowLemOf(sp.dataset.s);
+    if (lem && cls) sp.dataset.lem = lem;
+  });
 }
 function rlemmaGuess(w) { return (w || '').toLowerCase().replace(/ё/g, 'е'); }
 // FLOW.unknown is keyed by the server's lemma, which differs from an inflected
@@ -7399,6 +7440,8 @@ async function flowTapWord(sp, ev) {
   ev && ev.stopPropagation();
   const surface = sp.dataset.s;
   const already = sp.classList.contains('unknown');
+  // a word you already had a card for — just peek at the meaning, don't count it
+  if (!already && sp.classList.contains('known-card')) { flowPeekCard(sp, surface); return; }
   // sentence around the word (strip stress marks so it matches the bare surface)
   const para = (sp.dataset.para || '').replace(/[\u0300-\u036f]/g, '');
   let sentence = para;
@@ -7419,12 +7462,11 @@ async function flowTapWord(sp, ev) {
       body: JSON.stringify({ surface, sentence, chunk_seq: +(sp.closest('[data-seq]') || {}).dataset?.seq || null }) });
     FLOW.unknown[d.lemma] = { ...u0, lemma: d.lemma, surface, sentence, gloss: d.gloss, accented: d.accented, rank: d.rank };
     sp.dataset.lem = d.lemma;
-    // mark every occurrence
-    $('#flowBody').querySelectorAll('.fw').forEach(x => {
-      if (rlemmaGuess(x.dataset.s) === d.lemma || rlemmaGuess(x.dataset.s) === rlemmaGuess(surface)) {
-        x.classList.add('unknown'); x.dataset.lem = d.lemma;
-      }
-    });
+    // this lemma is now "tapped" — highlight every form of it
+    FLOW.mk = FLOW.mk || { surf: {}, tap: new Set(), card: new Set() };
+    FLOW.mk.tap.add(d.lemma);
+    FLOW.mk.surf[rlemmaGuess(surface)] = d.lemma;
+    flowPaintWords();
     // only replace the popover if it's still showing this word
     const pop = $('#flowPop');
     if (!pop.hidden && pop.dataset.for === rlemmaGuess(surface))
@@ -7474,16 +7516,36 @@ async function flowUntap(surface, lem) {
   const u = (lem && FLOW.unknown[lem]) || flowUnkEntry(surface, lem);
   const key = u ? u.lemma : (lem || rlemmaGuess(surface));
   delete FLOW.unknown[key];
-  const g = rlemmaGuess(surface), lg = rlemmaGuess(key);
-  $('#flowBody').querySelectorAll('.fw').forEach(x => {
-    if (x.dataset.lem === key || rlemmaGuess(x.dataset.s) === g || rlemmaGuess(x.dataset.s) === lg) {
-      x.classList.remove('unknown'); delete x.dataset.lem;
-    }
-  });
+  if (FLOW.mk) FLOW.mk.tap.delete(key);
   $('#flowPop').hidden = true;
+  flowPaintWords();                          // drops to plain, or to underline if carded
   try { await api(`/reading/sessions/${FLOW.id}/untap`, { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ surface }) }); } catch {}
   refreshFlowProg();
+}
+// peek at a word you already have a card for — show the meaning, no tap recorded
+async function flowPeekCard(sp, surface) {
+  const lem = flowLemOf(surface);
+  let g = (FLOW.mk && FLOW.mk.gloss && lem && FLOW.mk.gloss[lem]) || '';
+  flowShowPop(sp, sp.textContent.trim(), g || 'looking up…', false);
+  if (!g) {
+    try { const d = await api('/gloss?span=' + encodeURIComponent(surface)); g = d.gloss || d.translation || ''; }
+    catch {}
+  }
+  const pop = $('#flowPop');
+  if (pop.hidden || pop.dataset.for !== rlemmaGuess(surface)) return;
+  pop.innerHTML = `<span class="fp-w">${escapeHtml(sp.textContent.trim())}</span>
+    <span class="fp-g">${escapeHtml(g || 'no translation found')}</span>
+    <div class="fp-acts"><span class="fp-done">✓ you have a card for this</span>
+      <button class="fp-x" onclick="flowMarkUnknownFromCard('${escapeHtml(surface)}')">still don't know it</button></div>`;
+}
+// "still don't know it" on a carded word → treat it as a normal tap after all
+function flowMarkUnknownFromCard(surface) {
+  const sp = [...$('#flowBody').querySelectorAll('.fw')].find(x => x.dataset.s === surface
+    || rlemmaGuess(x.dataset.s) === rlemmaGuess(surface));
+  if (!sp) return;
+  sp.classList.remove('known-card');
+  flowTapWord(sp, null);
 }
 document.addEventListener('click', e => {
   if ($('#flowPop') && !$('#flowPop').hidden && !e.target.closest('#flowPop') && !e.target.closest('.fw'))
