@@ -653,6 +653,12 @@ def estimate():
         active_words = activate.active_count()
     except Exception:  # noqa: BLE001
         active_words = 0
+    try:
+        import speaking_levels
+        speaking = speaking_levels.estimate(reading_cefr=cefr)
+    except Exception as _e:  # noqa: BLE001
+        print(f"[proficiency] speaking estimate: {_e}", flush=True)
+        speaking = None
 
     # vocabulary size: the cutoff is "knows most words this common"; scale down a
     # little because nobody knows every word above their cutoff, then add cards
@@ -673,6 +679,7 @@ def estimate():
         "retention": retention,
         "domains": domains,
         "book": book,
+        "speaking": speaking,
         "day": _iso_day(),
     }
 
@@ -698,22 +705,29 @@ def snapshot(force=True):
         c.close()
         return e
     ak_cov = (e.get("book") or {}).get("coverage")
+    sp = e.get("speaking") or {}
+    sp_ord = sp.get("ord")
+    rd_ord = sp.get("reading_ord")
+    sp_cefr = sp.get("cefr")
     c.execute(
         """INSERT INTO proficiency_snapshots
              (day, known_words, known_rank, cefr, cards_total, cards_word,
               cards_mature, words_read, comprehension, retention, domains,
-              ak_coverage, active_words)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+              ak_coverage, active_words, speaking_ord, reading_ord, speaking_cefr)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(day) DO UPDATE SET
              known_words=excluded.known_words, known_rank=excluded.known_rank,
              cefr=excluded.cefr, cards_total=excluded.cards_total,
              cards_word=excluded.cards_word, cards_mature=excluded.cards_mature,
              words_read=excluded.words_read, comprehension=excluded.comprehension,
              retention=excluded.retention, domains=excluded.domains,
-             ak_coverage=excluded.ak_coverage, active_words=excluded.active_words""",
+             ak_coverage=excluded.ak_coverage, active_words=excluded.active_words,
+             speaking_ord=excluded.speaking_ord, reading_ord=excluded.reading_ord,
+             speaking_cefr=excluded.speaking_cefr""",
         (day, e["known_words"], e["known_rank"], e["cefr"], e["cards_total"],
          e["cards_word"], e["cards_mature"], e["words_read"], e["comprehension"],
-         e["retention"], dom_json, ak_cov, e.get("active_words")))
+         e["retention"], dom_json, ak_cov, e.get("active_words"),
+         sp_ord, rd_ord, sp_cefr))
     c.commit()
     c.close()
     return e

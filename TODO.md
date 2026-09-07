@@ -90,6 +90,34 @@ library + proficiency graphs all ride on this.
   - (done 2026-09-06) **productive-vocabulary track** — words introduced
     newest-frequent from `freq`, same loop. Active-word count on the Level tab
     (`proficiency_snapshots.active_words`).
+  - (done 2026-09-06) **CEFR difficulty a1→c2** (`activate.LEVELS` + `_LEVEL_GUIDE`),
+    exposed as a slider; **self-adjusting** (`_adapt_level`, 85% rule — see
+    LEARNING.md #13) with a manual override + `auto` toggle.
+  - (done 2026-09-06) **hardest government first** — `_hardness` scores each verb
+    0–4 off its primary pattern (bare instr/gen object = 4, unpredictable prep =
+    3, directional в/на = 2, plain acc / trivial verbs = 0); intro order is
+    `hardness DESC, rank ASC`. "I know this — skip" retires an item (rating 5).
+  - (done 2026-09-06) **endless** — `per_day` 0 = unlimited; `next_item` always
+    introduces or serves the soonest-due, never dead-ends.
+  - (done 2026-09-06) **diagnostic sentences** — prompt keeps everything around
+    the target lexically trivial so a failure implicates the target; complexity
+    slider scales *structure* not word rarity.
+  - (done 2026-09-06) **granular failure tags** — `_MISS_TAGS`, self-reported on
+    a miss, stored in `activate_log.categories`, drive `weak_spots`. Check now
+    runs via `/activate/items/{id}/check` (no double-log).
+  - (done 2026-09-06) **calibration sweep** — `GET/POST /activate/calibrate`
+    (`calibration_batch` / `calibrate`): sweep the not-yet-mastered list
+    (verbs hardest-government first), tap the ones you already handle → retired
+    as active. The fast way to skip a big passive vocabulary. Button in
+    `actSettings`. Adaptive climb also jumps 2 rungs on a perfect streak
+    (`_ADAPT_WINDOW` 8). **Bug fixed**: `#actSheet input` had a blanket
+    `-webkit-appearance:none` that broke the level slider (no thumb → undraggable)
+    and the auto toggle (invisible box) — scoped to `[type=number]`, added a real
+    range thumb + `.tgl` switch.
+  - (done 2026-09-06) **speaking level ladder** — `speaking_levels.py`: per-CEFR
+    productive-vocab bands, speaking `ord` on the same 0..6 scale as reading,
+    `gap` tracked in `proficiency_snapshots` (`speaking_ord`/`reading_ord`/
+    `speaking_cefr`); rendered on the Level tab (`profSpeaking` + `profDualSpark`).
   - **track 3 — construction / frame gym** (`kind='frame'`) — curated ~40–60
     high-value structures (если…то, чтобы+inf, то, что…, не только…но и,
     чем…тем, кое-/-нибудь, participial/gerund phrases), each drilled by "express

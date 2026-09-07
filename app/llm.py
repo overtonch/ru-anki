@@ -2151,6 +2151,21 @@ You are given ONE target (a verb or a word), what it means, and — for a verb �
 its government. Produce ONE English sentence for him to say in Russian, chosen so
 that saying it naturally FORCES the target and, for a verb, its tricky government.
 
+THE TARGET IS THE ONLY HARD THING IN THE SENTENCE. This is the core design rule.
+The point of the drill is to test the target, so a failure must implicate the
+target — not some incidental word or construction he happened not to know.
+- Everything AROUND the target — the other vocabulary, the subject, the objects,
+  the time expressions — must be plain, top-frequency, A1/A2 words he can already
+  say without thinking (я, друг, работа, вчера, дом, хотеть, мочь…).
+- No second unusual verb, no second tricky case, no rare noun, no idiom, no word
+  he'd have to reach for. If the target is a verb, the rest of the clause should
+  be almost trivial so that all the difficulty sits on the verb and its
+  case/preposition.
+- The COMPLEXITY line controls the SHAPE of the thought (how many clauses, tense,
+  mood, a conditional…), NOT the rarity of the words. Build the required
+  structure out of easy words. A b2 sentence is structurally complex but
+  lexically simple except for the target.
+
 RULES
 - `task` is EXACTLY the thought to express — a plain first-person English
   sentence that is the direct translation of what he will say in Russian.
@@ -2161,8 +2176,6 @@ RULES
   girlfriend's Russian family, works in tech, lives in a city).
 - Vary the sentence each time this target recurs: statement about you / about
   someone else / past / negative / a yes-no question / a hypothetical ("if …").
-- LEVEL — the input carries a "COMPLEXITY:" line. Pitch the English sentence at
-  exactly that; do not go simpler or more elaborate.
 - Do NOT put the target's dictionary form in the English if it would give away
   the Russian word choice; a natural English wording is fine.
 - `model` = the Russian he should produce — a faithful, natural translation of

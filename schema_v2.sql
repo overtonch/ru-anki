@@ -584,7 +584,9 @@ CREATE TABLE IF NOT EXISTS activate_log (
     at        TEXT NOT NULL DEFAULT (datetime('now')),
     rating    INTEGER,
     produced  TEXT,
-    category  TEXT
+    category  TEXT,                              -- primary error tag (from the check, or self-reported)
+    categories TEXT,                             -- JSON list of every error the learner flagged
+    level     TEXT                               -- the working CEFR level at grade time
 );
 
 -- ===================================================================
@@ -605,5 +607,9 @@ CREATE TABLE IF NOT EXISTS proficiency_snapshots (
     retention    REAL,
     domains      TEXT,
     ak_coverage  REAL,                            -- share of Anna Karenina's running words known
+    active_words INTEGER,                          -- lemmas the learner can actively produce
+    speaking_ord REAL,                             -- speaking level on the 0..6 CEFR ladder
+    reading_ord  REAL,                             -- reading level on the same ladder (for the gap)
+    speaking_cefr TEXT,
     created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );

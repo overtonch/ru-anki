@@ -125,6 +125,26 @@ things he knows. Low-stakes, silent, self-paced production (no listener, no
 clock at first) lets ability show through; success there rebuilds the confidence
 that then transfers to real speaking. Don't front-load hard open-ended tasks.
 
+### 13. Optimal difficulty / the 85% rule (Wilson, Shenhav, Straccia & Cohen 2019)
+For a task whose difficulty can be tuned continuously, learning rate is
+maximised when the learner gets **~85% correct** (training error ≈ 15%). Too
+easy (→100%) and nothing is learned; too hard (→50–60%) and the signal is noise.
+This matches the retrieval-practice finding that *successful* retrievals are what
+strengthen memory. So an adaptive productive drill should **measure its own
+success rate and steer difficulty to hold ~85%** — not sit at a fixed level.
+Applied in Activate: rolling success over the last ~12 attempts, nudge the CEFR
+rung up above ~92%, down below ~75%.
+
+### 14. Diagnostic task design — isolate the thing under test
+If an exercise means to test X, a failure must implicate X, not incidental
+difficulty. When drilling verb government, the rest of the sentence must be
+lexically trivial (top-frequency words the learner already produces) so the only
+real challenge is the target's case/preposition. Sentence *structure* can still
+scale with level (clauses, mood, aspect) — built out of easy words. Pair this
+with **granular failure reporting**: let the learner tag *which* sub-skill broke
+(government / case / aspect / agreement / word-order / lexical / couldn't-start)
+so the weak-spot signal is real and the item comes back for the right reason.
+
 ---
 
 ## What each existing mode is for
@@ -138,11 +158,17 @@ that then transfers to real speaking. Don't front-load hard open-ended tasks.
 | **Speak (reformulation)** | meaning-focused output | English thought → Russian, native reformulations, gaps → production cards |
 | **Grammar map / drill** | language-focused learning | targeted rule practice, contrastive |
 | **Motion verbs / chunks** | language-focused learning | closed hard subsystems drilled explicitly |
-| **Proficiency / Level tab** | metacognition | known-vocab estimate, per-domain fluency, AK readiness — makes progress visible, which sustains effort |
+| **Activate (speaking)** | meaning-focused output; fluency; language-focused learning | endless SRS-lite productive drill: English thought → Russian, verb-government first (hardest government introduced first), self-adjusting difficulty (85% rule), granular failure tags |
+| **Proficiency / Level tab** | metacognition | known-vocab estimate, per-domain fluency, AK readiness, **reading vs speaking CEFR ladder + the gap** — makes progress visible, which sustains effort |
 
-**Gaps:** productive vocabulary retrieval, verb-government as chunks, morphological
-automatization, and dedicated fluency (speed) work. See TODO / the "speaking
-activation" design.
+**Speaking-level model** (`speaking_levels.py`): CEFR bands map to frequency-rank
+bands (a1 ≈ first ~550 lemmas … c2 ≈ 10k+). A level's productive vocabulary is
+"owned" at ~60% (nobody actively wields every word in a band). The speaking
+`ord` (0..6) sits on the same ladder as the reading level; the daily snapshot
+stores both so the stats page can show the gap closing over time.
+
+**Gaps:** morphological automatization, dedicated fluency (speed) work, and the
+"frame" (sentence-construction) track of Activate. See TODO.
 
 ---
 

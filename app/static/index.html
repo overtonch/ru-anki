@@ -690,19 +690,25 @@
   .study-done .sd-reserve { margin-top:.3rem; font-size:.82rem; }
   .study-done .sd-reserve.low { color:#e0b256; }
   .study-done .sd-reserve.out { color:#e07a6d; font-weight:600; }
-  #motionBanner, #drillBanner, #chunkBanner, #speechBanner, #journalBanner, #flowBanner, #convoBanner { display:flex; align-items:center; gap:.7rem; width:100%; text-align:left;
+  #motionBanner, #drillBanner, #chunkBanner, #speechBanner, #journalBanner, #convoBanner { display:flex; align-items:center; gap:.7rem; width:100%; text-align:left;
                  background:var(--card-2); color:var(--fg-dim); border:1px solid var(--line);
                  border-radius:var(--r); padding:.7rem 1rem; margin:-.2rem 0 .6rem;
                  cursor:pointer; font:inherit; transition:transform .1s; }
-  #motionBanner:active, #drillBanner:active, #chunkBanner:active, #speechBanner:active, #journalBanner:active, #flowBanner:active, #convoBanner:active { transform:scale(.99); }
-  #motionBanner .sb-ico, #drillBanner .sb-ico, #chunkBanner .sb-ico, #speechBanner .sb-ico, #journalBanner .sb-ico, #flowBanner .sb-ico, #convoBanner .sb-ico { font-size:1.3rem; }
-  #motionBanner .sb-main, #drillBanner .sb-main, #chunkBanner .sb-main, #speechBanner .sb-main, #journalBanner .sb-main, #flowBanner .sb-main, #convoBanner .sb-main { flex:1; min-width:0; }
-  #motionBanner .sb-t, #drillBanner .sb-t, #chunkBanner .sb-t, #speechBanner .sb-t, #journalBanner .sb-t, #flowBanner .sb-t, #convoBanner .sb-t { font-weight:700; font-size:.95rem; color:var(--fg); }
-  #motionBanner .sb-m, #drillBanner .sb-m, #chunkBanner .sb-m, #speechBanner .sb-m, #journalBanner .sb-m, #flowBanner .sb-m, #convoBanner .sb-m { font-size:.76rem; opacity:.75; line-height:1.35; display:block; }
-  #motionBanner .sb-go, #drillBanner .sb-go, #chunkBanner .sb-go, #speechBanner .sb-go, #journalBanner .sb-go, #flowBanner .sb-go, #convoBanner .sb-go { font-size:1.1rem; color:var(--muted); }
-  .hb-new { border-color:var(--accent) !important; background:var(--accent-soft) !important; }
-  .hb-new .sb-t { color:var(--accent) !important; }
-  .hb-new .sb-m { opacity:.9 !important; }
+  #motionBanner:active, #drillBanner:active, #chunkBanner:active, #speechBanner:active, #journalBanner:active, #convoBanner:active { transform:scale(.99); }
+  #motionBanner .sb-ico, #drillBanner .sb-ico, #chunkBanner .sb-ico, #speechBanner .sb-ico, #journalBanner .sb-ico, #convoBanner .sb-ico { font-size:1.3rem; }
+  #motionBanner .sb-main, #drillBanner .sb-main, #chunkBanner .sb-main, #speechBanner .sb-main, #journalBanner .sb-main, #convoBanner .sb-main { flex:1; min-width:0; }
+  #motionBanner .sb-t, #drillBanner .sb-t, #chunkBanner .sb-t, #speechBanner .sb-t, #journalBanner .sb-t, #convoBanner .sb-t { font-weight:700; font-size:.95rem; color:var(--fg); }
+  #motionBanner .sb-m, #drillBanner .sb-m, #chunkBanner .sb-m, #speechBanner .sb-m, #journalBanner .sb-m, #convoBanner .sb-m { font-size:.76rem; opacity:.75; line-height:1.35; display:block; }
+  #motionBanner .sb-go, #drillBanner .sb-go, #chunkBanner .sb-go, #speechBanner .sb-go, #journalBanner .sb-go, #convoBanner .sb-go { font-size:1.1rem; color:var(--muted); }
+  /* primary modes — big two-up tiles: icon + one-word name, nothing else */
+  .hb-grid { display:grid; grid-template-columns:1fr 1fr; gap:.55rem; margin:.3rem 0 .7rem; }
+  .hb-grid > button { display:flex; flex-direction:column; align-items:center; justify-content:center;
+                      gap:.5rem; min-height:108px; padding:1.1rem .7rem; border-radius:var(--r);
+                      border:1px solid var(--accent); background:var(--accent-soft); color:var(--accent);
+                      font:inherit; cursor:pointer; transition:transform .1s; }
+  .hb-grid > button:active { transform:scale(.98); }
+  .hb-grid .hb-ico { font-size:2rem; line-height:1; }
+  .hb-grid .hb-name { font-size:1.05rem; font-weight:750; letter-spacing:.01em; }
   #legacyModes { margin:.5rem 0 .6rem; }
   #legacyModes > summary { list-style:none; cursor:pointer; font-size:.8rem; color:var(--muted);
                            padding:.4rem 0; user-select:none; }
@@ -827,8 +833,8 @@
   .act-input { width:100%; min-height:3.5rem; background:var(--card); border:1px solid var(--line);
                border-radius:10px; padding:.7rem .8rem; font:inherit; font-size:1.05rem; color:var(--fg);
                -webkit-appearance:none; text-align:left; }
-  .act-go { margin-top:1rem; padding:.8rem 1.6rem; border-radius:2rem; border:0; background:var(--ok);
-            color:#0b1016; font:inherit; font-weight:700; cursor:pointer; }
+  .act-go { align-self:center; margin-top:1rem; padding:.45rem 1rem; border-radius:.55rem; border:0;
+            background:var(--ok); color:#0b1016; font:inherit; font-size:.9rem; font-weight:700; cursor:pointer; }
   .act-modeswap { background:none; border:0; color:var(--accent); font:inherit;
                   font-size:.8rem; cursor:pointer; }
   .act-frontrow { display:flex; gap:1.4rem; margin-top:1.3rem; }
@@ -848,6 +854,13 @@
   .act-gov .agp i { display:block; font-style:normal; font-size:.9rem; color:var(--fg-dim); margin-top:.2rem; }
   .act-gov .act-trap { font-size:.82rem; color:#e6b93c; margin-top:.5rem; }
   .act-selfgrade { font-size:.8rem; color:var(--muted); margin:1.4rem 0 .3rem; }
+  .act-miss { width:100%; margin:.6rem 0 .2rem; }
+  .act-miss .am-h { font-size:.74rem; color:var(--muted); margin-bottom:.4rem; }
+  .act-miss .am-h span { opacity:.7; }
+  .act-miss .am-chips { display:flex; flex-wrap:wrap; gap:.35rem; }
+  .act-miss .am-chip { background:var(--card-2); border:1px solid var(--line); color:var(--fg-dim);
+                       border-radius:99px; padding:.28rem .6rem; font:inherit; font-size:.76rem; cursor:pointer; }
+  .act-miss .am-chip.on { background:var(--accent-soft); border-color:var(--accent); color:var(--accent); }
   .study-rate.act-rate button .rl { font-size:.82rem; }
   #actSheet { position:absolute; inset:0; z-index:8; background:var(--bg); overflow-y:auto;
               padding:1.1rem 1.15rem calc(2rem + env(safe-area-inset-bottom)); }
@@ -855,13 +868,40 @@
   #actSheet h3 { font-size:1.05rem; margin:.2rem 0 .8rem; }
   #actSheet .dsk-row { display:flex; justify-content:space-between; align-items:center; gap:1rem;
                        padding:.6rem 0; border-top:1px solid var(--line-soft); font-size:.9rem; }
-  #actSheet select, #actSheet input { background:var(--card); border:1px solid var(--line); color:var(--fg);
-                                      border-radius:8px; padding:.45rem .6rem; font:inherit; -webkit-appearance:none; }
+  #actSheet .dsk-row.tap { cursor:pointer; }
+  #actSheet select, #actSheet input[type=number], #actSheet input[type=text] {
+      background:var(--card); border:1px solid var(--line); color:var(--fg);
+      border-radius:8px; padding:.45rem .6rem; font:inherit; -webkit-appearance:none; appearance:none; }
   #actSheet input[type=number] { width:4rem; text-align:center; }
+  /* on/off switch */
+  .tgl { position:relative; width:46px; height:28px; flex:none; -webkit-appearance:none; appearance:none;
+         background:var(--line); border:0; border-radius:99px; cursor:pointer; transition:background .15s; }
+  .tgl::after { content:''; position:absolute; top:3px; left:3px; width:22px; height:22px; border-radius:50%;
+                background:#fff; transition:transform .15s; }
+  .tgl:checked { background:var(--accent); }
+  .tgl:checked::after { transform:translateX(18px); }
+  /* difficulty slider — a proper big-thumb range */
+  .act-lvl-wrap input[type=range] { -webkit-appearance:none; appearance:none; width:100%; height:34px;
+                                    background:transparent; margin:.4rem 0 .1rem; cursor:pointer; }
+  .act-lvl-wrap input[type=range]::-webkit-slider-runnable-track { height:6px; border-radius:99px; background:var(--line); }
+  .act-lvl-wrap input[type=range]::-moz-range-track { height:6px; border-radius:99px; background:var(--line); }
+  .act-lvl-wrap input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; appearance:none;
+      width:26px; height:26px; border-radius:50%; background:var(--accent); border:3px solid var(--bg);
+      margin-top:-10px; box-shadow:0 1px 4px rgba(0,0,0,.4); }
+  .act-lvl-wrap input[type=range]::-moz-range-thumb { width:22px; height:22px; border-radius:50%;
+      background:var(--accent); border:3px solid var(--bg); }
   .act-lvl-wrap { padding:.7rem 0 .3rem; border-top:1px solid var(--line-soft); }
   .act-lvl-top { display:flex; justify-content:space-between; align-items:baseline; font-size:.9rem; }
   .act-lvl-top b { color:var(--accent); font-size:1.1rem; }
-  .act-lvl-wrap input[type=range] { width:100%; margin:.6rem 0 .2rem; accent-color:var(--accent); }
+  .cal-grid { display:flex; flex-direction:column; gap:.4rem; margin:.6rem 0 1rem; }
+  .cal-chip { display:flex; align-items:baseline; justify-content:space-between; gap:.8rem; width:100%;
+              text-align:left; background:var(--card-2); border:1px solid var(--line); color:var(--fg-dim);
+              border-radius:10px; padding:.6rem .8rem; font:inherit; cursor:pointer; }
+  .cal-chip b { color:var(--fg); font-size:1rem; font-weight:700; flex:none; }
+  .cal-chip span { font-size:.78rem; color:var(--muted); text-align:right; }
+  .cal-chip.on { background:var(--accent-soft); border-color:var(--accent); }
+  .cal-chip.on b { color:var(--accent); }
+  .cal-foot { display:flex; flex-direction:column; gap:.5rem; margin-top:1rem; }
   .act-lvl-scale { display:flex; justify-content:space-between; font-size:.62rem; color:var(--muted);
                    text-transform:uppercase; letter-spacing:.03em; }
 
@@ -1543,6 +1583,28 @@
   .prof-book .pb-verdict.warn { color:#e6b93c; }
   .prof-book .pb-meta { font-size:.72rem; color:var(--muted); margin-top:.25rem; }
   .prof-book .pb-cards { margin-top:.7rem; background:none; border:0; color:var(--accent); font:inherit; font-size:.8rem; cursor:pointer; padding:0; }
+  /* speaking level */
+  .sp-hero { background:var(--card-2); border:1px solid var(--line-soft); border-radius:var(--r-sm);
+             padding:.9rem 1rem; margin:.3rem 0 1rem; }
+  .sp-hero .sph-row { display:flex; align-items:flex-end; justify-content:space-between; gap:.6rem; }
+  .sp-hero .sph-lvl { font-size:1.7rem; font-weight:800; line-height:1; }
+  .sp-hero .sph-lvl small { font-size:.72rem; font-weight:600; color:var(--muted); display:block; margin-top:.2rem; }
+  .sp-hero .sph-gap { text-align:right; font-size:.78rem; color:var(--muted); }
+  .sp-hero .sph-gap b { display:block; font-size:1.1rem; color:var(--fg); font-weight:750; }
+  .sp-dual { margin:.7rem 0 .2rem; }
+  .sp-dual svg { display:block; width:100%; height:74px; overflow:visible; }
+  .sp-dual svg .rd { fill:none; stroke:var(--muted); stroke-width:2; stroke-dasharray:3 3; }
+  .sp-dual svg .sp { fill:none; stroke:var(--accent); stroke-width:2.5; stroke-linecap:round; }
+  .sp-dual svg .gapfill { fill:var(--accent-soft); opacity:.5; }
+  .sp-dual .sp-leg { display:flex; gap:1rem; font-size:.68rem; color:var(--muted); margin-top:.2rem; }
+  .sp-dual .sp-leg i { font-style:normal; }
+  .sp-dual .sp-leg .k-sp::before { content:'—'; color:var(--accent); font-weight:800; margin-right:.25rem; }
+  .sp-dual .sp-leg .k-rd::before { content:'╌'; color:var(--muted); font-weight:800; margin-right:.25rem; }
+  .sp-next { display:flex; flex-wrap:wrap; gap:.35rem; margin:.5rem 0 1rem; }
+  .sp-next span { background:var(--card-2); border:1px solid var(--line-soft); border-radius:99px;
+                  padding:.2rem .6rem; font-size:.8rem; }
+  .pd-row.sp-cur { border-color:var(--accent); }
+  .pd-row.sp-cur .pd-l::after { content:' · you are here'; font-size:.7rem; color:var(--accent); font-weight:600; }
   #genSheet { position:absolute; inset:0; z-index:8; background:var(--bg); overflow-y:auto;
               padding:1.1rem 1.15rem calc(2rem + env(safe-area-inset-bottom)); }
   #genSheet[hidden] { display:none; }
@@ -2038,26 +2100,22 @@
       <span class="sb-main"><span id="newReserveT"></span>
         <span class="nr-sub" id="newReserveM"></span></span>
     </div>
-    <button id="activateBanner" class="hb-new" onclick="openActivate()">
-      <span class="sb-ico">🗣️</span>
-      <span class="sb-main"><span class="sb-t">Activate</span>
-        <span class="sb-m">turn words you can read into words you can say — silent 5-min drills on verbs &amp; their cases</span></span>
-      <span class="sb-go">→</span>
-    </button>
-    <button id="convoBanner" class="hb-new" onclick="openConvo()">
-      <span class="sb-ico">💬</span>
-      <span class="sb-main"><span class="sb-t">Conversation</span>
-        <span class="sb-m">talk out loud with someone in character — answer in Russian + English, get a debrief</span></span>
-      <span class="sb-go">→</span>
-    </button>
-    <button id="flowBanner" class="hb-new" onclick="openFlow()">
-      <span class="sb-ico">📖</span>
-      <span class="sb-main"><span class="sb-t">Flow reading</span>
-        <span class="sb-m">endless reading on any topic — auto-tuned to your level, just tap what you don't know</span></span>
-      <span class="sb-go">→</span>
-    </button>
+    <div class="hb-grid">
+      <button id="activateBanner" onclick="openActivate()">
+        <span class="hb-ico">🗣️</span><span class="hb-name">Speak</span>
+      </button>
+      <button id="flowBanner" onclick="openFlow()">
+        <span class="hb-ico">📖</span><span class="hb-name">Read</span>
+      </button>
+    </div>
     <details id="legacyModes">
       <summary>Older practice modes</summary>
+      <button id="convoBanner" onclick="openConvo()">
+        <span class="sb-ico">💬</span>
+        <span class="sb-main"><span class="sb-t">Conversation</span>
+          <span class="sb-m">talk out loud with someone in character — answer in Russian + English, get a debrief</span></span>
+        <span class="sb-go">→</span>
+      </button>
       <button id="drillBanner" onclick="openDrill()">
         <span class="sb-ico">🏋️</span>
         <span class="sb-main"><span class="sb-t">Grammar drill</span>
@@ -6554,7 +6612,7 @@ async function actNext() {
     $('#actProg').textContent = `${ACT.done} done`;
     return;
   }
-  ACT.item = d.item; ACT.active = d.active_count; ACT._graded = false; ACT._produced = null;
+  ACT.item = d.item; ACT.active = d.active_count; ACT._graded = false; ACT._produced = null; ACT._miss = [];
   actRenderFront();
 }
 function actGovHtml(it) {
@@ -6600,6 +6658,7 @@ function actReveal() {
       ${it.note ? `<div class="act-note">${escapeHtml(it.note)}</div>` : ''}
       ${actGovHtml(it)}
       <div class="act-selfgrade">how did that go?</div>
+      ${actMissRow(it)}
     </div>
     <button class="act-known" onclick="actGrade(5)">I already know this one — skip →</button>
     <div class="study-foot"><div class="study-rate act-rate">
@@ -6609,6 +6668,30 @@ function actReveal() {
       <button onclick="actGrade(4)"><span class="rl">Easy</span></button>
     </div></div>`;
 }
+const _ACT_MISS = [
+  ['government', 'wrong case / preposition for the verb'],
+  ['case', 'a case ending elsewhere'],
+  ['aspect', 'perfective vs imperfective'],
+  ['verb-form', 'conjugation / verb form'],
+  ['agreement', 'adjective / noun agreement'],
+  ['word-order', 'word order'],
+  ['lexical', 'a word I blanked on'],
+  ["no-start", "couldn't get started at all"],
+];
+function actMissRow(it) {
+  return `<div class="act-miss" id="actMiss">
+    <div class="am-h">what tripped you? <span>optional — tap any that apply</span></div>
+    <div class="am-chips">${_ACT_MISS.map(([k, label]) =>
+      `<button type="button" class="am-chip${(ACT._miss || []).includes(k) ? ' on' : ''}"
+        onclick="actToggleMiss('${k}', this)">${escapeHtml(label)}</button>`).join('')}</div>
+  </div>`;
+}
+function actToggleMiss(k, el) {
+  ACT._miss = ACT._miss || [];
+  const i = ACT._miss.indexOf(k);
+  if (i >= 0) { ACT._miss.splice(i, 1); el.classList.remove('on'); }
+  else { ACT._miss.push(k); el.classList.add('on'); }
+}
 async function actCheck() {
   const produced = ($('#actInput') && $('#actInput').value || '').trim();
   if (!produced) { actReveal(); return; }
@@ -6616,13 +6699,13 @@ async function actCheck() {
   $('#actBody').innerHTML = `<div class="act-load"><span class="spin"></span><p>checking…</p></div>`;
   let r;
   try {
-    r = await api(`/activate/items/${ACT.item.id}/grade`, { method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ rating: 3, produced, task: ACT.item.task || '', government: ACT.item.government || '' }) });
+    r = await api(`/activate/items/${ACT.item.id}/check`, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ produced, task: ACT.item.task || '', government: ACT.item.government || '' }) });
   } catch (e) { toast('couldn’t check — ' + e.message, 2500); actReveal(); return; }
-  ACT._graded = true;
+  ACT.revealed = true;
   const c = r.check || {};
   const it = ACT.item;
-  if (r.active_count != null) ACT.active = r.active_count;
+  if (c && (c.category && !ACT._miss.length)) ACT._miss = [c.category].filter(k => _ACT_MISS.some(m => m[0] === k));
   $('#actBody').innerHTML = `
     <div class="act-scroll">
       <div class="act-yours">you said: <b>${escapeHtml(produced)}</b></div>
@@ -6631,6 +6714,7 @@ async function actCheck() {
       ${c.better ? `<div class="act-model">${escapeHtml(c.better)}</div>` : (it.model ? `<div class="act-model">${escapeHtml(it.model)}</div>` : '')}
       ${actGovHtml(it)}
       <div class="act-selfgrade">adjust if that felt harder/easier:</div>
+      ${c.ok === false || c.used_target === false ? actMissRow(it) : ''}
     </div>
     <div class="study-foot"><div class="study-rate act-rate">
       <button class="again" onclick="actGrade(1)"><span class="rl">Missed it</span></button>
@@ -6641,26 +6725,26 @@ async function actCheck() {
 }
 async function actGrade(rating) {
   const it = ACT.item;
+  if (ACT._grading) return;
+  ACT._grading = true;
   if (rating < 5) ACT.done++;
-  if (!ACT._graded) {
-    try {
-      const r = await api(`/activate/items/${it.id}/grade`, { method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ rating, task: it.task || '', government: it.government || '',
-          produced: ACT._produced || null }) });
-      if (r && r.active_count != null) ACT.active = r.active_count;
-    } catch (e) { toast('couldn’t save — ' + e.message, 2500); }
-  } else if (rating !== 3) {
-    try {
-      await api(`/activate/items/${it.id}/grade`, { method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ rating, task: '', government: '' }) });
-    } catch {}
-  }
+  try {
+    const r = await api(`/activate/items/${it.id}/grade`, { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ rating, task: it.task || '', government: it.government || '',
+        produced: ACT._produced || null,
+        categories: (rating <= 2 || rating === 3) ? (ACT._miss || []) : [] }) });
+    if (r && r.active_count != null) ACT.active = r.active_count;
+    if (r && r.level_moved) toast(`difficulty → ${r.level_moved.toUpperCase()}`, 2200);
+  } catch (e) { toast('couldn’t save — ' + e.message, 2500); }
+  ACT._grading = false;
   actNext();
 }
 async function actOpenStats() {
   let s;
   try { s = await api('/activate/stats'); } catch { return; }
   $('#actSheet').hidden = false;
+  const rec = s.success_recent != null ? Math.round(s.success_recent * 100) + '%' : '—';
+  const s30 = s.success_30d != null ? Math.round(s.success_30d * 100) + '%' : '—';
   $('#actSheet').innerHTML = `
     <h3>Activation progress</h3>
     <div class="stat-grid">
@@ -6668,20 +6752,35 @@ async function actOpenStats() {
       <div class="stat-cell"><div class="v">${s.total}</div><div class="k">in rotation</div></div>
       <div class="stat-cell"><div class="v">${(s.by_kind && s.by_kind.verb) || 0}</div><div class="k">verbs</div></div>
       <div class="stat-cell"><div class="v">${s.done_today}</div><div class="k">done today</div></div>
-      <div class="stat-cell"><div class="v">${s.due}</div><div class="k">due now</div></div>
-      <div class="stat-cell"><div class="v">${s.verb_pool}</div><div class="k">verb pool</div></div>
+      <div class="stat-cell"><div class="v">${rec}</div><div class="k">recent success</div></div>
+      <div class="stat-cell"><div class="v">${(s.level || '').toUpperCase()}</div><div class="k">level${s.auto ? ' · auto' : ''}</div></div>
     </div>
+    <p class="dsk-hint">Aiming for ~${Math.round((s.target_success || 0.85) * 100)}% correct — the success rate that learns fastest (30-day: ${s30}).${s.auto ? ' Difficulty adjusts itself to hold that.' : ''}</p>
     ${s.weak_spots && s.weak_spots.length ? `<div class="stat-h">what's tripping you (30d)</div>
       <div class="prof-dom">${s.weak_spots.map(w => `<div class="pd-row"><div class="pd-top">
         <span class="pd-l">${escapeHtml(w.category)}</span><span class="pd-c">${w.n}×</span></div></div>`).join('')}</div>` : ''}
+    <button class="pb-cards" onclick="$('#actSheet').hidden=true; closeActivate(); openStats('level')">full speaking breakdown →</button>
     <button class="flow-cancel" onclick="$('#actSheet').hidden=true">back</button>`;
 }
+const _ACT_LVL = ['a1', 'a2', 'b1', 'b1+', 'b2', 'b2+', 'c1', 'c2'];
+const _ACT_LVL_HINT = {
+  'a1': 'short present-tense thoughts, one clause',
+  'a2': 'a normal everyday sentence; past/future fine',
+  'b1': 'two ideas joined — but / because / so; simple reported speech',
+  'b1+': 'a subordinate clause plus a real aspect or modal choice',
+  'b2': 'complex thoughts — conditionals, чтобы, hedged opinions; the ones you stumble on',
+  'b2+': 'near-native — nested clauses, concession, idiom, subtle modals',
+  'c1': 'nuanced & structured — subordination plus a discourse move; fluent, not just correct',
+  'c2': 'sophisticated & idiomatic — register control, set phrases, native word order',
+};
 async function actSettings() {
   let s;
   try { s = await api('/activate/stats'); } catch { return; }
   $('#actSheet').hidden = false;
-  const lv = s.levels || ['a1', 'a2', 'b1', 'b1+', 'b2', 'b2+'];
+  const lv = s.levels || _ACT_LVL;
   const li = Math.max(0, lv.indexOf(s.level));
+  const tgt = Math.round((s.target_success || 0.85) * 100);
+  const rec = s.success_recent != null ? Math.round(s.success_recent * 100) : null;
   $('#actSheet').innerHTML = `
     <h3>Activate settings</h3>
     <div class="act-lvl-wrap">
@@ -6693,6 +6792,10 @@ async function actSettings() {
       <div class="act-lvl-scale">${lv.map(l => `<span>${l}</span>`).join('')}</div>
       <p class="dsk-hint" id="actLvlHint">${_ACT_LVL_HINT[lv[li]] || ''}</p>
     </div>
+    <div class="dsk-row tap" onclick="if(event.target.tagName!=='INPUT'){const b=$('#actAuto');b.checked=!b.checked;actSaveSettings();}" style="align-items:flex-start">
+      <span>auto-adjust the difficulty
+        <span class="dsk-hint" style="display:block;margin-top:.2rem">move the slider itself to keep you near ${tgt}% correct — the rate that learns fastest${rec != null ? ` · lately you're at ${rec}%` : ''}</span></span>
+      <input id="actAuto" class="tgl" type="checkbox" ${s.auto ? 'checked' : ''} onchange="actSaveSettings()"></div>
     <label class="dsk-row">verbs vs words
       <select id="actMix" onchange="actSaveSettings()">
         <option value="1" ${s.mix >= 0.95 ? 'selected' : ''}>verbs only</option>
@@ -6700,29 +6803,74 @@ async function actSettings() {
         <option value="0.5" ${s.mix >= 0.4 && s.mix < 0.6 ? 'selected' : ''}>even split</option>
         <option value="0.25" ${s.mix < 0.4 ? 'selected' : ''}>mostly words</option>
       </select></label>
-    <label class="dsk-row">new per day
-      <input id="actPerDay" type="number" min="0" max="40" value="${s.per_day}" onchange="actSaveSettings()"></label>
+    <label class="dsk-row">new items per day
+      <input id="actPerDay" type="number" min="0" max="200" value="${s.per_day}" onchange="actSaveSettings()"></label>
+    <p class="dsk-hint">0 = unlimited — the drill just keeps going.</p>
+    <div class="dsk-row" style="border-top:1px solid var(--line-soft);display:block">
+      <button class="pb-cards" style="margin:0" onclick="actCalibrate('verb')">⚡ skip verbs I already handle →</button>
+      <span class="dsk-hint" style="display:block">Sweep the list and retire the ones whose case/preposition you already always get right, so the drill only serves the tricky ones.</span>
+    </div>
     <button class="flow-cancel" onclick="$('#actSheet').hidden=true">done</button>`;
 }
-const _ACT_LVL_HINT = {
-  'a1': 'short present-tense thoughts, one clause',
-  'a2': 'a normal everyday sentence; past/future fine',
-  'b1': 'two ideas joined — but / because / so; simple reported speech',
-  'b1+': 'a subordinate clause plus a real aspect or modal choice',
-  'b2': 'complex thoughts — conditionals, чтобы, hedged opinions; the ones you stumble on',
-  'b2+': 'near-native — nested clauses, concession, idiom, subtle modals',
-};
 async function actSaveSettings() {
-  const lv = ['a1', 'a2', 'b1', 'b1+', 'b2', 'b2+'];
+  const lv = _ACT_LVL;
   const li = $('#actLevel') ? parseInt($('#actLevel').value, 10) : null;
   if (li != null && $('#actLvlHint')) $('#actLvlHint').textContent = _ACT_LVL_HINT[lv[li]] || '';
   const body = {
     level: li != null ? lv[li] : undefined,
     mix: $('#actMix') ? parseFloat($('#actMix').value) : undefined,
     per_day: $('#actPerDay') ? parseInt($('#actPerDay').value, 10) : undefined,
+    auto: $('#actAuto') ? $('#actAuto').checked : undefined,
   };
   try { await api('/activate/settings', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }); }
   catch (e) { toast('couldn’t save — ' + e.message, 2000); }
+}
+let ACT_CAL = { kind: 'verb', picked: new Set(), rows: [], remaining: 0 };
+async function actCalibrate(kind) {
+  ACT_CAL = { kind, picked: new Set(), rows: [], remaining: 0 };
+  $('#actSheet').hidden = false;
+  $('#actSheet').innerHTML = `<div class="act-load"><span class="spin"></span><p>loading…</p></div>`;
+  await actCalLoad(true);
+}
+async function actCalLoad(reset) {
+  let d;
+  try { d = await api(`/activate/calibrate?kind=${ACT_CAL.kind}&offset=${reset ? 0 : ACT_CAL.rows.length}`); }
+  catch (e) { toast('couldn’t load — ' + e.message, 2000); return; }
+  if (reset) ACT_CAL.rows = [];
+  ACT_CAL.rows.push(...(d.items || []));
+  ACT_CAL.remaining = d.remaining || 0;
+  actCalRender();
+}
+function actCalToggle(t) {
+  if (ACT_CAL.picked.has(t)) ACT_CAL.picked.delete(t); else ACT_CAL.picked.add(t);
+  actCalRender();
+}
+function actCalRender() {
+  const n = ACT_CAL.picked.size;
+  $('#actSheet').innerHTML = `
+    <h3>Which of these do you already handle?</h3>
+    <p class="dsk-hint">Tap every verb whose case &amp; preposition you get right without thinking — they'll be retired so the drill only serves the ones that still trip you. Trickiest government first.</p>
+    <div class="cal-grid">${ACT_CAL.rows.map(r => `
+      <button class="cal-chip${ACT_CAL.picked.has(r.target) ? ' on' : ''}" onclick="actCalToggle('${r.target.replace(/'/g, "\\'")}')">
+        <b>${escapeHtml(r.target)}</b><span>${escapeHtml(r.government || r.gloss || '')}</span>
+      </button>`).join('')}</div>
+    ${ACT_CAL.remaining ? `<button class="pb-cards" onclick="actCalLoad(false)">show ${ACT_CAL.remaining} more →</button>` : `<p class="dsk-hint">that's the whole list</p>`}
+    <div class="cal-foot">
+      <button class="flow-go" ${n ? '' : 'disabled'} onclick="actCalSubmit()">retire ${n} ${n === 1 ? 'verb' : 'verbs'} →</button>
+      <button class="flow-cancel" onclick="actSettings()">back to settings</button>
+    </div>`;
+}
+async function actCalSubmit() {
+  const known = [...ACT_CAL.picked];
+  if (!known.length) { actSettings(); return; }
+  try {
+    const r = await api('/activate/calibrate', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: ACT_CAL.kind, known }) });
+    toast(`${r.retired} retired — the drill will skip them`, 2500);
+  } catch (e) { toast('couldn’t save — ' + e.message, 2500); return; }
+  ACT_CAL.rows = ACT_CAL.rows.filter(r => !ACT_CAL.picked.has(r.target));
+  ACT_CAL.picked.clear();
+  if (ACT_CAL.rows.length < 6 && ACT_CAL.remaining) actCalLoad(false); else actCalRender();
 }
 
 /* ==================== flow reading ==================== */
@@ -7954,6 +8102,57 @@ async function profBookMake(book) {
   } catch (e) { toast('couldn’t — ' + e.message, 2500); }
   closeSheet();
 }
+function profDualSpark(hist) {
+  const rows = hist.filter(h => h.speaking_ord != null && h.reading_ord != null);
+  if (rows.length < 2) return `<div class="ps-x" style="margin-top:.3rem">not enough history yet — the two lines and the gap between them will show here in a few days</div>`;
+  const W = 300, H = 60, LO = 0, HI = 6;
+  const y = v => H - (Math.max(LO, Math.min(HI, v)) - LO) / (HI - LO) * H;
+  const x = i => i / (rows.length - 1) * W;
+  const sp = rows.map((h, i) => [x(i), y(h.speaking_ord)]);
+  const rd = rows.map((h, i) => [x(i), y(h.reading_ord)]);
+  const P = pts => pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+  const gapArea = 'M' + rd.map(p => p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' L') +
+    ' L' + sp.slice().reverse().map(p => p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' L') + ' Z';
+  const d0 = rows[0].day.slice(5), d1 = rows[rows.length - 1].day.slice(5);
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+      <path class="gapfill" d="${gapArea}"/>
+      <path class="rd" d="${P(rd)}"/><path class="sp" d="${P(sp)}"/></svg>
+    <div class="sp-leg"><i class="k-sp">speaking</i><i class="k-rd">reading</i>
+      <i style="margin-left:auto">${d0} → ${d1}</i></div>`;
+}
+function profSpeaking(d) {
+  const sp = d.speaking;
+  if (!sp) return '';
+  const hist = d.history || [];
+  const gapNow = sp.gap != null ? sp.gap.toFixed(1) : '—';
+  const own = Math.round((sp.own_threshold || 0.6) * 100);
+  const curIdx = Math.min((sp.levels || []).length - 1, Math.floor(sp.ord));
+  const rows = (sp.levels || []).map((L, i) => {
+    const pct = Math.round(L.pct * 100);
+    const weak = pct < own;
+    return `<div class="pd-row${i === curIdx ? ' sp-cur' : ''}${L.active === 0 && i > curIdx ? ' untried' : ''}">
+      <div class="pd-top"><span class="pd-l">${L.level.toUpperCase()}</span>
+        <span class="pd-c">${L.active} / ${L.target} can say${L.emerging ? ` · ${L.emerging} learning` : ''}</span></div>
+      <div class="pd-bar"><i class="${weak ? 'weak' : ''}" style="width:${Math.max(2, pct)}%"></i></div>
+      ${L.next && L.next.length && i <= curIdx + 1 ? `<div class="pd-meta">next: ${L.next.slice(0, 8).map(escapeHtml).join(', ')}</div>` : ''}
+    </div>`;
+  }).join('');
+  return `<div class="stat-h">speaking level</div>
+    <p class="dsk-hint">What you can pull out of your head and say — built from the Activate drill. The goal: this rising toward your reading level, the gap closing.</p>
+    <div class="sp-hero">
+      <div class="sph-row">
+        <div class="sph-lvl">${(sp.cefr || '—').toUpperCase()}<small>speaking</small></div>
+        <div class="sph-gap">gap to reading (${(sp.reading_cefr || '').toUpperCase()})<b>${gapNow} ${Math.abs(sp.gap) === 1 ? 'level' : 'levels'}</b></div>
+      </div>
+      <div class="sp-dual">${profDualSpark(hist)}</div>
+    </div>
+    ${sp.next_words && sp.next_words.length ? `<div class="stat-h">activate these next</div>
+      <div class="sp-next">${sp.next_words.map(w => `<span>${escapeHtml(w)}</span>`).join('')}</div>` : ''}
+    <div class="stat-h">the ladder — vocabulary you can produce at each level</div>
+    <p class="dsk-hint">A level counts as "owned" at ~${own}% — nobody actively wields every word in a band.</p>
+    <div class="prof-dom">${rows}</div>
+    <button class="pb-cards" onclick="closeStats(); openActivate()">practise speaking →</button>`;
+}
 function renderProf(d) {
   const hist = d.history || [];
   const comp = d.comprehension != null ? Math.round(d.comprehension * 100) + '%' : '—';
@@ -7995,6 +8194,7 @@ function renderProf(d) {
     ${(d.active_words || hist.some(h => h.active_words)) ? profCard('active vocabulary (can say)', (d.active_words || 0).toLocaleString(), hist, 'active_words', v => Math.round(v).toLocaleString()) : ''}
     ${profCard('reading comprehension', comp, hist.map(h => ({ ...h, _c: h.comprehension != null ? h.comprehension * 100 : null })), '_c', v => Math.round(v) + '%')}
     ${profCard('mature words', d.cards_mature.toLocaleString(), hist, 'cards_mature', v => Math.round(v).toLocaleString())}
+    ${profSpeaking(d)}
     ${d.book ? profBook(d.book, hist) : ''}
     <div class="stat-h">fluency by subject</div>
     <p class="dsk-hint">Weakest areas first. Reading calibrated to your level is the fastest way to close these gaps — pick one from the reading mode.</p>

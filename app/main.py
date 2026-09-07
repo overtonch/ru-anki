@@ -2597,13 +2597,28 @@ class ActivateGradeIn(BaseModel):
     produced: str | None = None
     task: str = ""
     government: str = ""
+    categories: list[str] | None = None
 
 
 @app.post("/activate/items/{item_id}/grade")
 async def activate_grade(item_id: int, body: ActivateGradeIn):
     r = await asyncio.to_thread(
-        activate.grade, item_id, body.rating, body.produced, body.task, body.government)
+        activate.grade, item_id, body.rating, body.produced, body.task,
+        body.government, body.categories)
     return {**r, "active_count": activate.active_count()}
+
+
+class ActivateCheckIn(BaseModel):
+    produced: str
+    task: str = ""
+    government: str = ""
+
+
+@app.post("/activate/items/{item_id}/check")
+async def activate_check_only(item_id: int, body: ActivateCheckIn):
+    check = await asyncio.to_thread(
+        activate.check_attempt, item_id, body.produced, body.task, body.government)
+    return {"check": check}
 
 
 @app.get("/activate/stats")
@@ -2615,11 +2630,34 @@ class ActivateSettingsIn(BaseModel):
     level: str | None = None
     mix: float | None = None
     per_day: int | None = None
+    auto: bool | None = None
 
 
 @app.post("/activate/settings")
 def activate_settings(body: ActivateSettingsIn):
-    return activate.set_settings(body.level, body.mix, body.per_day)
+    return activate.set_settings(body.level, body.mix, body.per_day, body.auto)
+
+
+@app.get("/activate/levels")
+def activate_levels():
+    import speaking_levels
+    return speaking_levels.estimate()
+
+
+@app.get("/activate/calibrate")
+def activate_calibrate_get(kind: str = "verb", offset: int = 0, n: int = 30):
+    return activate.calibration_batch(kind, max(0, offset), max(5, min(60, n)))
+
+
+class ActivateCalibrateIn(BaseModel):
+    kind: str = "verb"
+    known: list[str] = []
+
+
+@app.post("/activate/calibrate")
+async def activate_calibrate_post(body: ActivateCalibrateIn):
+    r = await asyncio.to_thread(activate.calibrate, body.kind, body.known)
+    return {**r, "active_count": activate.active_count()}
 
 
 # ------------------------------------------------------- conversation partner
