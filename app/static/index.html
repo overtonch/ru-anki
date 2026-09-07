@@ -1700,6 +1700,7 @@
   .studybar .sbtn { background:none; border:1px solid var(--line); color:var(--muted);
                     border-radius:.4rem; padding:.25rem .55rem; font-size:.8rem; cursor:pointer; }
   .studybar .sbtn:disabled { opacity:.35; }
+  .studybar .sbtn.on { color:var(--accent); border-color:var(--accent); background:var(--accent-soft); }
   .studybody { flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch;
                display:flex; flex-direction:column; }
   .study-scroll { flex:1; overflow-y:auto; padding:1.4rem 1.15rem 1rem;
@@ -2324,6 +2325,7 @@
     <div class="studybar">
       <button class="backlink" onclick="history.back()">← done</button>
       <div class="prog" id="studyProg"></div>
+      <button class="sbtn" id="studySilent" onclick="toggleStudySilent()" title="silent mode — no audio">🔊</button>
       <button class="sbtn" id="studyEdit" onclick="studyEditCard()" title="edit this card" disabled>✏️</button>
       <button class="sbtn" id="studyDelete" onclick="studyDelete()" title="delete this card" disabled>🗑</button>
       <button class="sbtn" id="studyUndo" onclick="studyUndo()" disabled>↩ undo</button>
@@ -4325,6 +4327,7 @@ function renderNewReserve(s) {
 async function openStudy() {
   $('#studyView').hidden = false;
   $('#studyBody').innerHTML = SPINNER;
+  setStudySilent(STUDY_SILENT);            // sync the toolbar toggle icon
   STUDY = { queue: [], i: 0, revealed: false, shownAt: 0, history: [], done: 0,
             startedAt: 0, paceS: 6, againIds: new Set() };
   await loadStudyQueue();
@@ -4494,14 +4497,29 @@ function setAudioFirst(on) {
   STUDY_AUDIO_FIRST = on;
   try { localStorage.setItem('studyAudioFirst', on ? '1' : '0'); } catch {}
 }
-function playStudyAudio() {
+let STUDY_SILENT = (() => { try { return localStorage.getItem('studySilent') === '1'; } catch { return false; } })();
+function setStudySilent(on) {
+  STUDY_SILENT = !!on;
+  try { localStorage.setItem('studySilent', STUDY_SILENT ? '1' : '0'); } catch {}
+  const b = $('#studySilent');
+  if (b) { b.textContent = STUDY_SILENT ? '🔇' : '🔊'; b.classList.toggle('on', STUDY_SILENT); }
+}
+function toggleStudySilent() {
+  setStudySilent(!STUDY_SILENT);
+  toast(STUDY_SILENT ? 'silent — no audio' : 'audio on', 1400);
+  if (STUDY_SILENT) { const a = $('#studyAudio'); if (a) { try { a.pause(); } catch {} } }
+}
+function playStudyAudio(manual) {
+  if (STUDY_SILENT && !manual) return;
   const a = $('#studyAudio');
   if (a) { a.currentTime = 0; a.play().catch(() => {}); }
 }
 function prefetchStudyNext() {
   const nx = STUDY && STUDY.queue[STUDY.i + 1];
-  const u = clipUrl(nx);
-  if (u) fetch(u).catch(() => {});
+  if (!STUDY_SILENT) {
+    const u = clipUrl(nx);
+    if (u) fetch(u).catch(() => {});
+  }
   if (nx && nx.seconds != null) fetch(`/videos/${nx.video_id}/frame?t=${Math.round(nx.seconds)}`).catch(() => {});
 }
 
@@ -4539,7 +4557,7 @@ function renderStudyCard() {
   }
   const cu = clipUrl(c);
   const production = c.card_type === 'production';
-  const audioFirst = STUDY_AUDIO_FIRST && cu && !production;
+  const audioFirst = STUDY_AUDIO_FIRST && cu && !production && !STUDY_SILENT;
   const q = production
     ? `${prodKindLine(c)}
        <div class="prod-q">${escapeHtml(c.situation || '')}</div>
@@ -4550,7 +4568,7 @@ function renderStudyCard() {
     : audioFirst
     ? `<div class="study-listen">
          <audio id="studyAudio" src="${cu}" preload="auto"></audio>
-         <button class="listen-btn" onclick="event.stopPropagation();playStudyAudio()">🔊 listen</button>
+         <button class="listen-btn" onclick="event.stopPropagation();playStudyAudio(true)">🔊 listen</button>
          <div class="listen-hint">tap anywhere to reveal</div>
        </div>`
     : `<div class="study-q">${studyFrontHtml(c)}</div>`;
@@ -4640,7 +4658,7 @@ function studyReveal() {
         ${prodGivenHtml(c)}
         <div class="drill-a" style="margin-top:.9rem">${prodAnswerHtml(c)}</div>
         <audio id="studyAudio" src="/srs/cards/${c.id}/tts" preload="auto"></audio>
-        <button class="drill-listen" onclick="event.stopPropagation();playStudyAudio()">🔊 listen</button>
+        <button class="drill-listen" onclick="event.stopPropagation();playStudyAudio(true)">🔊 listen</button>
         ${c.alt_meanings ? `<div class="drill-note">${escapeHtml(c.alt_meanings)}</div>` : ''}
         ${c.contrast ? `<div class="drill-note drill-contrast">↔ ${escapeHtml(c.contrast)}</div>` : ''}
         ${aspectLine(c)}
@@ -4672,7 +4690,7 @@ function studyReveal() {
       ${ctxHtml}
       <div class="study-a">
         ${cu ? `<audio id="studyAudio" src="${cu}" preload="auto"></audio>
-                <button class="a-replay" onclick="playStudyAudio()">🔊 ${c.seconds != null ? 'replay line' : 'listen'}</button>` : ''}
+                <button class="a-replay" onclick="playStudyAudio(true)">🔊 ${c.seconds != null ? 'replay line' : 'listen'}</button>` : ''}
         <div class="a-tr">${escapeHtml(c.translation || '—')}${
           c.meaning_contextual ? '<span class="a-ctxtag">· in this context</span>' : ''}
           <button class="tr-swap-btn" onclick="event.stopPropagation();trSwapToggle()">change ▾</button></div>
@@ -4947,6 +4965,8 @@ function renderStudyDone() {
               <option value="sentence" ${s.card_front !== 'word' ? 'selected' : ''}>full sentence</option>
               <option value="word" ${s.card_front === 'word' ? 'selected' : ''}>word only</option>
             </select></label>
+          <label class="sd-row"><span>silent — never play audio</span>
+            <input type="checkbox" ${STUDY_SILENT ? 'checked' : ''} onchange="setStudySilent(this.checked)"></label>
           <label class="sd-row"><span>audio-first review</span>
             <input type="checkbox" ${STUDY_AUDIO_FIRST ? 'checked' : ''} onchange="setAudioFirst(this.checked)"></label>
           <label class="sd-row"><span>also save new cards to Anki</span>

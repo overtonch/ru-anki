@@ -234,6 +234,10 @@ library + proficiency graphs all ride on this.
   (worst-priority first, with the breakdown) + `POST /srs/cards/bulk`
   {ids, suspend|delete}; `#triageView` screen, opened from the `#newReserve`
   home strip.
+- (done 2026-09-07) **Study silent mode** — `STUDY_SILENT` (localStorage), 🔊/🔇
+  toggle in the study toolbar + a done-screen checkbox. Gates every auto-play
+  (`playStudyAudio(manual)`); manual listen/replay buttons still work; disables
+  audio-first and next-clip prefetch while on.
 - (done 2026-09-07) **FSRS state-reset bug + full honest replay** — ~35 cards
   were reset on Sept 5 to `stability=3.0, difficulty=6.5` (not FSRS values;
   cause unconfirmed — a restore/rebuild artifact) with due/last_review kept,
