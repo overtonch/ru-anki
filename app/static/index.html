@@ -1543,6 +1543,11 @@
   .cal i { flex:1; background:var(--accent); border-radius:1px; min-height:2px; opacity:.85; }
   .cal i.z { background:var(--line); opacity:1; }
   .cal-x { display:flex; justify-content:space-between; font-size:.68rem; color:var(--muted); margin-top:.3rem; }
+  .hc-line { font-size:.76rem; border-radius:.5rem; padding:.5rem .7rem; margin:.2rem 0 .8rem; line-height:1.5; }
+  .hc-line.ok { background:rgba(67,176,114,.12); color:var(--ok); }
+  .hc-line.warn { background:rgba(230,185,60,.14); color:#e6b93c; }
+  .hc-line b { font-weight:700; }
+  .hc-line .hc-proj { display:block; margin-top:.2rem; color:var(--muted); font-size:.72rem; }
   .mix { display:flex; height:14px; border-radius:99px; overflow:hidden; background:var(--line); }
   .mix i.mnew { background:#e6b93c; } .mix i.mlearn { background:#5b9bd5; }
   .mix i.mrev { background:var(--accent); } .mix i.mmat { background:var(--ok); }
@@ -8031,7 +8036,14 @@ function renderStats(d) {
   const cell = (v, k, filt, title) => `<div class="stat-cell${filt ? ' tap' : ''}"${filt ? ` onclick="openCardList('${filt}','${title}')"` : ''}><div class="v">${v}</div><div class="k">${k}</div></div>`;
   const ws = d.word_states || {};
   const wcell = (state, k) => `<div class="stat-cell${ws[state] ? ' tap' : ''}"${ws[state] ? ` onclick="openWordList('${state}')"` : ''}><div class="v">${ws[state] || 0}</div><div class="k">${k}</div></div>`;
+  const hc = d.healthcheck;
+  const hcHtml = hc ? `<div class="hc-line ${hc.ok ? 'ok' : 'warn'}">
+    ${hc.ok ? '✓ schedule checked — all healthy' : '⚠ ' + (hc.issues || []).map(escapeHtml).join(' · ')}
+    ${hc.repaired ? ` <b>(${hc.repaired} auto-repaired)</b>` : ''}
+    ${hc.projected ? `<span class="hc-proj">next: ~${hc.projected.tomorrow} due tomorrow · ~${hc.projected.today} today · typical ${hc.projected.typical_day}/day</span>` : ''}
+  </div>` : '';
   $('#statsContent').innerHTML = `
+    ${hcHtml}
     <div class="stat-grid">
       ${cell(d.streak, 'day streak', '', '')}
       ${cell(d.reviews_today, 'reviews today', 'today', 'Reviewed today')}

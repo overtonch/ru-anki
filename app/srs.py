@@ -59,6 +59,14 @@ RELEARNING_STEPS = (_dt.timedelta(minutes=10),)
 # whole day's reviews be done in one sitting.
 LEARNING_HORIZON = _dt.timedelta(minutes=30)
 
+# The daily batch surfaces a whole day's graduated reviews from the day's start,
+# so cards get reviewed hours before their `due`. Reviewing early normally tells
+# FSRS "almost no time passed" and stability barely grows — a card on a ~1-day
+# interval would be trapped there forever. Fix: a review of a card that was due
+# within today's batch window is SCORED as if it happened on the due date
+# (review()/preview()). Reviewing much further ahead than the batch (via the card
+# list) still counts as early, so it isn't rewarded.
+
 
 def _scheduler():
     global _SCHED
@@ -723,6 +731,23 @@ def cards_missing_accent(limit=None):
 
 # ---------------------------------------------------------------- review
 
+def _on_schedule_time(row, now, rating):
+    """When to tell FSRS a review happened. A graduated card pulled forward by
+    the daily batch (due today, before tomorrow's cutoff) but reviewed early is
+    scored as if reviewed on its due date, so its stability grows normally. A
+    failed review (Again), a not-yet-graduated card, or one reviewed far ahead of
+    the batch window is scored at the real time."""
+    if rating < 2 or row["fsrs_state"] != 2 or not row["last_review"]:
+        return now
+    due_dt = _parse(_aware(row["due"]))
+    if not due_dt or now >= due_dt:
+        return now
+    eod = _parse(_aware(_day_end_iso()))
+    if eod and due_dt <= eod:
+        return due_dt
+    return now
+
+
 def preview(card):
     """{rating: human-interval} for all four buttons, without persisting.
     `card` is a card id or an already-fetched row/dict (avoids a re-query when
@@ -736,7 +761,8 @@ def preview(card):
     out = {}
     for val, rating in ((1, Rating.Again), (2, Rating.Hard),
                         (3, Rating.Good), (4, Rating.Easy)):
-        card, _ = sched.review_card(_row_to_fsrs(row), rating, review_datetime=now)
+        rt = _on_schedule_time(row, now, val)          # mirror review()
+        card, _ = sched.review_card(_row_to_fsrs(row), rating, review_datetime=rt)
         out[val] = _human_delta(card.to_dict()["due"], now)
     return out
 
@@ -766,8 +792,14 @@ def review(card_id, rating, elapsed_ms=None, at=None):
                 now = p
         except ValueError:
             pass
+    # Reviewing a graduated card BEFORE it's due (the daily batch pulls a whole
+    # day's reviews forward) must not be scored as "barely any time passed" —
+    # that stalls stability growth. Score an early review as if it happened on
+    # schedule; keep the real time for on-time / overdue reviews (which earn a
+    # legitimate bonus).
+    sched_at = _on_schedule_time(row, now, rating)
     card, _log = _scheduler().review_card(
-        _row_to_fsrs(row), Rating(rating), review_datetime=now,
+        _row_to_fsrs(row), Rating(rating), review_datetime=sched_at,
         review_duration=_td(elapsed_ms))
     d = card.to_dict()
     lapsed = int(bool(row["last_review"])) if rating == 1 else 0
@@ -802,6 +834,156 @@ def review(card_id, rating, elapsed_ms=None, at=None):
 
 def _td(ms):
     return _dt.timedelta(milliseconds=ms) if ms else None
+
+
+def rebuild_schedule(card_id, apply=True):
+    """Replay a card's whole review log through FSRS on an idealised schedule —
+    every review scored as if it happened no earlier than the card's due date —
+    and reset the card's FSRS fields to the result.
+
+    Repairs cards flattened by the early-review bug (a daily batch that pulled
+    every review hours forward, so stability never grew) or by a state wipe.
+    History in `srs_reviews` is left untouched. Returns (old_stability,
+    new_stability, new_interval_days) or None if there's nothing to replay."""
+    from fsrs import Card, Rating
+    c = store.connect()
+    card = c.execute("SELECT created_at, stability, fsrs_state, suspended FROM srs_cards WHERE id=?",
+                     (card_id,)).fetchone()
+    revs = c.execute(
+        "SELECT rating, reviewed_at, elapsed_ms FROM srs_reviews WHERE card_id=? ORDER BY id",
+        (card_id,)).fetchall()
+    c.close()
+    if not card or not revs:
+        return None
+    sched = _preview_scheduler()
+    created = _parse(_aware(card["created_at"])) or _utc()
+    fc = Card(card_id=card_id)
+    # FSRS Card() defaults `due`/`last_review` to "now"; pin to creation instead
+    fc = Card.from_dict({**fc.to_dict(), "due": created.isoformat(), "last_review": None})
+    when = created
+    for rv in revs:
+        real = _parse(_aware(rv["reviewed_at"])) or when
+        cur_due = _parse(_aware(fc.to_dict()["due"])) or when
+        # never score a review as "early": use the later of (actual, scheduled)
+        when = max(real, cur_due, when)
+        fc, _ = sched.review_card(fc, Rating(int(rv["rating"])), review_datetime=when,
+                                  review_duration=_td(rv["elapsed_ms"]))
+    d = fc.to_dict()
+    new_due = _parse(_aware(d["due"]))
+    new_lr = _parse(_aware(d["last_review"]))
+    iv_days = round((new_due - new_lr).total_seconds() / 86400.0, 1) if new_due and new_lr else None
+    if apply:
+        c = store.connect()
+        c.execute(
+            """UPDATE srs_cards SET fsrs_state=?, fsrs_step=?, stability=?,
+                 difficulty=?, due=?, last_review=? WHERE id=?""",
+            (d["state"], d["step"], d["stability"], d["difficulty"],
+             d["due"], d["last_review"], card_id))
+        c.commit()
+        c.close()
+    return (card["stability"], d["stability"], iv_days)
+
+
+def _projected_due(c, day_iso):
+    """How many graduated reviews will come due in the 24h window starting at
+    `day_iso` — cards already reviewed inside that window don't count again."""
+    start = _parse(_aware(day_iso))
+    end = _iso(start + _dt.timedelta(days=1))
+    return c.execute(
+        "SELECT COUNT(*) n FROM srs_cards WHERE suspended=0 AND last_review IS NOT NULL "
+        "AND fsrs_state = 2 AND due < ? AND due >= ? AND last_review < ?",
+        (end, day_iso, day_iso)).fetchone()["n"]
+
+
+def daily_healthcheck(apply=True):
+    """Once-a-day sanity pass over the schedule, run when the next day's cards are
+    decided. Catches cards whose FSRS state was clobbered or flattened, bad
+    timestamps, and a projected review spike — and repairs what it safely can so
+    the learner doesn't wake up to a wall of reviews.
+
+    Returns a report dict; also stored in app_settings['srs_healthcheck']."""
+    c = store.connect()
+    q = c.execute
+    report = {"day": _day_start_iso()[:10], "checked_at": _iso(_utc()),
+              "repaired": 0, "issues": [], "notes": []}
+    bad_ids = set()
+
+    # 1. state wipe — a card with review history but no FSRS state
+    for r in q("""SELECT s.id, COUNT(rv.id) nrev FROM srs_cards s
+                  JOIN srs_reviews rv ON rv.card_id = s.id
+                  WHERE (s.last_review IS NULL OR s.stability IS NULL)
+                  GROUP BY s.id"""):
+        bad_ids.add(r["id"])
+    if bad_ids:
+        report["issues"].append(f"{len(bad_ids)} card(s) had review history but no FSRS state")
+
+    # 2. impossible schedule — due before the last review, or a graduated card
+    #    with a sub-hour stability it can't have earned across several reps
+    n2 = 0
+    for r in q("""SELECT id, stability, reps, lapses, due, last_review, fsrs_state
+                  FROM srs_cards WHERE last_review IS NOT NULL"""):
+        due = _parse(_aware(r["due"])); lr = _parse(_aware(r["last_review"]))
+        flat = (r["fsrs_state"] == 2 and (r["reps"] or 0) >= 4 and (r["lapses"] or 0) == 0
+                and (r["stability"] or 0) < 1.0)
+        if (due and lr and due < lr) or flat:
+            bad_ids.add(r["id"]); n2 += 1
+    if n2:
+        report["issues"].append(f"{n2} card(s) had an impossible / flattened schedule")
+
+    # 3. repair the ones we can, by replaying their log on an honest schedule
+    for cid in sorted(bad_ids):
+        try:
+            res = rebuild_schedule(cid, apply=apply)
+            if res and res[1] is not None:
+                report["repaired"] += 1
+        except Exception as e:  # noqa: BLE001
+            report["notes"].append(f"card {cid}: rebuild failed ({e})")
+
+    # 4. review-load projection for today + tomorrow vs. the recent daily rate
+    done = [r["n"] for r in q(
+        """SELECT COUNT(*) n FROM srs_reviews
+           WHERE reviewed_at >= datetime('now','-8 days')
+           GROUP BY date(reviewed_at)""")]
+    typical = sorted(done)[len(done) // 2] if done else 0
+    today_n = _projected_due(c, _day_start_iso())
+    tom_n = _projected_due(c, _day_end_iso())
+    report["projected"] = {"today": today_n, "tomorrow": tom_n, "typical_day": typical}
+    if typical and max(today_n, tom_n) > max(60, typical * 2.5):
+        report["issues"].append(
+            f"review spike ahead: ~{max(today_n, tom_n)} due vs a typical {typical}/day"
+            " — check for a bad batch of new cards or a scheduling fault")
+
+    c.close()
+    report["ok"] = not report["issues"]
+    try:
+        set_setting("srs_healthcheck", _json.dumps(report, ensure_ascii=False))
+    except Exception:  # noqa: BLE001
+        pass
+    return report
+
+
+def rebuild_all_schedules(apply=True, only_worse_than_days=2.0):
+    """One-shot repair across the collection. By default only rebuilds cards
+    currently stuck under `only_worse_than_days` (the ones the early-review bug
+    flattened) and only keeps the result when it actually helps."""
+    c = store.connect()
+    ids = [r["id"] for r in c.execute(
+        "SELECT id FROM srs_cards WHERE last_review IS NOT NULL "
+        "AND (stability IS NULL OR stability < ?)", (only_worse_than_days,))]
+    c.close()
+    changed, total_gain = 0, 0.0
+    for cid in ids:
+        res = rebuild_schedule(cid, apply=False)
+        if not res:
+            continue
+        old_s, new_s, _iv = res
+        if new_s and (old_s is None or new_s > old_s + 0.05):
+            if apply:
+                rebuild_schedule(cid, apply=True)
+            changed += 1
+            total_gain += (new_s - (old_s or 0))
+    return {"examined": len(ids), "repaired": changed,
+            "avg_stability_gain": round(total_gain / changed, 2) if changed else 0}
 
 
 def undo_last(card_id):
@@ -1097,7 +1279,16 @@ def stats():
             "next_batch_median_rank": batch_rank,
             "reviewed_today": reviewed_today, "orphans": orphans, "leeches": leeches,
             "review_pace_s": round(pace, 1), "day_end": eod,
-            "next_due": _human_delta(nd) if nd else None}
+            "next_due": _human_delta(nd) if nd else None,
+            "healthcheck": _last_healthcheck()}
+
+
+def _last_healthcheck():
+    try:
+        raw = get_setting("srs_healthcheck", "")
+        return _json.loads(raw) if raw else None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 _LIST_FILTERS = {
@@ -1290,6 +1481,7 @@ def analytics(days=30):
         "reviews_today": reviews_today, "total_reviews": total_reviews,
         "retention": retention, "streak": streak,
         "reviews_by_day": days_list,
+        "healthcheck": _last_healthcheck(),
     }
 
 

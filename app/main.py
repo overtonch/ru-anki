@@ -3100,6 +3100,24 @@ def srs_audit_cards(background: BackgroundTasks):
     return {"cards": len(ids), "queued": True}
 
 
+@app.post("/srs/rebuild-schedules")
+def srs_rebuild_schedules():
+    """One-shot repair: replay each flattened card's review log through FSRS on an
+    idealised schedule so cards the early-review bug trapped near a 1-day
+    interval get the stability they earned."""
+    backup.snapshot_async("pre-rebuild-schedules")
+    r = srs.rebuild_all_schedules(apply=True)
+    print(f"[srs] rebuild-schedules: {r}", flush=True)
+    return r
+
+
+@app.post("/srs/healthcheck")
+def srs_healthcheck_now():
+    """Run the daily schedule sanity pass on demand."""
+    backup.snapshot_async("pre-healthcheck")
+    return srs.daily_healthcheck(apply=True)
+
+
 _REFORMAT_LOCK = threading.Lock()
 
 
@@ -3427,9 +3445,18 @@ def _maybe_card_audit():
             hits = srs.audit_recent(limit=n, apply=True)
             if hits:
                 print(f"[audit] daily: repaired {len(hits)} cards", flush=True)
-            srs.set_setting("audit_day", srs._day_start_iso()[:10])
         except Exception as e:  # noqa: BLE001
             print(f"[audit] daily failed: {e}", flush=True)
+        try:
+            hc = srs.daily_healthcheck(apply=True)
+            tag = "ok" if hc.get("ok") else "ISSUES"
+            print(f"[healthcheck] {tag}: repaired {hc.get('repaired', 0)}; "
+                  f"{'; '.join(hc.get('issues', [])) or 'nothing wrong'}", flush=True)
+            if hc.get("repaired"):
+                backup.snapshot_async("healthcheck-repair")
+        except Exception as e:  # noqa: BLE001
+            print(f"[healthcheck] failed: {e}", flush=True)
+        srs.set_setting("audit_day", srs._day_start_iso()[:10])
 
     threading.Thread(target=_run, daemon=True).start()
 

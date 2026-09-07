@@ -174,6 +174,95 @@ def test_queue_excludes_future_but_bundle_includes_them(db):
     assert b["id"] in bundle_ids
 
 
+def test_daily_healthcheck_catches_and_repairs_a_clobbered_card(db):
+    import srs, store
+    good = _make_card(srs, span="хорошо")
+    wiped = _make_card(srs, span="стёрто")
+    for _ in range(4):
+        srs.review(good["id"], 3); srs.review(wiped["id"], 3)
+    c = store.connect()
+    # simulate a state wipe: history stays, FSRS fields blanked
+    c.execute("UPDATE srs_cards SET fsrs_state=1, fsrs_step=0, stability=NULL, "
+              "difficulty=NULL, last_review=NULL WHERE id=?", (wiped["id"],))
+    c.commit(); c.close()
+
+    hc = srs.daily_healthcheck(apply=True)
+    assert not hc["ok"] and hc["repaired"] >= 1
+    assert any("no FSRS state" in s for s in hc["issues"])
+    c = store.connect()
+    r = c.execute("SELECT stability, last_review FROM srs_cards WHERE id=?",
+                  (wiped["id"],)).fetchone()
+    c.close()
+    assert r["stability"] and r["last_review"]        # rebuilt from the log
+    # the healthy card was left alone
+    assert srs.stats()["healthcheck"]["day"] == hc["day"]
+
+
+def test_rebuild_schedule_repairs_a_flattened_card(db):
+    """A card ground down by repeated early reviews gets its earned stability back
+    when its log is replayed on an idealised schedule."""
+    import srs, store
+    card = _make_card(srs, span="ре́па")
+    srs.review(card["id"], 1)
+    srs.review(card["id"], 3)
+    now = dt.datetime.now(dt.timezone.utc)
+    c = store.connect()
+    # forge a history of "reviewed 1d apart, Good each time" but with stability
+    # frozen low (what the bug produced)
+    c.execute("DELETE FROM srs_reviews WHERE card_id=?", (card["id"],))
+    for k in range(6):
+        t = srs._iso(now - dt.timedelta(days=6 - k))
+        c.execute("INSERT INTO srs_reviews(card_id, rating, prev_state, prev_step, "
+                  "prev_stability, prev_difficulty, prev_due, prev_last_review, reviewed_at) "
+                  "VALUES(?,?,2,NULL,0.25,6.4,?,?,?)",
+                  (card["id"], 3 if k else 1, t, t, t))
+    c.execute("UPDATE srs_cards SET stability=0.3, fsrs_state=2, due=?, last_review=? WHERE id=?",
+              (srs._iso(now), srs._iso(now - dt.timedelta(days=1)), card["id"]))
+    c.commit(); c.close()
+
+    old_s, new_s, iv = srs.rebuild_schedule(card["id"], apply=True)
+    assert new_s > old_s * 3 and iv >= 2
+    c = store.connect()
+    assert c.execute("SELECT stability FROM srs_cards WHERE id=?",
+                     (card["id"],)).fetchone()["stability"] == new_s
+    # history is untouched
+    assert c.execute("SELECT COUNT(*) n FROM srs_reviews WHERE card_id=?",
+                     (card["id"],)).fetchone()["n"] == 6
+    c.close()
+
+
+def test_early_review_is_scored_as_if_on_schedule(db):
+    """The daily batch pulls reviews forward; a card reviewed a few hours early
+    must still grow its stability as if reviewed on its due date, not stall."""
+    import srs, store
+    card = _make_card(srs, span="слово")
+    srs.review(card["id"], 1)            # first sight: Again -> low stability
+    srs.review(card["id"], 3)            # graduate
+    c = store.connect()
+    row = c.execute("SELECT stability, due, last_review FROM srs_cards WHERE id=?",
+                    (card["id"],)).fetchone()
+    c.close()
+    s0 = row["stability"]
+    # card due later today (inside the daily-batch window), last reviewed ~a day
+    # ago — then review it "early" (now), as the batch would surface it
+    eod = dt.datetime.fromisoformat(srs._day_end_iso())
+    due = srs._iso(eod - dt.timedelta(hours=1))
+    lr = srs._iso(eod - dt.timedelta(hours=1) - dt.timedelta(days=1))
+
+    def _set():
+        c = store.connect()
+        c.execute("UPDATE srs_cards SET fsrs_state=2, due=?, last_review=? WHERE id=?",
+                  (due, lr, card["id"]))
+        c.commit(); c.close()
+
+    _set()
+    pv = srs.preview(card["id"])
+    assert pv[3] not in ("1d", "<1m")           # Good is no longer stuck at a day
+    _set()
+    after = srs.review(card["id"], 3)
+    assert after["stability"] > s0 * 3          # real growth, not a rounding nudge
+
+
 def test_a_whole_days_reviews_are_available_from_the_start(db):
     """Graduated cards due any time later today show up in the queue now, so
     reviews land in one daily batch instead of trickling in — but only if you

@@ -223,6 +223,20 @@ library + proficiency graphs all ride on this.
   generates the next part on an explicit "continue reading" tap; a 0-tap session
   no longer moves `known_rank` or the session's `rank_est` (skimming ≠
   comprehension). Fiction eases the period vocab in over the parts.
+- (done 2026-09-07) **FSRS early-review bug + healthcheck** — the daily batch
+  surfaced every graduated card hours before its `due`; FSRS read that as "no
+  time elapsed" and stability never grew, so the whole collection was trapped
+  near a 1-day interval (Good and Easy both showed 1d). Fix: `srs._on_schedule_time()`
+  scores a review of a card that was due within today's batch window AS IF it
+  happened on the due date (review() + preview()); a rating-1/way-ahead review
+  still counts as early. `rebuild_schedule()` / `rebuild_all_schedules()` +
+  `POST /srs/rebuild-schedules` replay a flattened card's log on an honest
+  schedule (repaired ~69 live cards). `srs.daily_healthcheck()` (runs once/day in
+  `_maybe_card_audit`, also `POST /srs/healthcheck`) catches state wipes,
+  flattened/impossible schedules, and review-load spikes, auto-repairs what it
+  can, and stores a report surfaced on the Reviews stats tab. Also: ~7 cards had
+  their FSRS state wiped around Sept 1 (`due` forced to `2026-09-01T00:00:00`) —
+  cause not pinned (a restore/rebuild artifact); healthcheck now catches that class.
 - (done 2026-09-06) **archive + evolving topic pool** — `POST /reading/sessions/
   {sid}/archive`, `recent(archived=)`, `set_archived()` (status 'archived',
   restored to done/active; `next_chunk` won't clobber it). Library has an
