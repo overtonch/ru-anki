@@ -67,6 +67,31 @@ library + proficiency graphs all ride on this.
       space < ~1 GB (currently a full disk just logs a caught exception).
 - [ ] Occasional `git -C data-git gc` — ~4k loose objects, ~110 MB, never gc'd.
 
+## LLM latency audit (asked 2026-09-07)
+
+The app now leans on headless `claude -p` for a lot. Done so far: reading-session
+creation is async + the plan call is haiku; `_warm` pool covers translate /
+card-meanings / word-family / accent.
+- [ ] Route more call sites through `llm._warm` (needs a STABLE system prompt —
+      move per-request vars like rank/cefr into the user message). Candidates:
+      `reading_flow_chunk`, `activate_prompt`, `activate_check`, `stress_resolve`.
+- [ ] `prewarm()` the pools it'll actually use, on startup.
+- [ ] Haiku where precision is cheap: `reading_topics`, `activate_check` (already
+      focused), maybe `stress_resolve`. Keep sonnet for card content + prose.
+- [ ] Make `POST /reading/sessions/{sid}/next` async too (same polling pattern).
+
+## UI polish — follow-ups (2026-09-07 pass did: scroll/overscroll, hidden
+scrollbars, min-height:0 on flex bodies, reading review-strip, flow-sheet back
+buttons, async reading-gen spinner)
+- [ ] Give `#actSheet`, `#convoSheet`, `#genSheet`, `#flowWords` the same
+      `.sheet-back` top affordance.
+- [ ] Audit remaining full-screen views for a visible back control + working
+      `history.back()` (drill/motion/chunk/journal/speech overlays).
+- [ ] Spinner: a few `$('#x').innerHTML = SPINNER` sites land the spinner
+      top-left; wrap in `.f-load` / `.center-spin` consistently.
+- [ ] The stats tab strip: fade the right edge so it reads as scrollable now
+      that the scrollbar is hidden.
+
 ## TTS
 
 - **Default is now Piper** (`ru_RU-irina-medium`) — local neural, CPU real-time,
