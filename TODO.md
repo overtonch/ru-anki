@@ -234,6 +234,13 @@ library + proficiency graphs all ride on this.
   (worst-priority first, with the breakdown) + `POST /srs/cards/bulk`
   {ids, suspend|delete}; `#triageView` screen, opened from the `#newReserve`
   home strip.
+- (done 2026-09-07) **min-interval floor on a pass** — FSRS hands a
+  repeatedly-failed card a sub-day stability and then schedules Good AND Easy for
+  tomorrow (identical, feels broken, buries you in reviews). `srs._floor_pass`:
+  passing a graduated card now always buys `MIN_GOOD_DAYS`=2 / `MIN_EASY_DAYS`=4,
+  and nudges stability up to match. Applied in `review()`, `preview()`, and the
+  final state of `rebuild_schedule` replays. One-shot floor lifted 84 live cards
+  off <1-2d; state-2 cards <1d dropped 76→0.
 - (done 2026-09-07) **Study silent mode** — `STUDY_SILENT` (localStorage), 🔊/🔇
   toggle in the study toolbar + a done-screen checkbox. Gates every auto-play
   (`playStudyAudio(manual)`); manual listen/replay buttons still work; disables

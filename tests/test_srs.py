@@ -315,11 +315,12 @@ def test_early_review_is_scored_as_if_on_schedule(db):
                     (card["id"],)).fetchone()
     c.close()
     s0 = row["stability"]
-    # card due later today (inside the daily-batch window), last reviewed ~a day
-    # ago — then review it "early" (now), as the batch would surface it
+    # card due later today (inside the daily-batch window), last reviewed 4 days
+    # ago (well past its stability) — then review it "early" (now), as the batch
+    # would surface it
     eod = dt.datetime.fromisoformat(srs._day_end_iso())
     due = srs._iso(eod - dt.timedelta(hours=1))
-    lr = srs._iso(eod - dt.timedelta(hours=1) - dt.timedelta(days=1))
+    lr = srs._iso(eod - dt.timedelta(hours=1) - dt.timedelta(days=4))
 
     def _set():
         c = store.connect()
@@ -329,10 +330,42 @@ def test_early_review_is_scored_as_if_on_schedule(db):
 
     _set()
     pv = srs.preview(card["id"])
-    assert pv[3] not in ("1d", "<1m")           # Good is no longer stuck at a day
+    assert pv[3] not in ("1d", "<1m") and pv[4] != pv[3]   # Good unstuck, Easy distinct
     _set()
     after = srs.review(card["id"], 3)
-    assert after["stability"] > s0 * 3          # real growth, not a rounding nudge
+    assert after["stability"] > s0 * 1.8       # real growth, not a rounding nudge
+
+
+def test_passing_a_crushed_card_still_buys_breathing_room(db):
+    """A repeatedly-failed card that FSRS has ground to a sub-day stability must
+    not be scheduled for tomorrow on Good — and Easy must be further out."""
+    import srs, store
+    card = _make_card(srs, span="вопль")
+    # forge a crushed card: state 2, tiny stability, just failed-and-relearned
+    now = dt.datetime.now(dt.timezone.utc)
+    c = store.connect()
+    c.execute("UPDATE srs_cards SET fsrs_state=2, stability=0.05, difficulty=9.8, "
+              "reps=8, lapses=3, due=?, last_review=? WHERE id=?",
+              (srs._iso(now), srs._iso(now - dt.timedelta(hours=6)), card["id"]))
+    c.commit(); c.close()
+
+    pv = srs.preview(card["id"])
+    assert pv[3] not in ("1d", "<1m", "10m")          # Good: at least the floor
+    assert pv[3] != pv[4]                              # Easy is distinct
+    r = srs.review(card["id"], 3)
+    iv = (dt.datetime.fromisoformat(r["due"]) - now).total_seconds() / 86400
+    assert iv >= srs.MIN_GOOD_DAYS - 0.2
+    assert r["stability"] >= srs.MIN_GOOD_DAYS - 0.2   # model matches the schedule
+
+    # a healthy card is untouched by the floor
+    h = _make_card(srs, span="здоровый")
+    for _ in range(3):
+        srs.review(h["id"], 3)
+    c = store.connect()
+    c.execute("UPDATE srs_cards SET stability=40, fsrs_state=2, due=?, last_review=? WHERE id=?",
+              (srs._iso(now), srs._iso(now - dt.timedelta(days=40)), h["id"]))
+    c.commit(); c.close()
+    assert srs.preview(h["id"])[3] not in ("2d", "4d")
 
 
 def test_a_whole_days_reviews_are_available_from_the_start(db):

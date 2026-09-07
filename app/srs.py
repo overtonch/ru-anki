@@ -55,6 +55,15 @@ _SCHED = None
 LEARNING_STEPS = (_dt.timedelta(minutes=1),)
 RELEARNING_STEPS = (_dt.timedelta(minutes=10),)
 
+# Floor on the interval when you PASS a graduated card. FSRS will hand a
+# repeatedly-failed card a sub-day stability and then schedule it for tomorrow no
+# matter whether you press Good or Easy — which feels broken and buries you in
+# reviews. Like Anki's graduating / easy / minimum intervals: getting a card
+# right always buys at least this much breathing room, and the card's stability
+# is nudged up to match so the schedule stays self-consistent.
+MIN_GOOD_DAYS = 2.0
+MIN_EASY_DAYS = 4.0
+
 # If you finish your reviews and a learning-step card is due again "soon" (within
 # this window), surface it now rather than making you wait out the timer. Lets a
 # whole day's reviews be done in one sitting.
@@ -749,6 +758,22 @@ def _on_schedule_time(row, now, rating):
     return now
 
 
+def _floor_pass(d, rating, scored_at):
+    """Enforce MIN_GOOD/MIN_EASY on a passed graduated card. Mutates the FSRS
+    to_dict `d`: bumps stability to the floor and pushes `due` out to match, so a
+    card you got right is never scheduled for tomorrow. Returns d."""
+    if rating < 3 or d.get("state") != 2:
+        return d
+    floor = MIN_EASY_DAYS if rating >= 4 else MIN_GOOD_DAYS
+    lr = _parse(_aware(d.get("last_review"))) or scored_at
+    due = _parse(_aware(d.get("due")))
+    if due and (due - lr).total_seconds() / 86400.0 >= floor - 1e-6:
+        return d                                        # FSRS already gave enough
+    d["stability"] = max(d.get("stability") or 0.0, floor)
+    d["due"] = _iso(lr + _dt.timedelta(days=floor))
+    return d
+
+
 def preview(card):
     """{rating: human-interval} for all four buttons, without persisting.
     `card` is a card id or an already-fetched row/dict (avoids a re-query when
@@ -764,7 +789,8 @@ def preview(card):
                         (3, Rating.Good), (4, Rating.Easy)):
         rt = _on_schedule_time(row, now, val)          # mirror review()
         card, _ = sched.review_card(_row_to_fsrs(row), rating, review_datetime=rt)
-        out[val] = _human_delta(card.to_dict()["due"], now)
+        d = _floor_pass(card.to_dict(), val, rt)
+        out[val] = _human_delta(d["due"], now)
     return out
 
 
@@ -802,7 +828,7 @@ def review(card_id, rating, elapsed_ms=None, at=None):
     card, _log = _scheduler().review_card(
         _row_to_fsrs(row), Rating(rating), review_datetime=sched_at,
         review_duration=_td(elapsed_ms))
-    d = card.to_dict()
+    d = _floor_pass(card.to_dict(), rating, sched_at)
     lapsed = int(bool(row["last_review"])) if rating == 1 else 0
     # park a card that just crossed the leech threshold (never for production cards —
     # those are deliberate and few)
@@ -878,7 +904,9 @@ def rebuild_schedule(card_id, apply=True):
         fc, _ = sched.review_card(fc, Rating(rating), review_datetime=when,
                                   review_duration=_td(rv["elapsed_ms"]))
         prev_rating, prev_at = rating, real
-    d = fc.to_dict()
+    # floor only the FINAL state (if the last review was a pass) — the honest
+    # trajectory is otherwise left intact
+    d = _floor_pass(fc.to_dict(), int(revs[-1]["rating"]), when)
     new_due = _parse(_aware(d["due"]))
     new_lr = _parse(_aware(d["last_review"]))
     iv_days = round((new_due - new_lr).total_seconds() / 86400.0, 1) if new_due and new_lr else None
