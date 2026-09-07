@@ -26,10 +26,24 @@
           --sh:0 1px 2px rgba(0,0,0,.3), 0 6px 20px rgba(0,0,0,.22); }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
   ::selection { background:var(--accent-soft); }
+  /* app chrome — no visible scrollbars anywhere (touch-scrolled), and no
+     browser pull-to-refresh / rubber-band bleeding through */
+  * { scrollbar-width:none; }
+  *::-webkit-scrollbar { width:0; height:0; display:none; }
+  html { overscroll-behavior:none; }
+  html, body { height:100%; }
   body { margin:0; font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-         background:var(--bg); color:var(--fg); overflow-x:hidden;
+         background:var(--bg); color:var(--fg); overflow-x:hidden; overscroll-behavior-y:none;
          -webkit-font-smoothing:antialiased; touch-action:manipulation;  /* kill double-tap zoom everywhere */
          padding: var(--safe-top) 0 3rem; }
+  /* every in-app scroll region: contain the scroll so it can't chain to the
+     document (that's what makes a stray scrollbar / bounce appear), and give it
+     a real min-height so a flex child actually scrolls instead of overflowing */
+  .flow-body, .convo-body, .act-body, .act-scroll, .studybody, .study-scroll,
+  .readbody, .wordbody, .cl-body, .drill-body, .motion-body, .chunk-body,
+  #statsBody, #statsContent, #trBody, #flowSheet, #flowWords, #actSheet,
+  #convoSheet, #convoDebrief, #genSheet, .stats-tabs, .flow-doms {
+    min-height:0; overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
   a { color:var(--accent); text-decoration:none; }
   a:active { opacity:.7; }
   :focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:3px; }
@@ -739,8 +753,11 @@
   .flow-body .fw.known-card.unknown { box-shadow:inset 0 -2px 0 #e6b93c; }   /* tapped wins */
   .flow-body .fw.seed { border-bottom:1px dotted var(--accent); }
   .flow-body .f-sentinel { height:1px; }
-  .flow-body .f-load { text-align:center; color:var(--muted); font-size:.85rem; font-family:var(--sans, system-ui);
-                       padding:1.5rem 0; }
+  .f-load { display:flex; flex-direction:column; align-items:center; justify-content:center;
+            text-align:center; color:var(--muted); font-size:.9rem; font-family:var(--sans, system-ui);
+            min-height:55vh; gap:1rem; }
+  .f-load .f-load-t { margin:0; max-width:22rem; }
+  .flow-body .f-load { min-height:auto; padding:1.5rem 0; }
   .flow-pop { position:fixed; z-index:24; max-width:15rem; background:var(--card); border:1px solid var(--line);
               border-radius:.5rem; padding:.5rem .7rem; box-shadow:var(--sh); font-size:.9rem;
               font-family:system-ui; line-height:1.4; }
@@ -754,12 +771,16 @@
   .flow-pop .fp-x { background:none; border:0; color:var(--muted); text-align:left;
                     font:inherit; font-size:.78rem; cursor:pointer; padding:0; }
   #flowSheet, #flowWords { position:absolute; inset:0; z-index:6; background:var(--bg); overflow-y:auto;
-                           padding:1.1rem 1.15rem calc(2rem + env(safe-area-inset-bottom)); }
+                           padding:calc(var(--safe-top) + .3rem) 1.15rem calc(2rem + env(safe-area-inset-bottom)); }
   #flowSheet:not([hidden]), #flowWords:not([hidden]) { display:block; }
-  #flowSheet h3, #flowWords h3 { font-size:1.05rem; margin:.2rem 0 .8rem; }
+  #flowSheet h3, #flowWords h3 { font-size:1.1rem; margin:.1rem 0 .9rem; }
+  /* consistent back affordance for a full-screen sheet */
+  .sheet-back { position:sticky; top:0; z-index:3; display:inline-flex; align-items:center; gap:.3rem;
+                margin:-.3rem 0 .7rem -.3rem; padding:.35rem .3rem; background:none; border:0;
+                color:var(--accent); font:inherit; font-size:.92rem; cursor:pointer; }
   #flowSheet textarea { width:100%; background:var(--card); color:var(--fg); border:1px solid var(--line);
-                        border-radius:9px; padding:.65rem .75rem; font:inherit; font-size:.95rem;
-                        min-height:4rem; margin-bottom:.7rem; -webkit-appearance:none; }
+                        border-radius:9px; padding:.7rem .8rem; font:inherit; font-size:.95rem; line-height:1.5;
+                        min-height:6.5rem; margin-bottom:.8rem; -webkit-appearance:none; resize:none; }
   .flow-topics { display:flex; flex-direction:column; gap:.4rem; margin:.6rem 0 1rem; }
   .flow-topics button { text-align:left; background:var(--card); border:1px solid var(--line); color:var(--fg);
                         border-radius:.5rem; padding:.6rem .75rem; font:inherit; font-size:.9rem; cursor:pointer; }
@@ -818,9 +839,10 @@
                  color:var(--muted); cursor:pointer; user-select:none; }
   .flib-arch-h::before { content:'▸'; font-size:.7rem; }
   .flib-arch-h.open::before { content:'▾'; }
-  .flow-review-tag { position:absolute; top:.5rem; left:50%; transform:translateX(-50%); z-index:7;
-                     background:var(--accent-soft); color:var(--accent); font-family:var(--sans,system-ui);
-                     font-size:.72rem; padding:.2rem .7rem; border-radius:1rem; }
+  /* a slim strip right under the studybar (inserted after it in the DOM) */
+  .flow-review-tag { flex:none; background:var(--accent-soft); color:var(--accent);
+                     font-family:var(--sans,system-ui); font-size:.72rem; text-align:center;
+                     padding:.3rem .7rem; border-bottom:1px solid var(--line-soft); }
 
   /* ---- conversation partner ---- */
   /* ---- speaking activation ---- */
@@ -4868,31 +4890,42 @@ function studyDelete() {
 
 let _lastUndoAt = 0;
 async function studyUndo() {
-  // exactly one card per tap. Three things can double it: a re-entrant call
-  // while the /undo request is in flight (STUDY._busy), a ghost/double click
-  // from the same physical tap (the time debounce), and the undo button being
-  // re-enabled mid-function by renderStudyCard (handled in finally).
+  // One tap = go back to the PREVIOUS card, always exactly one, even when the
+  // last card was failed-then-passed (two history rows for one card) or a
+  // fumbled double-tap fires two clicks. Guards: STUDY._busy (in-flight),
+  // _lastUndoAt (ghost click), and — the important one — the history entries to
+  // undo are CLAIMED synchronously (popped) before the first await, so a
+  // concurrent call can't grab the same ones.
   const now = Date.now();
-  if (!STUDY || !STUDY.history.length || STUDY._busy || now - _lastUndoAt < 600) return;
+  if (!STUDY || !STUDY.history.length || STUDY._busy || now - _lastUndoAt < 500) return;
   _lastUndoAt = now;
   STUDY._busy = true;
-  $('#studyUndo').disabled = true;
+  const btn = $('#studyUndo'); if (btn) btn.disabled = true;
+
+  const claim = [STUDY.history.pop()];
+  while (STUDY.history.length &&
+         STUDY.history[STUDY.history.length - 1].card.id === claim[0].card.id)
+    claim.push(STUDY.history.pop());               // an "Again" re-queue = one review
+  const id = claim[0].card.id;
+  let card = claim[0].card, ok = true;
   try {
-    const h = STUDY.history[STUDY.history.length - 1];
-    const id = h.card.id;
-    let card = h.card;
-    if (STUDY.practice) {
-      // nothing was persisted — just put the card back
-    } else if (h.offline) {
-      const pend = (await idbAll('srsOut').catch(() => []))
-        .filter(x => x.card_id === id).sort((a, b) => (a.reviewed_at < b.reviewed_at ? 1 : -1))[0];
-      if (pend) await idbDel('srsOut', pend.client_id).catch(() => {});
-    } else {
-      try { const d = await api(`/srs/cards/${id}/undo`, { method: 'POST' }); card = d.card || h.card; }
-      catch (e) { toast('couldn’t undo — need a connection', 2500); return; }
+    for (const h of claim) {
+      if (STUDY.practice) continue;
+      if (h.offline) {
+        const pend = (await idbAll('srsOut').catch(() => []))
+          .filter(x => x.card_id === id).sort((a, b) => (a.reviewed_at < b.reviewed_at ? 1 : -1))[0];
+        if (pend) await idbDel('srsOut', pend.client_id).catch(() => {});
+      } else {
+        try { const d = await api(`/srs/cards/${id}/undo`, { method: 'POST' }); card = d.card || card; }
+        catch (e) { ok = false; break; }
+      }
     }
-    STUDY.history.pop();
-    STUDY.done = Math.max(0, STUDY.done - 1);
+    if (!ok) {
+      for (let i = claim.length - 1; i >= 0; i--) STUDY.history.push(claim[i]);   // put it back
+      toast('couldn’t undo — need a connection', 2500);
+      return;
+    }
+    STUDY.done = Math.max(0, STUDY.done - claim.length);
     STUDY.queue = STUDY.queue.filter(x => x.id !== id);
     delete card._dueAt;                  // a re-queued "Again" clone would otherwise be skipped
     STUDY.queue.unshift(card);
@@ -7120,6 +7153,7 @@ async function flowNew() {
   FLOW_LIB = list;
   const resumable = list.filter(s => s.status === 'active' && (s.words_read || 0) < 8000).slice(0, 4);
   $('#flowSheet').innerHTML = `
+    <button class="sheet-back" onclick="$('#flowSheet').hidden=true; if(!FLOW||!FLOW.id) history.back();">‹ back</button>
     <h3>What do you want to read about?</h3>
     <textarea id="flowPrompt" placeholder="a topic, a scenario, a kind of story… anything. e.g. 'a detective story set in Moscow' or 'names of birds and insects in the forest'"></textarea>
     <button class="flow-go" onclick="flowStart()">Start a new one</button>
@@ -7183,6 +7217,7 @@ async function flowLibrary() {
   try { arch = (await api('/reading/sessions?archived=1')).sessions || []; } catch {}
   FLOW_LIB = list;
   $('#flowSheet').innerHTML = `
+    <button class="sheet-back" onclick="flowNew()">‹ back</button>
     <h3>Reading library</h3>
     <p class="dsk-hint">Continue any piece, or review what you've already seen. Archive the ones you're done with — they stay here as references.</p>
     ${list.length ? `<div class="flow-lib">${list.map(s => flibRow(s)).join('')}</div>`
@@ -7204,28 +7239,49 @@ async function flowRefreshCat(did, btn) {
   if (box) box.innerHTML = fdTopicsHtml(did, topics) +
     `<button class="fd-more" onclick="flowRefreshCat(${JSON.stringify(did).replace(/"/g, '&quot;')}, this)">↻ more ideas</button>`;
 }
+let FLOW_START_CANCEL = false;
 async function flowStart(topic, domain) {
   flowListenStop();
   const prompt = topic ? '' : ($('#flowPrompt') ? $('#flowPrompt').value.trim() : '');
   if (!topic && !prompt) { toast('give it a topic', 1600); return; }
-  $('#flowSheet').querySelectorAll('button').forEach(b => b.disabled = true);
-  $('#flowSheet').innerHTML = `<div class="f-load"><span class="spin"></span><p style="margin-top:1rem;color:var(--muted)">writing your first page…</p></div>`;
+  const sheet = $('#flowSheet');
+  sheet.hidden = false;
+  const loadHtml = (msg) => `<div class="f-load"><span class="spin lg"></span>
+    <p class="f-load-t">${escapeHtml(msg)}</p>
+    <button class="flow-cancel" style="margin-top:2rem" onclick="flowNew()">cancel</button></div>`;
+  sheet.innerHTML = loadHtml('planning the story…');
+  FLOW_START_CANCEL = false;
   let d;
   try { d = await api('/reading/sessions', { method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ topic: topic || '', prompt, domain: domain || '' }) }); }
-  catch (e) { $('#flowSheet').innerHTML = `<div class="empty">couldn’t start — ${escapeHtml(e.message)}</div>
+  catch (e) { sheet.innerHTML = `<div class="empty">couldn’t start — ${escapeHtml(e.message)}</div>
     <button class="flow-cancel" onclick="flowNew()">try again</button>`; return; }
-  FLOW = { id: d.id, chunks: [], unknown: {}, fetching: false, done: false, review: false,
-           lastLevel: (d.chunk || {}).level, total: (d.chunk || {}).total || 5, part: 1,
-           title: (d.chunk || {}).title || '' };
-  $('#flowSheet').hidden = true;
+  const sid = d.id;
+  let chunk = d.chunk;
+  // the plan + first part build on the server (~15-25s); poll until the text lands
+  for (let i = 0; chunk && chunk.status === 'generating' && i < 40; i++) {
+    if (FLOW_START_CANCEL || $('#flowSheet').hidden) { flowArchive(sid, true); return; }
+    sheet.innerHTML = loadHtml(chunk.stage === 'writing'
+      ? (chunk.title ? `writing “${chunk.title}”…` : 'writing the first part…')
+      : 'planning the story…');
+    await new Promise(r => setTimeout(r, 1600));
+    try { chunk = (await api(`/reading/sessions/${sid}/chunks/last`)).chunk; }
+    catch { /* keep polling */ }
+  }
+  if (!chunk || chunk.error || chunk.status === 'generating') {
+    sheet.innerHTML = `<div class="empty">${escapeHtml((chunk && chunk.error) || 'that one didn’t come together — try again')}</div>
+      <button class="flow-cancel" onclick="flowNew()">try again</button>`;
+    return;
+  }
+  FLOW = { id: sid, chunks: [], unknown: {}, fetching: false, done: false, review: false,
+           lastLevel: chunk.level, total: chunk.total || 5, part: 1, title: chunk.title || '' };
+  sheet.hidden = true;
   $('#flowReviewTag') && $('#flowReviewTag').remove();
   $('#flowBody').innerHTML = '';
-  flowAppendChunk(d.chunk);
+  flowAppendChunk(chunk);
   flowWireScroll();
   refreshFlowProg();
   flowMoreBtn();
-  flowMaybeMore();
 }
 function flowMaybeMore() {
   // no-op: the next part is only ever generated on an explicit tap of the
@@ -7256,7 +7312,8 @@ async function flowResume(id, review) {
     const tag = document.createElement('div');
     tag.id = 'flowReviewTag'; tag.className = 'flow-review-tag';
     tag.textContent = 'review — reading what you’ve seen';
-    $('#flowView').appendChild(tag);
+    const bar = $('#flowView').querySelector('.studybar');
+    bar ? bar.after(tag) : $('#flowView').appendChild(tag);
     const b = document.createElement('button');
     b.className = 'flow-more-btn'; b.textContent = 'continue this one ▸';
     b.onclick = () => { FLOW.review = false; $('#flowReviewTag') && $('#flowReviewTag').remove();

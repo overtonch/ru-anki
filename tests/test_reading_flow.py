@@ -41,6 +41,25 @@ def test_tapping_words_lowers_the_level_estimate(client, db):
     assert client.get(f"/reading/sessions/{sid}").json()["unknown_seen"] == 8
 
 
+def test_session_reports_generating_then_the_first_part(client, db, monkeypatch):
+    """create() returns immediately; the client polls chunks/last and sees
+    status:generating until the plan + first part land."""
+    import reading_flow
+    seen = {}
+    real_build = reading_flow._build_first
+
+    def _slow_build(sid, *a):
+        # snapshot what a poll would see BEFORE the part exists
+        seen["mid"] = client.get(f"/reading/sessions/{sid}/chunks/last").json()["chunk"]
+        real_build(sid, *a)
+    monkeypatch.setattr(reading_flow, "_build_first", _slow_build)
+
+    r = client.post("/reading/sessions", json={"topic": "x"}).json()
+    assert seen["mid"]["status"] == "generating"
+    done = client.get(f"/reading/sessions/{r['id']}/chunks/last").json()["chunk"]
+    assert done.get("text") and not done.get("error")
+
+
 def test_word_marks_cover_all_forms_tapped_vs_carded(client, db):
     """Every inflected form of a word you've tapped (highlight) or already have a
     card for (underline) is marked, not just the exact string."""

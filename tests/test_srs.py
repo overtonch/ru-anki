@@ -208,6 +208,37 @@ def test_queue_excludes_future_but_bundle_includes_them(db):
     assert b["id"] in bundle_ids
 
 
+def test_undo_reverts_exactly_one_review_at_a_time(db):
+    import srs, store
+    c = _make_card(srs, span="слово")
+    srs.review(c["id"], 3)          # 1
+    srs.review(c["id"], 1)          # 2 (lapse)
+    srs.review(c["id"], 3)          # 3
+    snap = lambda: store.connect().execute(
+        "SELECT reps, lapses, stability, due, last_review FROM srs_cards WHERE id=?",
+        (c["id"],)).fetchone()
+    after3 = dict(snap())
+    n_rev = lambda: store.connect().execute(
+        "SELECT COUNT(*) n FROM srs_reviews WHERE card_id=?", (c["id"],)).fetchone()["n"]
+    assert n_rev() == 3
+
+    srs.undo_last(c["id"])          # -> back to state after review 2
+    assert n_rev() == 2
+    a2 = dict(snap())
+    assert a2["reps"] == after3["reps"] - 1 and a2["lapses"] == after3["lapses"]
+
+    srs.undo_last(c["id"])          # -> back to state after review 1
+    assert n_rev() == 1
+    a1 = dict(snap())
+    assert a1["reps"] == 1 and a1["lapses"] == 0
+
+    srs.undo_last(c["id"])          # -> brand new
+    assert n_rev() == 0
+    a0 = dict(snap())
+    assert a0["reps"] == 0 and a0["last_review"] is None
+    assert srs.undo_last(c["id"]) is None       # nothing left to undo
+
+
 def test_daily_healthcheck_catches_and_repairs_a_clobbered_card(db):
     import srs, store
     good = _make_card(srs, span="хорошо")

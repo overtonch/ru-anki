@@ -286,6 +286,9 @@ def _plan_dict(s):
 
 
 def create(topic="", prompt="", domain=""):
+    """Start a session NOW — the plan + first part are built on a background
+    thread (2-3 LLM calls, ~15-25s). Returns immediately; the client polls
+    `_chunk(sid, "last")` and sees `status:"generating"` until the text lands."""
     topic = (topic or "").strip()
     prompt = (prompt or "").strip()
     domain = (domain or "").strip() or proficiency.classify(topic, prompt)
@@ -295,25 +298,40 @@ def create(topic="", prompt="", domain=""):
         except Exception:  # noqa: BLE001
             pass
     start = proficiency.starting_rank(domain)
-    cefr = _level_label(start)
-    try:
-        plan = llm.reading_flow_plan(
-            topic, prompt, style=proficiency.domain_style(domain),
-            grounding=proficiency.domain_grounding(domain), cefr=cefr, parts=PARTS)
-    except Exception:  # noqa: BLE001
-        plan = None
-    label = (plan.get("title") if plan else "") or topic or (prompt[:60] if prompt else "Free reading")
+    label = topic or (prompt[:60] if prompt else "New story")
     c = _c()
     cur = c.execute(
-        "INSERT INTO reading_flow_sessions(topic, prompt, domain, rank_est, plan, total_parts) "
-        "VALUES(?,?,?,?,?,?)",
-        (label, prompt or None, domain, start,
-         json.dumps(plan, ensure_ascii=False) if plan else None, PARTS))
+        "INSERT INTO reading_flow_sessions(topic, prompt, domain, rank_est, total_parts, status) "
+        "VALUES(?,?,?,?,?,'generating')",
+        (label, prompt or None, domain, start, PARTS))
     sid = cur.lastrowid
     c.commit()
     c.close()
-    _generate(sid)
+    if os.environ.get("RU_TEST"):
+        _build_first(sid, topic, prompt, domain)          # deterministic in tests
+    else:
+        threading.Thread(target=_build_first, args=(sid, topic, prompt, domain),
+                         daemon=True).start()
     return sid
+
+
+def _build_first(sid, topic, prompt, domain):
+    cefr = _level_label(proficiency.starting_rank(domain))
+    try:
+        plan = llm.reading_flow_plan(
+            topic, prompt, style=proficiency.domain_style(domain),
+            grounding=proficiency.domain_grounding(domain), cefr=cefr, parts=PARTS,
+            model="haiku")                       # structure only — speed over polish
+    except Exception:  # noqa: BLE001
+        plan = None
+    if plan and plan.get("title"):
+        _set(sid, plan=json.dumps(plan, ensure_ascii=False), topic=plan["title"][:80])
+    elif plan:
+        _set(sid, plan=json.dumps(plan, ensure_ascii=False))
+    try:
+        _generate(sid)                           # sets status active / error itself
+    except Exception as e:  # noqa: BLE001
+        _set(sid, status="error", error=str(e)[:300])
 
 
 def sequel(sid):
@@ -591,7 +609,13 @@ def _chunk(sid, which="last"):
         c.close()
         return {"error": s["error"] or "generation failed"}
     if not r:
+        plan = _plan_dict(s)
         c.close()
+        if s["status"] == "generating":
+            return {"status": "generating", "part": 1,
+                    "total": s["total_parts"] or PARTS,
+                    "title": (plan or {}).get("title"),
+                    "stage": "writing" if plan else "planning"}
         return {"error": "no chunk"}
     marks = _mark_words(c, sid, [r["text_accented"] or r["text"] or ""])
     c.close()

@@ -2462,6 +2462,15 @@ class ReadingNextIn(BaseModel):
     read_words: int = 0
 
 
+@app.get("/reading/sessions/{sid}/chunks/last")
+def reading_chunk_last(sid: int):
+    """Poll target while a session's first part is generating."""
+    ch = reading_flow._chunk(sid, "last")
+    if ch is None:
+        raise HTTPException(404, "no such session")
+    return {"chunk": ch}
+
+
 @app.post("/reading/sessions/{sid}/next")
 def reading_next(sid: int, body: ReadingNextIn):
     if not reading_flow.session(sid):

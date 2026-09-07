@@ -29,15 +29,13 @@ function extractFn(name) {
   return HTML.slice(lineStart, i);
 }
 
-function harness() {
+function harness(history, opts = {}) {
+  const hist = history || [{ card: { id: 1 }, rating: 3 }, { card: { id: 2 }, rating: 3 }];
   const state = {
-    undoCalls: 0,
+    undoCalls: 0, undoDelay: opts.undoDelay || 0,
     STUDY: {
-      _busy: false, done: 5, practice: false,
-      history: [
-        { card: { id: 1 }, rating: 3 },
-        { card: { id: 2 }, rating: 3 },
-      ],
+      _busy: false, done: hist.length + 3, practice: !!opts.practice,
+      history: hist,
       queue: [{ id: 3 }, { id: 4 }],
       i: 0,
     },
@@ -47,7 +45,11 @@ function harness() {
     Date,
     $: () => ({ disabled: false }),
     api: async (path) => {
-      if (/\/undo$/.test(path)) { state.undoCalls++; return { card: { id: 2 } }; }
+      const m = /\/srs\/cards\/(\d+)\/undo$/.exec(path);
+      if (m) {
+        if (state.undoDelay) await new Promise(r => setTimeout(r, state.undoDelay));
+        state.undoCalls++; return { card: { id: Number(m[1]) } };
+      }
       return {};
     },
     idbAll: async () => [],
@@ -59,13 +61,12 @@ function harness() {
     refreshQueuePill: () => {},
   };
   const body = 'let _lastUndoAt = 0;\n' + extractFn('studyUndo');
-  const make = new Function(...Object.keys(env),
-    body + '\n;return studyUndo;');
+  const make = new Function(...Object.keys(env), body + '\n;return studyUndo;');
   return { studyUndo: make(...Object.values(env)), state };
 }
 
 test('two rapid undo taps revert exactly one card', async () => {
-  const { studyUndo, state } = harness();
+  const { studyUndo, state } = harness(null, { undoDelay: 5 });
   await Promise.all([studyUndo(), studyUndo(), studyUndo()]);
   assert.equal(state.undoCalls, 1, 'server /undo hit once');
   assert.equal(state.STUDY.history.length, 1, 'one history entry popped');
@@ -77,9 +78,33 @@ test('undo works again on a deliberate second tap', async () => {
   const { studyUndo, state } = harness();
   await studyUndo();
   assert.equal(state.STUDY.history.length, 1);
-  // the time debounce is ~600ms; simulate a later, deliberate tap
-  await new Promise(r => setTimeout(r, 650));
+  await new Promise(r => setTimeout(r, 550));
   await studyUndo();
   assert.equal(state.STUDY.history.length, 0, 'second deliberate undo went through');
   assert.equal(state.STUDY.done, 3);
+});
+
+test('a failed-then-passed card is one card back, not two taps', async () => {
+  // history: card 7 failed (Again), re-queued, then passed (Good) — two rows,
+  // one logical card. One undo tap should peel BOTH and land on card 7.
+  const { studyUndo, state } = harness([
+    { card: { id: 5 }, rating: 3 },
+    { card: { id: 7 }, rating: 1 },
+    { card: { id: 7 }, rating: 3 },
+  ], { undoDelay: 5 });
+  await studyUndo();
+  assert.equal(state.undoCalls, 2, 'both of card 7’s reviews undone');
+  assert.deepEqual(state.STUDY.history.map(h => h.card.id), [5], 'only card 5 left in history');
+  assert.equal(state.STUDY.queue[0].id, 7, 'card 7 is the current card again');
+  assert.equal(state.STUDY.done, 4, 'done went back by the two grades');
+});
+
+test('a slow undo request still can’t be double-fired', async () => {
+  const { studyUndo, state } = harness(null, { undoDelay: 40 });
+  const a = studyUndo();
+  await new Promise(r => setTimeout(r, 5));
+  const b = studyUndo();                 // fired while the first is mid-request
+  await Promise.all([a, b]);
+  assert.equal(state.undoCalls, 1);
+  assert.equal(state.STUDY.history.length, 1);
 });
