@@ -234,6 +234,16 @@ library + proficiency graphs all ride on this.
   (worst-priority first, with the breakdown) + `POST /srs/cards/bulk`
   {ids, suspend|delete}; `#triageView` screen, opened from the `#newReserve`
   home strip.
+- (done 2026-09-07) **FSRS state-reset bug + full honest replay** — ~35 cards
+  were reset on Sept 5 to `stability=3.0, difficulty=6.5` (not FSRS values;
+  cause unconfirmed — a restore/rebuild artifact) with due/last_review kept,
+  wiping their lapse history; a later Good/Easy then inflated them to a 7-11d
+  interval they hadn't earned. `srs.rebuild_all_schedules()` now replays EVERY
+  reviewed card's log on an honest schedule (collapsing Again-runs within an
+  hour = drilling, not repeated failures): a card with the `3.0/6.5` fingerprint
+  gets the honest value even if shorter (marked in `app_settings.srs_reset_
+  repaired` so it isn't re-touched); every other card can only grow. Live: 114
+  cards grew (avg +12d), 24 shrank. `daily_healthcheck` detects the fingerprint.
 - (done 2026-09-07) **FSRS early-review bug + healthcheck** — the daily batch
   surfaced every graduated card hours before its `due`; FSRS read that as "no
   time elapsed" and stability never grew, so the whole collection was trapped

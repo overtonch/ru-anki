@@ -232,6 +232,44 @@ def test_daily_healthcheck_catches_and_repairs_a_clobbered_card(db):
     assert srs.stats()["healthcheck"]["day"] == hc["day"]
 
 
+def test_rebuild_all_fixes_a_state_reset_card_even_if_it_shrinks(client, db):
+    """A card the reset bug inflated (real lapses wiped, then an Easy pushed it
+    to a long interval) is brought back down to what it actually earned."""
+    import srs, store
+    card = _make_card(srs, span="я́ма")
+    srs.review(card["id"], 1)
+    srs.review(card["id"], 3)
+    now = dt.datetime.now(dt.timezone.utc)
+    c = store.connect()
+    c.execute("DELETE FROM srs_reviews WHERE card_id=?", (card["id"],))
+    # honest log: failed it three times over three days, a Good between each
+    seq = [(1, 6), (3, 6), (1, 5), (3, 5), (1, 4), (3, 4)]
+    for rating, days_ago in seq:
+        t = srs._iso(now - dt.timedelta(days=days_ago))
+        c.execute("INSERT INTO srs_reviews(card_id, rating, prev_state, prev_step, "
+                  "prev_stability, prev_difficulty, prev_due, prev_last_review, reviewed_at) "
+                  "VALUES(?,?,2,NULL,0.3,8.0,?,?,?)", (card["id"], rating, t, t, t))
+    # then the bug: a review whose prev is the tell-tale 3.0 / 6.5
+    t = srs._iso(now - dt.timedelta(days=1))
+    c.execute("INSERT INTO srs_reviews(card_id, rating, prev_state, prev_step, "
+              "prev_stability, prev_difficulty, prev_due, prev_last_review, reviewed_at) "
+              "VALUES(?,4,2,0,3.0,6.5,?,?,?)", (card["id"], t, t, t))
+    c.execute("UPDATE srs_cards SET stability=9.0, difficulty=6.5, fsrs_state=2, "
+              "due=?, last_review=? WHERE id=?",
+              (srs._iso(now + dt.timedelta(days=8)), t, card["id"]))
+    c.commit(); c.close()
+
+    r = srs.rebuild_all_schedules(apply=True)
+    assert r["reset_bug_cards"] >= 1 and r["shrank"] >= 1
+    c = store.connect()
+    s = c.execute("SELECT stability FROM srs_cards WHERE id=?", (card["id"],)).fetchone()["stability"]
+    c.close()
+    assert s < 6                                   # brought back down toward reality
+    # fingerprint is marked done — a second pass leaves it alone
+    r2 = srs.rebuild_all_schedules(apply=True)
+    assert r2["shrank"] == 0
+
+
 def test_rebuild_schedule_repairs_a_flattened_card(db):
     """A card ground down by repeated early reviews gets its earned stability back
     when its log is replayed on an idealised schedule."""

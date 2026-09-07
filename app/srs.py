@@ -862,13 +862,22 @@ def rebuild_schedule(card_id, apply=True):
     # FSRS Card() defaults `due`/`last_review` to "now"; pin to creation instead
     fc = Card.from_dict({**fc.to_dict(), "due": created.isoformat(), "last_review": None})
     when = created
+    prev_rating = prev_at = None
     for rv in revs:
         real = _parse(_aware(rv["reviewed_at"])) or when
+        rating = int(rv["rating"])
+        # collapse a run of "Again" on one card within an hour — that's drilling
+        # the card back in, not repeated failures (the first Again is the failure)
+        if (rating == 1 and prev_rating == 1 and prev_at
+                and (real - prev_at).total_seconds() < 3600):
+            prev_at = real
+            continue
         cur_due = _parse(_aware(fc.to_dict()["due"])) or when
         # never score a review as "early": use the later of (actual, scheduled)
         when = max(real, cur_due, when)
-        fc, _ = sched.review_card(fc, Rating(int(rv["rating"])), review_datetime=when,
+        fc, _ = sched.review_card(fc, Rating(rating), review_datetime=when,
                                   review_duration=_td(rv["elapsed_ms"]))
+        prev_rating, prev_at = rating, real
     d = fc.to_dict()
     new_due = _parse(_aware(d["due"]))
     new_lr = _parse(_aware(d["last_review"]))
@@ -931,6 +940,14 @@ def daily_healthcheck(apply=True):
     if n2:
         report["issues"].append(f"{n2} card(s) had an impossible / flattened schedule")
 
+    # 2b. the state-reset bug fingerprint (stability 3.0 / difficulty 6.5 in the
+    #     log — not FSRS values; the real lapse history was wiped)
+    reset_ids = _reset_fingerprint_ids(c)
+    still_wrong = [i for i in reset_ids if i not in bad_ids]
+    if still_wrong:
+        bad_ids.update(still_wrong)
+        report["issues"].append(f"{len(still_wrong)} card(s) carry the state-reset fingerprint")
+
     # 3. repair the ones we can, by replaying their log on an honest schedule
     for cid in sorted(bad_ids):
         try:
@@ -939,6 +956,8 @@ def daily_healthcheck(apply=True):
                 report["repaired"] += 1
         except Exception as e:  # noqa: BLE001
             report["notes"].append(f"card {cid}: rebuild failed ({e})")
+    if apply and still_wrong:
+        _mark_reset_repaired(still_wrong)
 
     # 4. review-load projection for today + tomorrow vs. the recent daily rate
     done = [r["n"] for r in q(
@@ -963,28 +982,73 @@ def daily_healthcheck(apply=True):
     return report
 
 
-def rebuild_all_schedules(apply=True, only_worse_than_days=2.0):
-    """One-shot repair across the collection. By default only rebuilds cards
-    currently stuck under `only_worse_than_days` (the ones the early-review bug
-    flattened) and only keeps the result when it actually helps."""
+# A card whose review log contains a step from exactly stability 3.0 / difficulty
+# 6.5 was hit by the Sept-2026 state-reset bug (those aren't FSRS values): its
+# real lapse history was wiped and a later Good/Easy then over-inflated it.
+def _reset_repaired_ids():
+    try:
+        return set(_json.loads(get_setting("srs_reset_repaired", "[]") or "[]"))
+    except Exception:  # noqa: BLE001
+        return set()
+
+
+def _mark_reset_repaired(ids):
+    if not ids:
+        return
+    set_setting("srs_reset_repaired",
+                _json.dumps(sorted(_reset_repaired_ids() | set(int(i) for i in ids))))
+
+
+def _reset_fingerprint_ids(c, include_repaired=False):
+    hit = {r["card_id"] for r in c.execute(
+        "SELECT DISTINCT card_id FROM srs_reviews "
+        "WHERE ABS(prev_stability - 3.0) < 1e-6 AND ABS(prev_difficulty - 6.5) < 1e-6")}
+    return hit if include_repaired else (hit - _reset_repaired_ids())
+
+
+def rebuild_all_schedules(apply=True):
+    """One-shot repair across the whole collection. Replays every reviewed card's
+    log through FSRS on an honest schedule (no review scored as 'early'). For a
+    card corrupted by the state-reset bug the honest value replaces the current
+    one even if that means a SHORTER interval (it was inflated). For every other
+    card the repair can only lengthen — a card doing fine is never shortened by
+    a determinism difference in the replay."""
     c = store.connect()
     ids = [r["id"] for r in c.execute(
-        "SELECT id FROM srs_cards WHERE last_review IS NOT NULL "
-        "AND (stability IS NULL OR stability < ?)", (only_worse_than_days,))]
+        "SELECT id FROM srs_cards WHERE last_review IS NOT NULL")]
+    reset_ids = _reset_fingerprint_ids(c)
     c.close()
-    changed, total_gain = 0, 0.0
+    grown = shrunk = 0
+    d_gain = 0.0
+    repaired_reset = []
     for cid in ids:
         res = rebuild_schedule(cid, apply=False)
         if not res:
             continue
         old_s, new_s, _iv = res
-        if new_s and (old_s is None or new_s > old_s + 0.05):
-            if apply:
-                rebuild_schedule(cid, apply=True)
-            changed += 1
-            total_gain += (new_s - (old_s or 0))
-    return {"examined": len(ids), "repaired": changed,
-            "avg_stability_gain": round(total_gain / changed, 2) if changed else 0}
+        if not new_s:
+            continue
+        allow_shrink = cid in reset_ids
+        if old_s is not None and new_s < old_s - 0.1 and not allow_shrink:
+            continue                                  # protect a healthy card
+        if abs(new_s - (old_s or 0)) < 0.1:
+            if allow_shrink:
+                repaired_reset.append(cid)            # already correct — mark done
+            continue
+        if apply:
+            rebuild_schedule(cid, apply=True)
+        if allow_shrink:
+            repaired_reset.append(cid)
+        if new_s > (old_s or 0):
+            grown += 1
+        else:
+            shrunk += 1
+        d_gain += new_s - (old_s or 0)
+    if apply:
+        _mark_reset_repaired(repaired_reset)
+    return {"examined": len(ids), "grew": grown, "shrank": shrunk,
+            "reset_bug_cards": len(reset_ids),
+            "avg_stability_delta": round(d_gain / (grown + shrunk), 2) if (grown + shrunk) else 0}
 
 
 def undo_last(card_id):
