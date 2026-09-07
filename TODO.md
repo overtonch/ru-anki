@@ -219,6 +219,10 @@ library + proficiency graphs all ride on this.
 
 ## Reading feature — follow-ups
 
+- (done 2026-09-06) **manual next-part + level gate** — flow reading only
+  generates the next part on an explicit "continue reading" tap; a 0-tap session
+  no longer moves `known_rank` or the session's `rank_est` (skimming ≠
+  comprehension). Fiction eases the period vocab in over the parts.
 - **Offline card queue** — reading cards are online-only right now (toast if
   offline). Wire them through the same idb `queue` + `/cards/flush` path as
   video cards (needs a `text_id` variant in FlushItem / _make_one_card).
