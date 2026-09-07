@@ -21,3 +21,6 @@ app/data/stress.db-*
 # early-development scratch (superseded by app/)
 transcript.txt
 cand_v1.json
+
+# Piper TTS voice models — downloaded, not committed (~60MB each)
+# ~/Library/Application Support/ru-anki/piper/*.onnx

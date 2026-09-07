@@ -19,7 +19,12 @@ pymorphy3-dicts-ru==2.4.417150.4580142
 mlx-whisper==0.4.3
 faster-whisper==1.1.0
 
-# High-quality local Russian TTS for the Speech Lab (Silero v4 via torch.hub).
+# Local Russian TTS. Piper = the default when a voice model is present (neural,
+# CPU real-time, respects our U+0301 stress marks via bundled espeak-ng). Get a
+# model once:  cd "~/Library/Application Support/ru-anki/piper" &&
+#   python -m piper.download_voices ru_RU-irina-medium ru_RU-dmitri-medium
+# Silero v4 (via torch.hub) stays as a further fallback.
+piper-tts==1.8.0
 omegaconf==2.3.1
 
 # In-app spaced repetition (FSRS scheduler)

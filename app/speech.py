@@ -20,7 +20,7 @@ import srs
 import store
 import tts_hq
 
-_BACKENDS = ("elevenlabs", "apple", "silero")
+_BACKENDS = ("elevenlabs", "piper", "apple", "silero")
 
 
 def default_backend():

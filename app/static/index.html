@@ -6446,7 +6446,7 @@ function speechRenderList() {
     ctrl = `<div class="sp-ttsbar">
       <span>audio for new speeches</span>
       <span class="sp-seg">
-        <button class="${SPEECH.tts === 'silero' ? 'on' : ''}" onclick="speechSetBackend('silero')">Free · local</button>
+        <button class="${SPEECH.tts !== 'elevenlabs' ? 'on' : ''}" onclick="speechSetBackend('piper')">Free · local</button>
         <button class="${SPEECH.tts === 'elevenlabs' ? 'on' : ''}" onclick="speechSetBackend('elevenlabs')">ElevenLabs · credits</button>
       </span></div>`;
   } else if (!SPEECH.hasEleven) {

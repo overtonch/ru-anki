@@ -1,10 +1,13 @@
 """Russian TTS for the Speech Lab, conversation partner and flow reading:
 
+  Piper        — local neural TTS (onnxruntime, ~real-time on CPU). Best free
+                 quality. espeak-ng phonemisation RESPECTS the U+0301 stress
+                 marks the app already carries, so stress is right. Auto-used
+                 whenever a `ru_RU-*.onnx` model is present in the piper dir.
   Apple `say`  — the macOS system voice (Milena, or an Enhanced/Siri voice once
-                 downloaded in System Settings). Natural, on-device, no bill,
-                 fast. The default on this Mac.
-  Silero v4    — local neural TTS via torch; the fallback where `say` isn't
-                 available. Reads the dictionary stress (U+0301 -> '+' hints).
+                 downloaded in System Settings). Natural, on-device, no bill.
+  Silero v4    — local neural TTS via torch; a further fallback. Reads the
+                 dictionary stress (U+0301 -> '+' hints).
 
 ElevenLabs (hosted, METERED) is wired up but OFF unless BOTH
 `RU_TTS_ALLOW_ELEVENLABS=1` and `ELEVENLABS_API_KEY=…` are set — the key alone
@@ -12,7 +15,12 @@ does nothing, so it can't run up a bill.
 
 `synth_to_file(text, out_path[, prefer])` -> (out_path, backend_label). Always
 produces a small AAC .m4a via ffmpeg so everything downstream is uniform.
-Env: RU_TTS_SAY_VOICE (default "Milena"), RU_TTS_SAY_RATE (words/min).
+Env: RU_TTS_PIPER_VOICE (default "ru_RU-irina-medium"), RU_TTS_PIPER_LENGTH
+(1.0; >1 slower), RU_TTS_PIPER_DIR; RU_TTS_SAY_VOICE (default "Milena"),
+RU_TTS_SAY_RATE (words/min).
+
+To add a Piper voice:  cd "$RU_TTS_PIPER_DIR" && python -m piper.download_voices
+ru_RU-dmitri-medium   (voices: irina/dmitri/denis/ruslan, all *-medium).
 """
 import os
 import re
@@ -52,6 +60,15 @@ EL_URL = "https://api.elevenlabs.io/v1/text-to-speech/{vid}"
 SAY_VOICE = os.environ.get("RU_TTS_SAY_VOICE", "Milena").strip()
 SAY_RATE = os.environ.get("RU_TTS_SAY_RATE", "").strip()   # words/min, e.g. "170"
 
+# --- Piper (local neural — best free quality, respects our stress marks) ---
+PIPER_DIR = os.environ.get("RU_TTS_PIPER_DIR", "").strip() or os.path.join(
+    os.path.expanduser("~/Library/Application Support/ru-anki"), "piper")
+PIPER_VOICE = os.environ.get("RU_TTS_PIPER_VOICE", "ru_RU-irina-medium").strip()
+PIPER_LENGTH = os.environ.get("RU_TTS_PIPER_LENGTH", "1.0").strip()
+_piper = None
+_piper_lock = threading.Lock()
+_piper_ok_cache = None
+
 # --- Silero (local fallback) ---
 SILERO_SPEAKER = os.environ.get("RU_TTS_HQ_SPEAKER", "eugene")
 _SR = 48000
@@ -64,6 +81,44 @@ _SENT = re.compile(r"[^.!?…\n]+[.!?…»\"']*", re.U)
 
 def has_elevenlabs():
     return bool(EL_KEY)
+
+
+def _piper_model_path():
+    """The chosen voice's .onnx if it's there, else any ru_RU-*.onnx in the dir."""
+    p = os.path.join(PIPER_DIR, PIPER_VOICE + ".onnx")
+    if os.path.exists(p):
+        return p
+    try:
+        for f in sorted(os.listdir(PIPER_DIR)):
+            if f.startswith("ru_RU-") and f.endswith(".onnx"):
+                return os.path.join(PIPER_DIR, f)
+    except OSError:
+        pass
+    return None
+
+
+def _piper_ok():
+    global _piper_ok_cache
+    if os.environ.get("RU_TEST"):
+        return False
+    if _piper_ok_cache is None:
+        try:
+            import piper  # noqa: F401
+            _piper_ok_cache = bool(_piper_model_path())
+        except Exception:  # noqa: BLE001
+            _piper_ok_cache = False
+    return bool(_piper_ok_cache)
+
+
+def _load_piper():
+    global _piper
+    if _piper is None:
+        with _piper_lock:
+            if _piper is None:
+                from piper import PiperVoice
+                mp = _piper_model_path()
+                _piper = (PiperVoice.load(mp), os.path.basename(mp)[:-5])
+    return _piper
 
 
 def _silero_ok():
@@ -108,19 +163,24 @@ def _say_voice():
 
 
 def backend(prefer=None):
-    """The concrete backend — 'elevenlabs' | 'apple' | 'silero' | 'none'.
-    prefer: force one; None auto-picks the best available (Apple `say`, then
-    Silero). ElevenLabs only when explicitly keyed + allowed."""
+    """The concrete backend — 'elevenlabs' | 'piper' | 'apple' | 'silero' |
+    'none'. prefer: force one; None auto-picks the best available (Piper if a
+    model is present, then Apple `say`, then Silero). ElevenLabs only when
+    explicitly keyed + allowed."""
     if os.environ.get("RU_TEST"):        # never touch a real API from the test suite
         return "none"
     if prefer == "elevenlabs":
         return "elevenlabs" if EL_KEY else backend(None)
+    if prefer == "piper":
+        return "piper" if _piper_ok() else backend(None)
     if prefer == "apple":
         return "apple" if _say_ok() else backend(None)
     if prefer == "silero":
         return "silero" if _silero_ok() else backend(None)
     if EL_KEY:
         return "elevenlabs"
+    if _piper_ok():
+        return "piper"
     if _say_ok():
         return "apple"
     return "silero" if _silero_ok() else "none"
@@ -241,6 +301,32 @@ def _silero_synth(text, out_path):
     return "silero:" + SILERO_SPEAKER
 
 
+# ---------------------------------------------------------------- Piper
+
+def _piper_synth(text, out_path):
+    import wave
+
+    from piper import SynthesisConfig
+    voice, label = _load_piper()
+    # keep the U+0301 marks — espeak-ng phonemisation reads them for stress —
+    # but drop the grave (unused) and normalise whitespace
+    clean = re.sub(r"[ \t]+", " ", (text or "").replace("̀", "")).strip()
+    if not re.search(r"[а-яёА-ЯЁ]", clean):
+        raise RuntimeError("nothing to speak")
+    try:
+        length = float(PIPER_LENGTH)
+    except ValueError:
+        length = 1.0
+    cfg = SynthesisConfig(length_scale=length, normalize_audio=True)
+    src = out_path + ".src.wav"
+    with wave.open(src, "wb") as w:
+        voice.synthesize_wav(clean, w, syn_config=cfg)
+    if not os.path.exists(src) or os.path.getsize(src) < 200:
+        raise RuntimeError("piper produced no audio")
+    _to_m4a(src, out_path)
+    return "piper:" + label
+
+
 # ---------------------------------------------------------------- Apple `say`
 
 def _say_synth(text, out_path):
@@ -286,6 +372,12 @@ def synth_to_file(text, out_path, prefer=None):
             return out_path, _elevenlabs(text, out_path)
         except Exception as e:  # noqa: BLE001
             print(f"[tts_hq] ElevenLabs failed ({e}) — falling back", flush=True)
+            b = "piper" if _piper_ok() else ("apple" if _say_ok() else "silero")
+    if b == "piper":
+        try:
+            return out_path, _piper_synth(text, out_path)
+        except Exception as e:  # noqa: BLE001
+            print(f"[tts_hq] piper failed ({e}) — trying `say`", flush=True)
             b = "apple" if _say_ok() else "silero"
     if b == "apple":
         try:

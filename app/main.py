@@ -2297,7 +2297,7 @@ def speeches_list():
     return {"speeches": speech.recent(),
             "tts_backend": speech.default_backend(),
             "tts_has_elevenlabs": tts_hq.has_elevenlabs(),
-            "tts_has_local": tts_hq._silero_ok()}
+            "tts_has_local": tts_hq._piper_ok() or tts_hq._silero_ok()}
 
 
 class SpeechBackendIn(BaseModel):

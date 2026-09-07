@@ -69,11 +69,18 @@ library + proficiency graphs all ride on this.
 
 ## TTS
 
-- Default voice is now Apple `say` / **Milena (compact)**. For a big quality
-  jump: System Settings › Accessibility › Spoken Content › System Voice ›
-  Manage Voices › Russian → download **Milena (Enhanced)** or a Siri voice,
-  then set `RU_TTS_SAY_VOICE="Milena (Enhanced)"` in the plist and
-  `launchctl kickstart -k`. Everything (reading, Speech Lab, convo) picks it up.
+- **Default is now Piper** (`ru_RU-irina-medium`) — local neural, CPU real-time,
+  and espeak-ng phonemisation respects the app's U+0301 stress marks so stress is
+  right. Models live in `~/Library/Application Support/ru-anki/piper/` (not in the
+  repo). Add/replace: `cd` there and
+  `python -m piper.download_voices ru_RU-dmitri-medium` (voices: irina/dmitri/
+  denis/ruslan, `-medium`). Switch with `RU_TTS_PIPER_VOICE=` in the plist,
+  slower with `RU_TTS_PIPER_LENGTH=1.15`. Falls back to Apple `say` then Silero
+  if no model is present.
+- Apple `say` alternative — for Milena (Enhanced) or a Siri Russian voice:
+  System Settings › Accessibility › Spoken Content › Manage Voices › Russian,
+  then `RU_TTS_SAY_VOICE=` + a bogus `RU_TTS_PIPER_VOICE` (or delete the models)
+  so `say` wins.
 - ElevenLabs is **disabled** (2026-09-05, to avoid a metered bill). To re-enable:
   set `RU_TTS_ALLOW_ELEVENLABS=1` **and** `ELEVENLABS_API_KEY=…` in the plist /
   secrets.env. The key alone does nothing without the allow flag.

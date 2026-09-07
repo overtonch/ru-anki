@@ -101,7 +101,7 @@ def test_tts_hq_backend_prefers_elevenlabs_when_keyed(monkeypatch):
     assert tts_hq.backend() == "elevenlabs" and tts_hq.available() is True
     # no key -> never dead-ends on "elevenlabs"; falls back to a local voice
     monkeypatch.setattr(tts_hq, "EL_KEY", "")
-    assert tts_hq.backend("elevenlabs") in ("apple", "silero", "none")
+    assert tts_hq.backend("elevenlabs") in ("piper", "apple", "silero", "none")
 
 
 def test_tts_hq_ignores_elevenlabs_key_without_the_allow_flag(monkeypatch):
