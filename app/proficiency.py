@@ -256,7 +256,12 @@ _STYLE = {
         "Маргарита» at the later edge. Third-person narration with real scenes, "
         "gesture and interiority. This is preparation for reading the classics, "
         "so deliberately exercise the vocabulary a reader meets THERE but rarely "
-        "in speech — always in a context that makes the meaning plain:\n"
+        "in speech. But EASE THE READER IN — do not unload it all at once. The "
+        "categories below are a palette for the WHOLE multi-part piece, not a "
+        "checklist for one part. Every such word must be plain from its context, "
+        "and you must lean on words already introduced in earlier parts (see SO "
+        "FAR) far more than on new ones — a reader needs to meet a word several "
+        "times. The palette:\n"
         "  • narration & speech verbs: промолвил, пробормотал, возразил, "
         "усмехнулся, вздохнул, нахмурился, поморщился, спохватился, побрёл, "
         "потупился, вспыхнул, отшатнулся;\n"
@@ -280,9 +285,10 @@ _STYLE = {
         "  • the objects and daily life of the period: извозчик, лакей, "
         "горничная, сюртук, пенсне, папироса, самовар, депеша, флигель, "
         "гувернантка, усадьба, крыльцо, дрожки.\n"
-        "One or two genuinely new such words per paragraph — enough to build the "
-        "world, not a costume parade. Setting: pre-revolutionary Russia unless "
-        "the topic says otherwise."),
+        "Ceiling: about TWO genuinely new period words in the whole part (not per "
+        "paragraph), fewer in the opening parts — build the world gradually, not "
+        "as a costume parade. Setting: pre-revolutionary Russia unless the topic "
+        "says otherwise."),
     "religion": (
         "Write it as an accessible essay on religious thought or history — the "
         "register of a good popular guide to religion, respectful and precise. "
@@ -550,6 +556,14 @@ def note_session(sid):
     words = int(s["words_read"] or 0)
     taps = int(s["unknown_seen"] or 0)
 
+    # Reading with NO taps is not a reliable difficulty signal — it could be
+    # effortless comprehension or it could be skimming past unknown words. Only
+    # fold a session into the level estimate once the reader has engaged by
+    # marking at least one word. (Domain word/session counts still recompute
+    # live from the sessions table in _domain_rows, so nothing is lost.)
+    if taps <= 0:
+        return
+
     # global: slow exponential blend, floored by the card collection
     cur = _stored_rank()
     blended = round(0.82 * cur + 0.18 * sess_rank)
@@ -558,7 +572,7 @@ def note_session(sid):
     c.close()
     srs.set_setting("known_rank", int(max(_RANK_MIN, min(_RANK_MAX, max(blended, floor)))))
 
-    # domain: track cumulative words/taps + a blended rank estimate
+    # domain: a blended rank estimate (words/taps/sessions are recomputed live)
     st = _domain_state()
     d = st.get(did) or {"rank_est": sess_rank, "words_read": 0, "taps": 0, "sessions": 0}
     d["rank_est"] = round(0.7 * d.get("rank_est", sess_rank) + 0.3 * sess_rank)

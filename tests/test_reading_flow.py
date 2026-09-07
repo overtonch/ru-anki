@@ -41,6 +41,21 @@ def test_tapping_words_lowers_the_level_estimate(client, db):
     assert client.get(f"/reading/sessions/{sid}").json()["unknown_seen"] == 8
 
 
+def test_reading_without_tapping_does_not_move_the_global_level(client, db):
+    """Continuing past a part with zero taps is ambiguous (comprehension vs.
+    skimming) — it must not feed the global estimate."""
+    import srs
+    srs.set_setting("known_rank", "3000")
+    sid = client.post("/reading/sessions", json={"topic": "x"}).json()["id"]
+    # read four parts, never tap a word
+    for seq in range(1, 5):
+        client.post(f"/reading/sessions/{sid}/next",
+                    json={"read_seq": seq, "read_words": 140})
+    assert srs.get_setting("known_rank") == "3000"        # untouched
+    # the session's own rank_est also didn't drift upward on zero taps
+    assert client.get(f"/reading/sessions/{sid}").json()["rank_est"] <= 3000
+
+
 def test_tap_always_returns_a_translation(client, db):
     """A word the local dictionary doesn't have still gets an LLM gloss, and it's
     cached so the resumed session shows it too."""

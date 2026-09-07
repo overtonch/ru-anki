@@ -7063,13 +7063,8 @@ async function flowStart(topic, domain) {
   flowMaybeMore();
 }
 function flowMaybeMore() {
-  // content shorter than the screen → quietly pull the next chunk once
-  setTimeout(() => {
-    const b = $('#flowBody');
-    if (b && FLOW && !FLOW.review && !FLOW.fetching && !FLOW.done &&
-        b.scrollHeight < b.clientHeight + b.clientHeight * 0.6)
-      flowMore();
-  }, 150);
+  // no-op: the next part is only ever generated on an explicit tap of the
+  // "continue reading" button (see flowWireScroll).
 }
 async function flowResume(id, review) {
   flowListenStop();
@@ -7210,13 +7205,11 @@ function flowUnkEntry(bare, lemHint) {
     rlemmaGuess(u.lemma || '') === g || rlemmaGuess(u.surface || '') === g) || null;
 }
 function flowWireScroll() {
-  if (FLOW._io) { try { FLOW._io.disconnect(); } catch {} }
-  if (FLOW.review) return;
-  // gentle prefetch only — the "continue reading" button is the real control
-  FLOW._io = new IntersectionObserver(entries => {
-    if (entries.some(e => e.isIntersecting)) flowMore();
-  }, { root: $('#flowBody'), rootMargin: '1200px' });
-  $('#flowBody').querySelectorAll('.f-sentinel').forEach(s => FLOW._io.observe(s));
+  // Generating the next part is a MANUAL action (the "continue reading" button).
+  // Scrolling never triggers generation — otherwise reading past a part without
+  // tapping any words would feed the level estimate a misleading "understood it
+  // all" signal.
+  if (FLOW._io) { try { FLOW._io.disconnect(); } catch {} FLOW._io = null; }
 }
 async function flowMore(force) {
   if (!FLOW || FLOW.review || FLOW.fetching || (FLOW.done && !force)) return;

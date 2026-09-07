@@ -217,9 +217,25 @@ def _generate(sid):
     target = []
     if s["domain"] == "fiction":
         try:
-            target = proficiency.fiction_target_words(limit=8)
+            # ease the reader in: part 1 carries one target word, later parts a
+            # few more — and the SAME early words recur (the slice grows from the
+            # front) so each gets several exposures instead of a one-off dump.
+            pool = proficiency.fiction_target_words(limit=10)
+            n_t = (1, 2, 2, 3, 3)[min(max(seq, 1), 5) - 1] if total >= 4 else 2
+            target = pool[:n_t]
         except Exception:  # noqa: BLE001
             target = []
+        if total > 1:
+            style = style + (
+                f"\n\nPACING — this is part {seq} of {total} of easing the reader "
+                "into 19th-century prose. "
+                + ("Opening part: stay close to vocabulary the reader already "
+                   "knows; at most one or two new period words, each obvious from "
+                   "context. Set the scene plainly."
+                   if seq <= 2 else
+                   "Reuse the period words already introduced in earlier parts "
+                   "(see SO FAR); add at most one or two new ones. Richer texture "
+                   "is welcome now, but never a wall of unfamiliar words."))
 
     text, summary, pred = "", s["summary"], None
     for attempt in (1, 2):
@@ -280,6 +296,11 @@ def _retune(c, s):
         rank_est -= 600
     elif per100 > 2:
         rank_est -= 250
+    elif taps == 0:
+        # zero taps is ambiguous — could be effortless comprehension or could be
+        # skimming past unknown words. Not enough signal to raise the level;
+        # hold steady until the reader actually engages by tapping.
+        pass
     elif per100 < 0.7:
         rank_est += 450
     elif per100 < 1.3:
