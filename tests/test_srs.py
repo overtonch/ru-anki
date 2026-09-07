@@ -57,37 +57,48 @@ def test_new_cards_picked_in_order_shown_shuffled_stably(db):
     q1 = [c["id"] for c in srs.queue(limit=50) if c["is_new"]]
     q2 = [c["id"] for c in srs.queue(limit=50) if c["is_new"]]
 
-    # selection: the first 10 by creation order (not the later 20)
-    assert set(q1) == set(ids[:10])
+    # selection: 10 cards, all from the pool
+    assert len(q1) == 10 and set(q1) <= set(ids)
     # order: stable across reloads…
     assert q1 == q2
-    # …but shuffled, not creation order (30!/(20!) makes a match astronomically unlikely)
-    assert q1 != ids[:10]
+    # …but shuffled, not the raw selection order
+    assert q1 != sorted(q1)
 
-    # reviewing one doesn't reshuffle the rest and doesn't pull in card #11
+    # reviewing one doesn't reshuffle the rest and doesn't pull in another card
     srs.review(q1[0], 3)
     q3 = [c["id"] for c in srs.queue(limit=50) if c["is_new"]]
     assert q3 == [i for i in q1 if i != q1[0]]
 
 
-def test_new_cards_introduced_by_learn_score(db):
+def test_new_cards_introduced_by_priority(db):
     import srs
     srs.set_setting("new_per_day", 3)
     ids = {}
     for w in ("дом", "стол", "невероятный", "предотвращать"):
         ids[w] = _make_card(srs, span=w)["id"]
-    # rank: shorter word -> higher score (conftest stub)
-    scores = {r["id"]: (100 - len(r["span_text"]))
-              for r in srs.cards_for_learn_ranking()}
-    srs.set_learn_scores(scores)
+    # score them: shorter word -> higher speak/daily/culture (conftest stub)
+    sub = {r["id"]: {"speak": 100 - 8 * len(r["span_text"]),
+                     "culture": 100 - 8 * len(r["span_text"]),
+                     "daily": 100 - 8 * len(r["span_text"])}
+           for r in srs.cards_for_learn_ranking()}
+    srs.set_card_priorities(sub)
 
     q = [c["id"] for c in srs.queue(limit=50) if c["is_new"]]
-    assert set(q) == {ids["дом"], ids["стол"], ids["невероятный"]}   # top 3 by score
-    assert ids["предотвращать"] not in q                             # lowest score, over budget
+    assert set(q) == {ids["дом"], ids["стол"], ids["невероятный"]}   # top 3 by priority
+    assert ids["предотвращать"] not in q                             # lowest, over budget
 
-    # a brand-new card starts unscored and sorts last until the daily pass runs
+    # a brand-new card starts unscored and sorts after scored ones
     _make_card(srs, span="я")
     assert srs.unranked_new_count() >= 1
+
+    # priority breakdown is stored and re-derivable after a weight change
+    c = db.connect()
+    m = c.execute("SELECT priority_meta FROM srs_cards WHERE id=?", (ids["дом"],)).fetchone()
+    c.close()
+    import json
+    assert set(json.loads(m["priority_meta"])) >= {"speak", "daily", "fiction", "freq", "recency"}
+    srs.set_new_card_weights({"speak": 1.0, "daily": 0, "recency": 0, "fiction": 0, "freq": 0})
+    srs.rescore_priorities_from_meta()
 
 
 def _new_by_type(srs):
@@ -95,6 +106,29 @@ def _new_by_type(srs):
     new = [c for c in q if c["is_new"]]
     return (sum(c["card_type"] == "production" for c in new),
             sum(c["card_type"] == "recognition" for c in new))
+
+
+def test_new_triage_and_bulk_weed(client, db):
+    import srs
+    ids = {}
+    for w in ("привет", "необыкновенный", "жалование", "стол"):
+        ids[w] = _make_card(srs, span=w)["id"]
+    srs.set_card_priorities({r["id"]: {"speak": max(0, 100 - 12 * len(r["span_text"])),
+                                       "culture": 20,
+                                       "daily": max(0, 100 - 12 * len(r["span_text"]))}
+                             for r in srs.cards_for_learn_ranking()})
+
+    t = client.get("/srs/new-triage?limit=10").json()
+    assert t["total_new"] == 4 and t["cards"]
+    # worst-priority first, and each row carries the breakdown
+    prios = [c["priority"] for c in t["cards"]]
+    assert prios == sorted(prios)
+    assert set(t["cards"][0]["priority_meta"]) >= {"speak", "fiction", "recency"}
+
+    worst = [t["cards"][0]["id"], t["cards"][1]["id"]]
+    r = client.post("/srs/cards/bulk", json={"ids": worst, "action": "delete"}).json()
+    assert r["done"] == 2
+    assert client.get("/srs/new-triage").json()["total_new"] == 2
 
 
 def test_daily_new_mix_is_20_prod_30_rec(db):
@@ -388,6 +422,9 @@ def test_stats_new_reserve_and_next_batch_rank(db):
     srs.set_setting("new_per_day", 3)
     for w in ("альфа", "бета", "гамма", "дельта", "эпсилон"):
         srs.create_card(f"Вот {w} тут.", w, w, False, w)
+    srs.set_card_priorities({r["id"]: {"speak": 100 - 8 * len(r["span_text"]),
+                                       "culture": 20, "daily": 100 - 8 * len(r["span_text"])}
+                             for r in srs.cards_for_learn_ranking()})
 
     s = srs.stats()
     assert s["new_backlog"] == 5

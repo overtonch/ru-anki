@@ -63,6 +63,12 @@ def init_db():
     # daily batched LLM pass. Decides the order new cards are introduced.
     if not _has_column(c, "srs_cards", "learn_score"):
         c.execute("ALTER TABLE srs_cards ADD COLUMN learn_score INTEGER")
+    # priority: the multi-factor introduce-next score (speaking / daily-life /
+    # classic-fiction / frequency / recency-of-creation, weighted). priority_meta
+    # is the JSON breakdown. Supersedes learn_score for the queue order.
+    for col in ("priority REAL", "priority_meta TEXT"):
+        if not _has_column(c, "srs_cards", col.split()[0]):
+            c.execute(f"ALTER TABLE srs_cards ADD COLUMN {col}")
     # source: where the card came from. NULL/'video'/'text' = pipeline; 'manual'
     # = hand-added for something heard outside the app (no video_id, but NOT an
     # orphan — an orphan is a pipeline card whose video was hard-deleted).

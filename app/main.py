@@ -3354,29 +3354,28 @@ def _rank_new_cards(rescore_all=False):
     try:
         rows = srs.cards_for_learn_ranking()
         if not rescore_all:
-            rows = [r for r in rows if r.get("learn_score") is None]
+            rows = [r for r in rows if r.get("priority") is None]
         if not rows:
             srs.set_setting("learn_rank_day", srs._day_start_iso()[:10])
             return
-        print(f"[learn] ranking {len(rows)} new cards (rescore_all={rescore_all})…", flush=True)
-        BATCH, done = 50, 0
+        print(f"[learn] scoring {len(rows)} new cards (rescore_all={rescore_all})…", flush=True)
+        BATCH, done = 40, 0
         for i in range(0, len(rows), BATCH):
             chunk = rows[i:i + BATCH]
             try:
-                scores = llm.learn_priority(
+                sub = llm.card_priority(
                     [(r.get("front_word") or r.get("span_text") or r.get("sentence") or "",
                       r.get("translation") or "")
                      for r in chunk])
             except Exception as e:  # noqa: BLE001
                 print(f"[learn] batch {i}: {e}", flush=True)
                 continue
-            mapped = {r["id"]: s for r, s in zip(chunk, scores) if s is not None}
-            # anything the model skipped: park it mid-scale so it isn't stuck last
-            for r in chunk:
-                mapped.setdefault(r["id"], 50)
-            done += srs.set_learn_scores(mapped)
+            mapped = {}
+            for r, s in zip(chunk, sub):
+                mapped[r["id"]] = s or {"speak": 45, "culture": 20, "daily": 45}
+            done += srs.set_card_priorities(mapped)
         srs.set_setting("learn_rank_day", srs._day_start_iso()[:10])
-        print(f"[learn] ranked {done} cards", flush=True)
+        print(f"[learn] scored {done} cards", flush=True)
     finally:
         _RANK_LOCK.release()
 
@@ -3385,8 +3384,8 @@ _last_rank_kick = 0.0
 
 
 def _maybe_rank_new():
-    """Cheap check on every queue / stats load: (re)rank when the day rolled over
-    or fresh unranked cards showed up. Runs in a thread — never blocks the call."""
+    """Cheap check on every queue / stats load: score fresh cards, and once a day
+    re-blend priorities so the recency factor drifts. Runs in a thread."""
     global _last_rank_kick
     if _TESTING or time.time() - _last_rank_kick < 90:
         return
@@ -3395,8 +3394,19 @@ def _maybe_rank_new():
     if not stale_day and srs.unranked_new_count() == 0:
         return
     _last_rank_kick = time.time()
-    threading.Thread(target=_rank_new_cards, kwargs={"rescore_all": stale_day},
-                     daemon=True).start()
+
+    def _run():
+        try:
+            _rank_new_cards(rescore_all=False)     # LLM sub-scores for new cards only
+            if stale_day:
+                n = srs.rescore_priorities_from_meta()   # no LLM — recency drift + weights
+                if n:
+                    print(f"[learn] re-blended {n} priorities (recency drift)", flush=True)
+                srs.set_setting("learn_rank_day", today)
+        except Exception as e:  # noqa: BLE001
+            print(f"[learn] daily pass: {e}", flush=True)
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 _last_reformat_kick = 0.0
@@ -3485,6 +3495,52 @@ def _swallow(fn, *a, **kw):
 def srs_rank_new(background: BackgroundTasks, rescore_all: bool = True):
     background.add_task(_rank_new_cards, rescore_all)
     return {"queued": len(srs.cards_for_learn_ranking()), "rescore_all": rescore_all}
+
+
+@app.get("/srs/new-triage")
+def srs_new_triage(limit: int = 60, worst_first: int = 1):
+    return srs.new_triage(limit=max(5, min(300, limit)), worst_first=bool(worst_first))
+
+
+class BulkCardsIn(BaseModel):
+    ids: list[int]
+    action: str = "suspend"          # suspend | unsuspend | delete
+
+
+@app.post("/srs/cards/bulk")
+def srs_cards_bulk(body: BulkCardsIn):
+    if body.action not in ("suspend", "unsuspend", "delete"):
+        raise HTTPException(422, "bad action")
+    r = srs.bulk_cards(body.ids, body.action)
+    for nid in r.get("anki_note_ids", []):
+        try:
+            anki.delete_note(nid)
+        except Exception:  # noqa: BLE001
+            pass
+    if r["n"]:
+        _sync_soon()
+        backup.snapshot_async("cards-bulk-" + body.action)
+    return {"done": r["n"], "action": body.action}
+
+
+class NewCardWeightsIn(BaseModel):
+    speak: float | None = None
+    daily: float | None = None
+    recency: float | None = None
+    fiction: float | None = None
+    freq: float | None = None
+
+
+@app.get("/srs/new-card-weights")
+def srs_get_new_card_weights():
+    return srs.new_card_weights()
+
+
+@app.post("/srs/new-card-weights")
+def srs_set_new_card_weights(body: NewCardWeightsIn):
+    w = srs.set_new_card_weights({k: v for k, v in body.model_dump().items() if v is not None})
+    srs.rescore_priorities_from_meta()
+    return w
 
 
 def _backfill_front_words(force=False):

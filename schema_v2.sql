@@ -112,7 +112,9 @@ CREATE TABLE IF NOT EXISTS srs_cards (
     accented        TEXT,                -- target word stressed AS IT APPEARS on the card
     dict_accented   TEXT,                -- stressed dictionary / citation form
     front_word      TEXT,                -- dict form / common phrase form; front when card_front='word'
-    learn_score     INTEGER,             -- 0-100, higher = introduce sooner (daily LLM pass)
+    learn_score     INTEGER,             -- 0-100, legacy single-factor introduce score
+    priority        REAL,                -- 0-100 multi-factor introduce-next score (see srs.score_new_cards)
+    priority_meta   TEXT,                -- JSON: {speak, daily, fiction, freq, recency}
     source          TEXT,                -- NULL/'video'/'text' = pipeline; 'manual' = hand-added
     alt_meanings    TEXT,                -- other senses / idioms (small text on the back)
     sentence_full   TEXT,                -- original long context, before it was trimmed to the clause

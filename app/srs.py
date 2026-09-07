@@ -7,6 +7,7 @@ a dual-write target (off by default, `app_settings.anki_dual_write`) and an
 import datetime as _dt
 import hashlib as _hashlib
 import json as _json
+import math as _math
 import os
 import re
 import sys
@@ -556,7 +557,7 @@ def cards_to_reformat(limit=None, force=False):
     where = "" if force else "WHERE format_ver < 2"
     q = ("SELECT id, span_text, normalized_text, is_phrase, sentence, sentence_full, "
          "translation, front_word, dict_accented FROM srs_cards " + where +
-         " ORDER BY (last_review IS NOT NULL) DESC, learn_score DESC, id")
+         " ORDER BY (last_review IS NOT NULL) DESC, COALESCE(priority, learn_score, 0) DESC, id")
     if limit:
         q += f" LIMIT {int(limit)}"
     rows = c.execute(q).fetchall()
@@ -582,7 +583,7 @@ def cards_failing_v2(limit=60):
     rows = c.execute(
         "SELECT id, span_text, normalized_text, is_phrase, sentence, sentence_full, "
         "translation, front_word, dict_accented FROM srs_cards "
-        "WHERE format_ver = 2 ORDER BY (last_review IS NOT NULL) DESC, learn_score DESC").fetchall()
+        "WHERE format_ver = 2 ORDER BY (last_review IS NOT NULL) DESC, COALESCE(priority, learn_score, 0) DESC").fetchall()
     c.close()
     out = []
     for r in rows:
@@ -1134,16 +1135,81 @@ def _shuffle_new_for_day(rows):
         f"{seed}|{r['id']}".encode()).digest())
 
 
-_NEW_ORDER = ("learn_score IS NULL, learn_score DESC, created_at ASC, id ASC")
+# new cards are introduced highest-`priority` first; a card with no score yet
+# sorts after scored ones (so the day's pass can place it), then newest-first —
+# a card made 3 weeks ago whose context you've forgotten shouldn't outrank one
+# you saved this morning.
+_NEW_ORDER = ("priority IS NULL, priority DESC, created_at DESC, id DESC")
+
+# how the sub-scores combine into the introduce-next priority. Tunable via
+# app_settings['new_card_weights']. Speaking is the learner's stated #1 goal;
+# recency guards against introducing a card long after its context went cold;
+# raw frequency is deliberately light so it doesn't crowd out the classic-fiction
+# vocabulary he cards on purpose.
+_DEFAULT_WEIGHTS = {"speak": 0.30, "daily": 0.22, "recency": 0.20,
+                    "fiction": 0.16, "freq": 0.12}
+_RECENCY_HALFLIFE_DAYS = 12.0
+_FICTION = None                       # {lemma: count} for the target book, lazy
+
+
+def new_card_weights():
+    try:
+        raw = get_setting("new_card_weights", "")
+        w = _json.loads(raw) if raw else {}
+    except Exception:  # noqa: BLE001
+        w = {}
+    return {k: float(w.get(k, v)) for k, v in _DEFAULT_WEIGHTS.items()}
+
+
+def set_new_card_weights(w):
+    keep = {k: max(0.0, float(v)) for k, v in (w or {}).items() if k in _DEFAULT_WEIGHTS}
+    merged = {**_DEFAULT_WEIGHTS, **keep}
+    tot = sum(merged.values()) or 1.0
+    merged = {k: round(v / tot, 3) for k, v in merged.items()}
+    set_setting("new_card_weights", _json.dumps(merged))
+    return merged
+
+
+def _freq_score(lemma):
+    """0-100 from the word's overall frequency rank (rank 1 ≈ 100, rank 25k ≈ 0)."""
+    if not lemma:
+        return 15
+    r, _ = store.family_rank(lemma)
+    if not r or r <= 0:
+        return 12
+    return int(max(0, min(100, 100 * (1 - _math.log(r) / _math.log(25000)))))
+
+
+def _fiction_score(lemma):
+    """0-100 from how often the lemma appears in the target classic novel."""
+    global _FICTION
+    if _FICTION is None:
+        try:
+            import books
+            _FICTION = books.freq("anna_karenina")
+        except Exception:  # noqa: BLE001
+            _FICTION = {}
+    n = _FICTION.get(lemma or "", 0)
+    if n <= 0:
+        return 0
+    return int(max(0, min(100, 22 * _math.log(n + 1))))      # ~1→15, ~10→53, ~50→86
+
+
+def _recency_score(created_at):
+    dt = _parse(_aware(created_at)) if created_at else None
+    if not dt:
+        return 50
+    days = max(0.0, (_utc() - dt).total_seconds() / 86400.0)
+    return int(round(100 * _math.exp(-days / _RECENCY_HALFLIFE_DAYS)))
 
 
 def cards_for_learn_ranking():
     """Every not-yet-introduced card (recognition AND production) — the pool the
-    daily LLM pass scores for learn-first order."""
+    daily pass scores for introduce-next order."""
     c = store.connect()
     rows = c.execute(
         """SELECT id, span_text, normalized_text, translation, front_word, is_phrase,
-                  sentence, card_type
+                  sentence, card_type, created_at, priority
            FROM srs_cards
            WHERE suspended=0 AND last_review IS NULL
            ORDER BY id""").fetchall()
@@ -1155,13 +1221,13 @@ def unranked_new_count():
     c = store.connect()
     n = c.execute("SELECT COUNT(*) n FROM srs_cards "
                   "WHERE suspended=0 AND last_review IS NULL "
-                  "AND learn_score IS NULL").fetchone()["n"]
+                  "AND priority IS NULL").fetchone()["n"]
     c.close()
     return n
 
 
 def set_learn_scores(scores):
-    """scores: {card_id: 0-100}. Only touches given ids."""
+    """Legacy single-factor score. `scores`: {card_id: 0-100}."""
     if not scores:
         return 0
     c = store.connect()
@@ -1170,6 +1236,112 @@ def set_learn_scores(scores):
     c.commit()
     c.close()
     return len(scores)
+
+
+def set_card_priorities(llm_scores):
+    """`llm_scores`: {card_id: {"speak","culture","daily"} each 0-100}. Blends in
+    frequency / classic-fiction / recency (computed here) and writes `priority` +
+    the `priority_meta` breakdown. Cards not in `llm_scores` are left alone."""
+    if not llm_scores:
+        return 0
+    w = new_card_weights()
+    c = store.connect()
+    rows = c.execute(
+        "SELECT id, normalized_text, is_phrase, created_at FROM srs_cards "
+        f"WHERE id IN ({','.join('?' * len(llm_scores))})",
+        list(llm_scores)).fetchall()
+    updates = []
+    for r in rows:
+        s = llm_scores.get(r["id"]) or {}
+        lem = store.norm(r["normalized_text"] or "") if not r["is_phrase"] else None
+        meta = {
+            "speak": int(s.get("speak", 50)),
+            "daily": int(s.get("daily", 50)),
+            "fiction": max(int(s.get("culture", 0)), _fiction_score(lem)),
+            "freq": _freq_score(lem),
+            "recency": _recency_score(r["created_at"]),
+        }
+        pri = round(sum(w[k] * meta[k] for k in w), 2)
+        meta["weights"] = w
+        updates.append((pri, _json.dumps(meta, ensure_ascii=False), r["id"]))
+    c.executemany("UPDATE srs_cards SET priority=?, priority_meta=? WHERE id=?", updates)
+    c.commit()
+    c.close()
+    return len(updates)
+
+
+def rescore_priorities_from_meta():
+    """Recompute `priority` from each card's stored sub-scores using the current
+    weights — no LLM. For after a weight change."""
+    w = new_card_weights()
+    c = store.connect()
+    rows = c.execute(
+        "SELECT id, priority_meta, created_at, normalized_text, is_phrase FROM srs_cards "
+        "WHERE suspended=0 AND last_review IS NULL AND priority_meta IS NOT NULL").fetchall()
+    ups = []
+    for r in rows:
+        try:
+            m = _json.loads(r["priority_meta"])
+        except Exception:  # noqa: BLE001
+            continue
+        m["recency"] = _recency_score(r["created_at"])      # this one drifts daily
+        pri = round(sum(w[k] * float(m.get(k, 50)) for k in w), 2)
+        m["weights"] = w
+        ups.append((pri, _json.dumps(m, ensure_ascii=False), r["id"]))
+    c.executemany("UPDATE srs_cards SET priority=?, priority_meta=? WHERE id=?", ups)
+    c.commit()
+    c.close()
+    return len(ups)
+
+
+def new_triage(limit=60, worst_first=True):
+    """New (un-introduced) cards with their priority breakdown, worst-priority
+    first by default — the backlog to weed."""
+    order = "priority ASC, created_at ASC" if worst_first else _NEW_ORDER
+    c = store.connect()
+    rows = c.execute(
+        f"""SELECT id, front_word, span_text, normalized_text, translation, sentence,
+                   is_phrase, card_type, source, created_at, priority, priority_meta
+            FROM srs_cards
+            WHERE suspended=0 AND last_review IS NULL AND priority IS NOT NULL
+            ORDER BY {order} LIMIT ?""", (limit,)).fetchall()
+    total = c.execute("SELECT COUNT(*) n FROM srs_cards "
+                      "WHERE suspended=0 AND last_review IS NULL").fetchone()["n"]
+    c.close()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["priority_meta"] = _json.loads(d["priority_meta"]) if d["priority_meta"] else {}
+        except Exception:  # noqa: BLE001
+            d["priority_meta"] = {}
+        out.append(d)
+    return {"cards": out, "total_new": total, "per_day": new_per_day()}
+
+
+def bulk_cards(ids, action):
+    """`action` in {'suspend','delete','unsuspend'}. Returns count + any Anki note
+    ids freed (for the caller to delete remotely)."""
+    ids = [int(i) for i in (ids or [])]
+    if not ids:
+        return {"n": 0, "anki_note_ids": []}
+    c = store.connect()
+    notes = [r["anki_note_id"] for r in c.execute(
+        f"SELECT anki_note_id FROM srs_cards WHERE id IN ({','.join('?' * len(ids))}) "
+        "AND anki_note_id IS NOT NULL", ids)]
+    c.close()
+    if action == "delete":
+        for i in ids:
+            delete_card(i)
+    elif action in ("suspend", "unsuspend"):
+        c = store.connect()
+        c.executemany("UPDATE srs_cards SET suspended=? WHERE id=?",
+                      [(1 if action == "suspend" else 0, i) for i in ids])
+        c.commit()
+        c.close()
+    else:
+        return {"n": 0, "anki_note_ids": []}
+    return {"n": len(ids), "anki_note_ids": notes if action == "delete" else []}
 
 
 def _new_introduced_today(c, card_type="recognition"):
@@ -1310,7 +1482,8 @@ _LIST_SORTS = {
     "due": "due ASC", "alpha": "normalized_text ASC",
     "reviewed": "last_review DESC", "hardest": "difficulty DESC, lapses DESC",
     "reps": "reps DESC",
-    "learn": "learn_score DESC, created_at ASC",   # introduce-first order
+    "learn": "priority IS NULL, priority DESC, created_at DESC",   # introduce-first
+    "priority_low": "priority ASC, created_at ASC",                # backlog to weed
 }
 
 
@@ -1350,7 +1523,7 @@ def list_cards(filt="all", sort="added", q="", limit=1000, video=None):
             "id": d["id"], "span_text": d["span_text"], "front_html": front,
             "bolded": bolded, "front_word": d["front_word"],
             "card_type": d.get("card_type") or "recognition",
-            "learn_score": d["learn_score"],
+            "learn_score": d["learn_score"], "priority": d["priority"],
             "normalized_text": d["normalized_text"], "translation": d["translation"],
             "accented": d["accented"], "dict_accented": d["dict_accented"],
             "is_phrase": bool(d["is_phrase"]),

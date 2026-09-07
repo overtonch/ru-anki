@@ -780,6 +780,51 @@ def learn_priority(items, model=None):
     return [by_num.get(i + 1) for i in range(len(items))]
 
 
+_CARD_PRIORITY_SYSTEM = """You rate Russian vocabulary a learner has saved, on
+three axes, to decide what they should study next. The learner: an American in
+his 20s, lives in a US city, works in tech, dating a Russian woman and spending
+time with her Russian-speaking family; reads Russian well but speaks haltingly;
+long-term goal of reading 19th-century Russian novels (Tolstoy, Dostoevsky).
+
+For each numbered "WORD — meaning" line output "N. SPEAK CULTURE DAILY" — three
+integers 0-9, space-separated:
+
+ SPEAK   — how much having this word ACTIVE would help him hold a real
+           conversation (with family, friends, at a shop, at work).
+           9 = he'd reach for this constantly; 0 = you'd essentially never say it.
+ CULTURE — how useful for reading classic 19th-century Russian literature and
+           understanding Russian culture/history. 9 = turns up on every page of
+           Tolstoy; 0 = a modern/technical word absent from that world.
+ DAILY   — how likely he is to actually MEET or NEED this word in his own daily
+           life (his routines, his phone, his city, his relationship, his job).
+           9 = part of everyday life; 0 = only in specialised contexts.
+
+Rate the whole word-family, not just this part of speech. Judge meaning and use,
+not how the word looks. Output ONLY the numbered lines."""
+
+
+def card_priority(items, model=None):
+    """items: [(word, meaning), …] -> [{"speak","culture","daily"} 0-100] per item
+    (None for anything unparsable)."""
+    if not items:
+        return []
+    numbered = "\n".join(
+        f"{i + 1}. {w} — {(g or '').strip()}".rstrip(" —")
+        for i, (w, g) in enumerate(items))
+    text = _warm_or_oneshot(numbered, _CARD_PRIORITY_SYSTEM, model or TRANSLATE_MODEL,
+                            timeout=90)
+    out = [None] * len(items)
+    for ln in text.splitlines():
+        m = re.match(r"\s*(\d+)[.)]\s*(\d)\s+(\d)\s+(\d)", ln.strip())
+        if m:
+            i = int(m.group(1)) - 1
+            if 0 <= i < len(items):
+                out[i] = {"speak": int(m.group(2)) * 100 // 9,
+                          "culture": int(m.group(3)) * 100 // 9,
+                          "daily": int(m.group(4)) * 100 // 9}
+    return out
+
+
 _VERB_ASPECT_SYSTEM = """For each numbered line "INFINITIVE — meaning" give the
 verb's aspect and the OTHER member of its aspect pair.
 

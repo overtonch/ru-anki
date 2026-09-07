@@ -223,6 +223,17 @@ library + proficiency graphs all ride on this.
   generates the next part on an explicit "continue reading" tap; a 0-tap session
   no longer moves `known_rank` or the session's `rank_est` (skimming ≠
   comprehension). Fiction eases the period vocab in over the parts.
+- (done 2026-09-07) **multi-factor new-card priority + backlog triage** — the
+  order new cards are introduced is now `srs_cards.priority` (0-100), a weighted
+  blend of: SPEAK + DAILY + CULTURE/fiction (LLM `card_priority`), overall
+  frequency rank, Anna-Karenina appearance, and recency-of-creation (halflife 12d
+  — a card made 3 weeks ago whose context is cold shouldn't outrank a fresh one).
+  Weights in `app_settings.new_card_weights` (`GET/POST /srs/new-card-weights`,
+  re-derivable without an LLM call via `rescore_priorities_from_meta`).
+  `_rank_new_cards` calls `card_priority` daily. Triage: `GET /srs/new-triage`
+  (worst-priority first, with the breakdown) + `POST /srs/cards/bulk`
+  {ids, suspend|delete}; `#triageView` screen, opened from the `#newReserve`
+  home strip.
 - (done 2026-09-07) **FSRS early-review bug + healthcheck** — the daily batch
   surfaced every graduated card hours before its `due`; FSRS read that as "no
   time elapsed" and stability never grew, so the whole collection was trapped
